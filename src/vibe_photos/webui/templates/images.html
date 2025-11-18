@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <div class="filters">
+    <form method="get">
+      <label>
+        Scene:
+        <input type="text" name="scene_type" value="{{ scene_type }}" />
+      </label>
+      <label>
+        Has text:
+        <input type="checkbox" name="has_text" value="1" {% if has_text in ["1", "true", "yes"] %}checked{% endif %} />
+      </label>
+      <label>
+        Has person:
+        <input type="checkbox" name="has_person" value="1" {% if has_person in ["1", "true", "yes"] %}checked{% endif %} />
+      </label>
+      <label>
+        Screenshot:
+        <input type="checkbox" name="is_screenshot" value="1" {% if is_screenshot in ["1", "true", "yes"] %}checked{% endif %} />
+      </label>
+      <label>
+        Document:
+        <input type="checkbox" name="is_document" value="1" {% if is_document in ["1", "true", "yes"] %}checked{% endif %} />
+      </label>
+      <button type="submit">Apply</button>
+    </form>
+  </div>
+
+  <div class="grid">
+    {% for image in images %}
+      <div class="card">
+        <a href="{{ url_for('image_detail', image_id=image.image_id) }}">
+          <img src="{{ url_for('image_thumbnail', image_id=image.image_id) }}" alt="thumbnail" />
+        </a>
+        <div>{{ image.image_id }}</div>
+        <div>{{ image.scene_type }}</div>
+        <div>
+          {% if image.has_person %}👤{% endif %}
+          {% if image.has_text %}🔤{% endif %}
+          {% if image.is_screenshot %}🖥{% endif %}
+          {% if image.is_document %}📄{% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="pagination">
+    <p>
+      Page {{ page }} —
+      showing {{ images|length }} of {{ total }} results.
+    </p>
+    <p>
+      {% if page > 1 %}
+        <a href="{{ url_for('images', page=page-1, page_size=page_size, scene_type=scene_type, has_text=has_text, has_person=has_person, is_screenshot=is_screenshot, is_document=is_document) }}">Previous</a>
+      {% endif %}
+      {% if page * page_size < total %}
+        <a href="{{ url_for('images', page=page+1, page_size=page_size, scene_type=scene_type, has_text=has_text, has_person=has_person, is_screenshot=is_screenshot, is_document=is_document) }}">Next</a>
+      {% endif %}
+    </p>
+  </div>
+{% endblock %}
+

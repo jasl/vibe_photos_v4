@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <p><a href="{{ url_for('images') }}">&larr; Back to list</a></p>
+
+  <h2>Image {{ image_id }}</h2>
+  <p><strong>Name:</strong> {{ logical_name }}</p>
+  <p><strong>Status:</strong> {{ status }}</p>
+  <p>
+    <img src="{{ url_for('image_thumbnail', image_id=image_id) }}" alt="image" />
+  </p>
+
+  <h3>Metadata</h3>
+  <ul>
+    <li>Size: {{ size_bytes }} bytes</li>
+    <li>Modified time (mtime): {{ mtime }}</li>
+    <li>Width × Height: {{ width }} × {{ height }}</li>
+  </ul>
+
+  {% if scene %}
+    <h3>Scene</h3>
+    <ul>
+      <li>Type: {{ scene.scene_type }}</li>
+      <li>Confidence: {{ scene.scene_confidence }}</li>
+      <li>Has text: {{ scene.has_text }}</li>
+      <li>Has person: {{ scene.has_person }}</li>
+      <li>Is screenshot: {{ scene.is_screenshot }}</li>
+      <li>Is document: {{ scene.is_document }}</li>
+      <li>Classifier: {{ scene.classifier_name }} ({{ scene.classifier_version }})</li>
+    </ul>
+  {% endif %}
+
+  {% if caption %}
+    <h3>Caption</h3>
+    <p>{{ caption }}</p>
+    {% if caption_model %}
+      <p><small>Model: {{ caption_model }}</small></p>
+    {% endif %}
+  {% endif %}
+{% endblock %}
+

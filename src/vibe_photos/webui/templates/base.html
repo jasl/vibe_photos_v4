@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Vibe Photos M1</title>
+    <style>
+      body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 1.5rem; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
+      .card { border: 1px solid #ddd; padding: 0.5rem; border-radius: 4px; }
+      img { max-width: 100%; height: auto; display: block; }
+      .filters { margin-bottom: 1rem; }
+      .filters label { margin-right: 0.5rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Vibe Photos M1</h1>
+    {% block content %}{% endblock %}
+  </body>
+</html>
+
