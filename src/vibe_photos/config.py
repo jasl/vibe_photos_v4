@@ -1,0 +1,233 @@
+"""Configuration loader and typed settings for the Vibe Photos application."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import yaml
+
+from vibe_photos.ml.model_presets import (
+    BLIP_IMAGE_CAPTIONING_BASE,
+    SIGLIP2_BASE_PATCH16_224,
+    BLIP_PRESETS,
+    SIGLIP_PRESETS,
+)
+
+
+@dataclass
+class EmbeddingModelConfig:
+    """Configuration for the embedding model (SigLIP)."""
+
+    backend: str = "siglip"
+    model_name: str = SIGLIP2_BASE_PATCH16_224
+    preset: Optional[str] = None
+    device: str = "auto"
+    batch_size: int = 16
+
+    def resolved_model_name(self) -> str:
+        """Return the concrete model name to load for embeddings.
+
+        Resolution order:
+        1. If ``preset`` is set, resolve via :data:`SIGLIP_PRESETS`.
+        2. Otherwise, use ``model_name``.
+        3. Fallback to the default SigLIP2 base checkpoint.
+        """
+        if self.preset:
+            preset_name = SIGLIP_PRESETS.get(self.preset)
+            if preset_name is None:
+                raise ValueError(f"Unsupported SigLIP preset: {self.preset!r}")
+            return preset_name
+
+        if self.model_name:
+            return self.model_name
+
+        return SIGLIP2_BASE_PATCH16_224
+
+
+@dataclass
+class CaptionModelConfig:
+    """Configuration for the captioning model (BLIP)."""
+
+    backend: str = "blip"
+    model_name: str = BLIP_IMAGE_CAPTIONING_BASE
+    preset: Optional[str] = None
+    device: str = "auto"
+    batch_size: int = 4
+
+    def resolved_model_name(self) -> str:
+        """Return the concrete model name to load for captioning.
+
+        Resolution order:
+        1. If ``preset`` is set, resolve via :data:`BLIP_PRESETS`.
+        2. Otherwise, use ``model_name``.
+        3. Fallback to the default BLIP base checkpoint.
+        """
+        if self.preset:
+            preset_name = BLIP_PRESETS.get(self.preset)
+            if preset_name is None:
+                raise ValueError(f"Unsupported BLIP preset: {self.preset!r}")
+            return preset_name
+
+        if self.model_name:
+            return self.model_name
+
+        return BLIP_IMAGE_CAPTIONING_BASE
+
+
+@dataclass
+class DetectionModelConfig:
+    """Configuration for the optional detection model."""
+
+    enabled: bool = False
+    backend: str = "owlvit"
+    model_name: str = "google/owlvit-base-patch32"
+    device: str = "auto"
+    max_regions_per_image: int = 10
+    score_threshold: float = 0.25
+
+
+@dataclass
+class OcrConfig:
+    """Configuration for optional OCR."""
+
+    enabled: bool = False
+
+
+@dataclass
+class ModelsConfig:
+    """Bundle of all model-related configuration."""
+
+    embedding: EmbeddingModelConfig = field(default_factory=EmbeddingModelConfig)
+    caption: CaptionModelConfig = field(default_factory=CaptionModelConfig)
+    detection: DetectionModelConfig = field(default_factory=DetectionModelConfig)
+    ocr: OcrConfig = field(default_factory=OcrConfig)
+
+
+@dataclass
+class PipelineConfig:
+    """Configuration for the preprocessing and inference pipeline."""
+
+    run_detection: bool = False
+    skip_duplicates_for_heavy_models: bool = True
+
+
+@dataclass
+class Settings:
+    """Top-level application settings."""
+
+    models: ModelsConfig = field(default_factory=ModelsConfig)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+
+
+def _as_dict(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
+def load_settings(settings_path: Path | None = None) -> Settings:
+    """Load application settings from a YAML file, falling back to defaults.
+
+    The loader is deliberately defensive: if the file is missing or malformed,
+    it returns a :class:`Settings` instance populated with default values.
+    """
+    path = settings_path or Path("config/settings.yaml")
+    settings = Settings()
+
+    if not path.exists() or not path.is_file():
+        return settings
+
+    raw: Any
+    with path.open("r", encoding="utf-8") as fp:
+        raw = yaml.safe_load(fp) or {}
+
+    if not isinstance(raw, dict):
+        return settings
+
+    models_raw = _as_dict(raw.get("models"))
+    embedding_raw = _as_dict(models_raw.get("embedding"))
+    caption_raw = _as_dict(models_raw.get("caption"))
+    detection_raw = _as_dict(models_raw.get("detection"))
+    ocr_raw = _as_dict(models_raw.get("ocr"))
+
+    embedding_cfg = settings.models.embedding
+    if isinstance(embedding_raw.get("backend"), str):
+        embedding_cfg.backend = embedding_raw["backend"]
+    if isinstance(embedding_raw.get("model_name"), str):
+        embedding_cfg.model_name = embedding_raw["model_name"]
+    if isinstance(embedding_raw.get("preset"), str):
+        embedding_cfg.preset = embedding_raw["preset"]
+    if isinstance(embedding_raw.get("device"), str):
+        embedding_cfg.device = embedding_raw["device"]
+    if isinstance(embedding_raw.get("batch_size"), int):
+        embedding_cfg.batch_size = embedding_raw["batch_size"]
+
+    caption_cfg = settings.models.caption
+    if isinstance(caption_raw.get("backend"), str):
+        caption_cfg.backend = caption_raw["backend"]
+    if isinstance(caption_raw.get("model_name"), str):
+        caption_cfg.model_name = caption_raw["model_name"]
+    if isinstance(caption_raw.get("preset"), str):
+        caption_cfg.preset = caption_raw["preset"]
+    if isinstance(caption_raw.get("device"), str):
+        caption_cfg.device = caption_raw["device"]
+    if isinstance(caption_raw.get("batch_size"), int):
+        caption_cfg.batch_size = caption_raw["batch_size"]
+
+    detection_cfg = settings.models.detection
+    if isinstance(detection_raw.get("enabled"), bool):
+        detection_cfg.enabled = detection_raw["enabled"]
+    if isinstance(detection_raw.get("backend"), str):
+        detection_cfg.backend = detection_raw["backend"]
+    if isinstance(detection_raw.get("model_name"), str):
+        detection_cfg.model_name = detection_raw["model_name"]
+    if isinstance(detection_raw.get("device"), str):
+        detection_cfg.device = detection_raw["device"]
+    if isinstance(detection_raw.get("max_regions_per_image"), int):
+        detection_cfg.max_regions_per_image = detection_raw["max_regions_per_image"]
+    if isinstance(detection_raw.get("score_threshold"), (int, float)):
+        detection_cfg.score_threshold = float(detection_raw["score_threshold"])
+
+    ocr_cfg = settings.models.ocr
+    if isinstance(ocr_raw.get("enabled"), bool):
+        ocr_cfg.enabled = ocr_raw["enabled"]
+
+    pipeline_raw = _as_dict(raw.get("pipeline"))
+    pipeline_cfg = settings.pipeline
+    if isinstance(pipeline_raw.get("run_detection"), bool):
+        pipeline_cfg.run_detection = pipeline_raw["run_detection"]
+    if isinstance(pipeline_raw.get("skip_duplicates_for_heavy_models"), bool):
+        pipeline_cfg.skip_duplicates_for_heavy_models = pipeline_raw["skip_duplicates_for_heavy_models"]
+
+    return settings
+
+
+def get_embedding_model_name(settings: Settings | None = None) -> str:
+    """Convenience helper to resolve the embedding model name."""
+
+    cfg = (settings or Settings()).models.embedding
+    return cfg.resolved_model_name()
+
+
+def get_caption_model_name(settings: Settings | None = None) -> str:
+    """Convenience helper to resolve the captioning model name."""
+
+    cfg = (settings or Settings()).models.caption
+    return cfg.resolved_model_name()
+
+
+__all__ = [
+    "EmbeddingModelConfig",
+    "CaptionModelConfig",
+    "DetectionModelConfig",
+    "OcrConfig",
+    "ModelsConfig",
+    "PipelineConfig",
+    "Settings",
+    "load_settings",
+    "get_embedding_model_name",
+    "get_caption_model_name",
+]
+

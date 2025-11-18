@@ -1,0 +1,53 @@
+# Vibe Photos Phase Final — dependency snapshot
+# Last updated: 2024-11
+# Python version requirement: ==3.12.*
+# Mirrors the root `pyproject.toml` + `uv.lock` for the production milestone.
+
+# ==================== Core dependencies ====================
+torch==2.9.1               # PyTorch runtime
+torchvision==0.24.1        # PyTorch vision helpers
+transformers==4.57.1       # Hugging Face Transformers
+pillow==11.3.0             # Image processing
+numpy==2.3.4               # Numerical computing
+
+# ==================== Web framework ====================
+fastapi==0.121.1           # Web API framework
+uvicorn[standard]==0.38.0  # ASGI server
+httpx==0.28.1              # HTTP client
+python-multipart==0.0.20   # Multipart uploads
+aiofiles==24.1.0           # Async file IO
+
+# ==================== Data handling ====================
+sqlalchemy==2.0.44         # Database ORM
+pydantic==2.11.10          # Data validation and serialization
+pyyaml==6.0.2              # YAML parsing
+
+# ==================== AI models ====================
+# Image understanding models
+sentence-transformers==5.1.2  # Sentence embeddings for semantic search
+
+# OCR stack
+paddlepaddle==3.2.1        # PaddlePaddle runtime
+paddleocr==3.3.1           # PaddleOCR text recognition
+
+# ==================== Vector search (enable when required) ====================
+# Primary stack: PostgreSQL + pgvector
+# psycopg2-binary==2.9.9    # PostgreSQL connector
+# pgvector==0.2.5           # PostgreSQL vector extension
+
+# ==================== Optional developer tools ====================
+# Enable these only if necessary
+# typer[all]==0.20.0         # CLI tooling
+# rich==14.2.0               # Rich terminal output
+# python-dotenv==1.2.1       # Environment variable loader
+# tqdm==4.67.1               # Progress bars
+
+# ==================== UI stack ====================
+streamlit==1.51.0          # Sole UI framework (MVP and production)
+
+# ==================== Observability (optional) ====================
+# loguru==0.7.3              # Logging helper
+# prometheus-client==0.23.1  # Metrics exporter
+
+# ==================== Testing and QA ====================
+# See requirements-dev.txt
