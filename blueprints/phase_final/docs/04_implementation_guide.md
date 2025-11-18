@@ -83,11 +83,12 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
 - Fingerprints & deduplication:
   - Compute:
     - Content hash using a 64-bit xxHash (`xxhash64-v1`) over the raw file bytes, stored as a 16-character hexadecimal `image_id`.
-    - Perceptual hash (`phash64-v1`) using a fixed 64-bit DCT-based pHash (32×32 grayscale → 8×8 low-frequency block → median threshold) for near-duplicate detection.
+    - Perceptual hash (`phash64-v1`) using a fixed 64-bit DCT-based pHash (32×32 grayscale → 8×8 low-frequency block → median threshold) for near-duplicate detection, following `blueprints/m1/m1_development_plan.md`.
   - Identify near-duplicate groups:
     - Treat two active images as near-duplicates when the Hamming distance between their 64-bit `phash` values is less than or equal to 5.
     - Record near-duplicate relationships in `image_near_duplicate` (for SQLite) or the equivalent table in PostgreSQL/pgvector, designating an anchor/canonical image and linking duplicates to it.
-    - Optionally skip heavy model inference for images deemed “near identical” while linking them to a canonical representative.
+    - Use high-order `phash` bits (for example, the top 16 bits) as buckets and only compute full Hamming distances within buckets to keep grouping efficient at 30k+ photos, as described in the M1 blueprint.
+    - Optionally skip heavy model inference for images deemed “near identical” while linking them to a canonical representative; in M1 this behavior is controlled by the `pipeline.skip_duplicates_for_heavy_models` flag in `config/settings.yaml`.
 - Model inference:
   - Load models once per process and reuse them across images to avoid reload overhead.
   - Start with:
@@ -102,10 +103,11 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - Skip images that already have valid cached results.
     - Record progress and failures for later inspection.
   - Keep preprocessing caches (JSON/NPY under `cache/`) as the primary durable artifact so that future milestones can rebuild or change database schemas quickly using these cached results.
+  - Persist a lightweight run journal under `cache/run_journal.json` (stage name, last processed cursor, checkpoint time) so long runs can resume after interruption, following the M1 blueprint.
 - Debugging UI:
   - Implement a simple Flask‑based web UI (for M1 only) to:
     - List all photos that were fully processed, excluding those skipped as near‑duplicates.
-    - Show a detail page per photo with all extracted preprocessing information (metadata, hashes, EXIF/GPS, model outputs).
+    - Show a detail page per photo with all extracted preprocessing information (metadata, hashes, EXIF/GPS, model outputs) without exposing absolute filesystem paths or `file://` URIs.
     - List all similar/near‑duplicate photos linked to that photo.
 
 #### 3.1.1 M1 Preparation Status (Current)

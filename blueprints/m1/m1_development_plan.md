@@ -117,6 +117,11 @@ Perceptual hash expectations in M1:
 - For all rows with `status = "active"` whose images can be decoded, `phash`, `phash_algo`, and `phash_updated_at` MUST be populated.
 - When an image cannot be decoded, `phash` MAY remain `NULL`, and the failure should be recorded via `status` and `error_message`.
 
+Deletion semantics in M1:
+- `images.status = "deleted"` is used only when **all** recorded paths for an `image_id` have disappeared from disk.
+- When some paths disappear but at least one valid path remains, the row stays `status = "active"` and the missing paths are removed from `all_paths`.
+- This ensures that a logical image remains active as long as it is present under any configured root.
+
 ### `image_scene` table (projection DB: `cache/index.db`)
 Stores lightweight pre-classification outputs as a projection over cached detection files under `cache/detections/`.
 
@@ -142,31 +147,33 @@ CREATE INDEX IF NOT EXISTS idx_image_scene_is_document ON image_scene(is_documen
 ```
 
 ### `image_embedding` table (projection DB: `cache/index.db`)
-Stores metadata for per-image SigLIP embeddings as a projection over cache files under `cache/embeddings/`.
+Stores metadata for per-image SigLIP embeddings as a projection over cache files under `cache/embeddings/`; the schema allows multiple embeddings per image keyed by `model_name`.
 
 ```sql
 CREATE TABLE IF NOT EXISTS image_embedding (
-  image_id       TEXT PRIMARY KEY,
+  image_id       TEXT NOT NULL,
+  model_name     TEXT NOT NULL,
   embedding_path TEXT NOT NULL,  -- path under cache/embeddings
   embedding_dim  INTEGER NOT NULL,
-  model_name     TEXT NOT NULL,
   model_backend  TEXT NOT NULL,
-  updated_at     REAL NOT NULL
+  updated_at     REAL NOT NULL,
+  PRIMARY KEY (image_id, model_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_image_embedding_model_name ON image_embedding(model_name);
 ```
 
 ### `image_caption` table (projection DB: `cache/index.db`)
-Stores BLIP caption outputs as a projection over cache files under `cache/captions/`.
+Stores BLIP caption outputs as a projection over cache files under `cache/captions/`; the schema allows multiple captions per image keyed by `model_name`.
 
 ```sql
 CREATE TABLE IF NOT EXISTS image_caption (
-  image_id      TEXT PRIMARY KEY,
-  caption       TEXT NOT NULL,
+  image_id      TEXT NOT NULL,
   model_name    TEXT NOT NULL,
+  caption       TEXT NOT NULL,
   model_backend TEXT NOT NULL,
-  updated_at    REAL NOT NULL
+  updated_at    REAL NOT NULL,
+  PRIMARY KEY (image_id, model_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_image_caption_model_name ON image_caption(model_name);
@@ -195,6 +202,36 @@ By convention:
 ## 5. Pipeline Design
 All model and pipeline parameters (model IDs, devices, batch sizes, duplicate handling, detection toggles) are read from `config/settings.yaml` via `vibe_photos.config.load_settings()`. The CLI MAY provide overrides for common options (for example `--batch-size`, `--device`), and these take precedence over config values when supplied.
 
+### Configuration Overview (M1)
+- Configuration is loaded from `config/settings.yaml`; if the file is missing or malformed, `vibe_photos.config.load_settings()` falls back to safe defaults.
+- M1 expects the following fields (see also `config/settings.example.yaml`):
+  - `models.embedding`: SigLIP embedding model configuration (backend, `model_name` or `preset`, `device`, `batch_size`).
+  - `models.caption`: BLIP captioning model configuration (backend, `model_name` or `preset`, `device`, `batch_size`).
+  - `models.detection`: optional detection model; for M1, `enabled` SHOULD remain `false`.
+  - `models.ocr`: OCR configuration; for M1, `enabled` MUST remain `false` so preprocessing works without OCR.
+  - `pipeline.run_detection`: whether to run detection in the preprocessing pipeline; default is `false` in M1.
+  - `pipeline.skip_duplicates_for_heavy_models`: when `true`, SigLIP embeddings and BLIP captions are computed only for canonical representatives of duplicate/near-duplicate groups.
+- A minimal M1 configuration (after copying `settings.example.yaml` to `settings.yaml`) might look like:
+
+```yaml
+models:
+  embedding:
+    backend: siglip
+    model_name: google/siglip2-base-patch16-224
+    device: auto
+    batch_size: 16
+
+  caption:
+    backend: blip
+    model_name: Salesforce/blip-image-captioning-base
+    device: auto
+    batch_size: 4
+
+pipeline:
+  run_detection: false
+  skip_duplicates_for_heavy_models: true
+```
+
 ### 5.0 CLI Parameters
 - `--root`: one or more album root directories to scan (required; may be passed multiple times).
 - `--db`: path to the primary operational SQLite database (optional, defaults to `data/index.db`).
@@ -211,7 +248,7 @@ All model and pipeline parameters (model IDs, devices, batch sizes, duplicate ha
 - Upsert into `images`:
   - Insert new rows for unseen hashes.
   - Merge `all_paths` for duplicates; refresh metadata for changed files.
-- Mark missing paths as `deleted` unless other paths still reference the hash.
+- When paths disappear from disk, remove them from `all_paths`; mark a row as `status = "deleted"` only when **all** recorded paths for that `image_id` are missing.
 
 ### 5.3 Lightweight Scene Classification
 - Batch process active images missing `image_scene` rows or outdated `classifier_version`.
@@ -266,7 +303,10 @@ All model and pipeline parameters (model IDs, devices, batch sizes, duplicate ha
   - Embeddings under `cache/embeddings/<image_id>.npy` (embedding vector + model metadata and preprocessing version).
   - Captions under `cache/captions/<image_id>.json` (caption text + model metadata + timestamps).
 - Project these cached results into the projection SQLite database (`cache/index.db`) using the `image_embedding` and `image_caption` tables to support lightweight search and inspection; the projection database remains rebuildable from cache artifacts.
-- When `skip_duplicates_for_heavy_models=True` in `Settings.pipeline`, only run embeddings and captions for one canonical representative per deduplicated content group.
+- When `skip_duplicates_for_heavy_models=True` in `Settings.pipeline`, only run embeddings and captions for canonical representatives of duplicate/near-duplicate groups:
+  - Exact duplicates (identical `image_id`) share one canonical representative.
+  - Near-duplicates discovered via `image_near_duplicate` (anchor/duplicate relationships) reuse the anchor image's embeddings and captions.
+  - In a fresh full run, it is preferable to compute pHash + near-duplicate groups before heavy models; in incremental runs, previously computed near-duplicate groups MAY be reused to gate heavy models.
 
 ### 5.5 Perceptual Hashing (pHash) & Near-Duplicate Grouping
 - Responsibility: compute a robust perceptual hash for active images and persist it on the `images` rows.
@@ -288,6 +328,7 @@ All model and pipeline parameters (model IDs, devices, batch sizes, duplicate ha
     - Run SigLIP scene classification.
     - Reuse the in-memory images to compute `phash` in the same pass.
   - Keep the phash algorithm encapsulated (for example in a `visual_hash` helper) so that later algorithm upgrades can be versioned via `phash_algo`.
+  - To keep near-duplicate grouping efficient for tens of thousands of images, bucket images by the high bits of `phash` (for example the top 16 bits) and only compute full Hamming distances within buckets.
 - Incremental behavior:
   - When `image_id` (content hash) changes, treat the asset as a new image and recompute `phash`.
   - When only `primary_path` changes but `image_id` remains stable, do not recompute `phash`.
@@ -299,6 +340,7 @@ All model and pipeline parameters (model IDs, devices, batch sizes, duplicate ha
     - Sorting them deterministically by `image_id`.
     - Iterating in order and treating each unassigned image as an `anchor_image_id`; for each anchor, assign as `duplicate_image_id` any remaining unassigned images within the Hamming distance threshold, ensuring each image participates in at most one group.
   - Persist the resulting relationships into the `image_near_duplicate` table in `cache/index.db`, truncating and rebuilding the table on each full near-duplicate pass.
+  - For the target scale of ~30,000 photos, a single-threaded near-duplicate grouping pass using prefix buckets SHOULD complete within a few minutes on a modern CPU; future milestones may introduce more advanced indexing if needed.
 
 ### 5.6 Error Handling
 - Corrupt/unreadable images do not halt the run; record `status="error"` and `error_message`.
@@ -307,7 +349,11 @@ All model and pipeline parameters (model IDs, devices, batch sizes, duplicate ha
 ### 5.7 Incremental & Resumable Execution
 - Use `image_id` as the stable unit of work so **scan, hash, and classify are idempotent**.
 - Track per-stage versions/timestamps (e.g., `classifier_version`) to identify stale rows without reprocessing everything.
-- Maintain a lightweight run journal (batch cursor + stage name + checkpoint time) so an interrupted run can **resume from the last completed batch** instead of restarting the full dataset.
+- Maintain a lightweight run journal so an interrupted run can **resume from the last completed batch** instead of restarting the full dataset:
+  - Store the journal as a small JSON file at `cache/run_journal.json` containing at least the stage name, last completed batch cursor (for example last processed `image_id`), and checkpoint time.
+  - Example shape:
+    - `{"stage": "embeddings", "cursor_image_id": "abcd1234...", "updated_at": 1710000000.0}`.
+  - The journal is best-effort and MAY be discarded without affecting correctness; it only exists to improve ergonomics on large runs.
 - Prefer deterministic batching (e.g., ORDER BY `image_id`) to make retries repeatable and diff-friendly in logs.
 - Use the shared application logger writing to `log/` (no `print()`), and include per-batch checkpoint metadata in the logs (stage name, batch cursor, counts).
 
@@ -321,7 +367,8 @@ Routes:
 UI expectations:
 - Filters at the top of the list page; grid layout (4–6 per row depending on CSS).
 - Each card shows thumbnail + `scene_type` + boolean flags.
-- Detail page shows primary path, size, mtime, EXIF when available, and classifier metadata.
+- Detail page shows a logical path (for example, a path relative to the configured album root or a user-friendly label), size, mtime, EXIF when available, and classifier metadata; it MUST NOT expose absolute filesystem paths or `file://` URIs.
+- All image content (originals and thumbnails) is served via Flask routes keyed by `image_id` (such as `/image/<image_id>` or `/thumbnail/<image_id>`); templates SHOULD NOT embed raw OS paths.
 - If thumbnail caching is implemented, write generated thumbnails to `cache/images/thumbnails/` and have `GET /thumbnail/<image_id>` read from there.
 
 ## 7. Suggested Package Layout & Entrypoints
