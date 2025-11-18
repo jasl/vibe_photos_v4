@@ -3,7 +3,7 @@
 Phase Final defines the production-ready architecture for Vibe Photos once MVP validation succeeds.
 
 ## Folder Guide
-- `docs/` — Requirements, solution design, technical choices, implementation roadmap.
+- `docs/` — Requirements, solution design, technical choices, implementation roadmap, and review alignment notes.
 - `architecture/` — System diagrams and deep dives (vector DB, queues, etc.).
 - `knowledge/` — Lessons learned to inform future iterations.
 - `research/` — Experiment logs and cleanup reports.
