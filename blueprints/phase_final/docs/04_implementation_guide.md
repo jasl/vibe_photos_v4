@@ -64,13 +64,13 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - Output directories for caches and thumbnails.
     - Model choices and batch sizes.
 - Database (SQLite):
-  - Design a minimal schema in a local SQLite DB under `data/`.
-  - Tables for:
-    - Photos (paths, file hashes, perceptual hashes, timestamps, EXIF).
-    - Basic labels/captions/embeddings from models:
-      - Store SigLIP image embeddings and coarse category outputs (`primary_category`, coarse category scores) in the DB.
-      - Do **not** cache classification results separately under `cache/`; treat them as derived projections over cached embeddings/detections.
-    - Optional detection outputs if models are enabled.
+  - Follow the canonical M1 schema defined in `blueprints/m1/m1_development_plan.md`:
+    - A primary operational database under `data/index.db` for canonical image metadata (`images` table with content hash and perceptual hash fields).
+    - A projection database under `cache/index.db` for:
+      - Lightweight scene classification outputs (`image_scene`).
+      - Embedding and caption projections (`image_embedding`, `image_caption`).
+      - Near-duplicate relationships (`image_near_duplicate`) derived from `images.phash`.
+  - All projection tables are rebuildable from caches under `cache/` and the primary database; treat SQLite as a projection layer over durable caches.
 - Image preprocessing:
   - Normalize images (orientation, color profile) and generate:
     - Web‑friendly thumbnails (e.g. 512×512).
@@ -82,10 +82,11 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - File size, dimensions, and format.
 - Fingerprints & deduplication:
   - Compute:
-    - File hash (e.g. SHA‑256).
-    - Perceptual hash for near‑duplicate detection.
-  - Identify near‑duplicate groups:
-    - Record relationships in the DB.
+    - Content hash using a 64-bit xxHash (`xxhash64-v1`) over the raw file bytes, stored as a 16-character hexadecimal `image_id`.
+    - Perceptual hash (`phash64-v1`) using a fixed 64-bit DCT-based pHash (32×32 grayscale → 8×8 low-frequency block → median threshold) for near-duplicate detection.
+  - Identify near-duplicate groups:
+    - Treat two active images as near-duplicates when the Hamming distance between their 64-bit `phash` values is less than or equal to 5.
+    - Record near-duplicate relationships in `image_near_duplicate` (for SQLite) or the equivalent table in PostgreSQL/pgvector, designating an anchor/canonical image and linking duplicates to it.
     - Optionally skip heavy model inference for images deemed “near identical” while linking them to a canonical representative.
 - Model inference:
   - Load models once per process and reuse them across images to avoid reload overhead.
@@ -139,7 +140,7 @@ To start M1 development, build on the existing groundwork in the following order
    - Create a dedicated preprocessing module under `src/vibe_photos/ml/` or `src/vibe_photos/core/` that:
      - Walks configured photo roots.
      - Normalizes images and writes thumbnails into `cache/`.
-     - Computes hashes/perceptual hashes and stores them in SQLite (`data/`).
+     - Computes content hashes and perceptual hashes following the M1 blueprint (`xxhash64-v1` over file bytes for `image_id`, `phash64-v1` for perceptual hash) and stores them in the `images` table in the primary SQLite database (`data/index.db`).
    - Integrate SigLIP and BLIP via `get_siglip_embedding_model()` and `get_blip_caption_model()` (`src/vibe_photos/ml/models.py`):
      - Batch images using the configured batch sizes.
      - Persist embeddings and captions both to caches (`cache/`) and to the SQLite schema.
@@ -148,8 +149,9 @@ To start M1 development, build on the existing groundwork in the following order
      - `primary_category` and coarse category scores as DB fields.
      - Optional derived fields to gate detection/OCR work (for example, only run detection for electronics/food/document/screenshots).
 4. **Design and implement the initial SQLite schema**
-   - Start from the M1 subset of the Phase Final database design:
-     - Photos, embeddings, captions, coarse categories, near‑duplicate relations.
+   - Start from the canonical M1 schema in `blueprints/m1/m1_development_plan.md`:
+     - `images` in `data/index.db` (paths, `image_id` content hash, `phash`/`phash_algo`/`phash_updated_at`, timestamps, EXIF).
+     - `image_scene`, `image_embedding`, `image_caption`, and `image_near_duplicate` in `cache/index.db` as projections over caches and `images`.
    - Keep schema changes localized and treat caches under `cache/` as the durable source of truth for recomputing databases.
 5. **Add a minimal CLI for running M1**
    - Implement a Typer‑based CLI under `src/` to:
@@ -172,7 +174,7 @@ Implement Phase Final — M1 (Preprocessing & Feature Extraction) for a local‑
 
 M1 must:
 
-1. Scan local photo folders and register photos (path, hashes, timestamps, EXIF, etc.).
+1. Scan local photo folders and register photos (path, content hash, perceptual hash, timestamps, EXIF, etc.) following the M1 blueprint (`xxhash64-v1` for `image_id`, `phash64-v1` for `phash`).
 2. Generate normalized images and thumbnails.
 3. Compute:
    - SigLIP image embeddings (for vector search and coarse categories).
@@ -293,7 +295,7 @@ Priority steps:
    - Implement a preprocessing module that:
      - Walks configured photo roots.
      - Normalizes images and writes thumbnails under `cache/`.
-     - Computes hashes/perceptual hashes and writes them to caches and SQLite.
+     - Computes content hashes and perceptual hashes using `xxhash64-v1` and `phash64-v1` as specified in `blueprints/m1/m1_development_plan.md`, and writes them to caches and the appropriate SQLite databases.
 4. Embeddings and coarse categories
    - Use SigLIP to compute embeddings in batches and classify coarse categories via `build_siglip_coarse_classifier()`.
 5. Captions

@@ -32,7 +32,7 @@ This note incorporates the latest review guidance into the Phase Final blueprint
    - Treat `image_id` (content hash) as the stable unit of work to skip previously processed files.
    - Persist per-stage timestamps/versions so a rerun only touches missing or stale rows and can safely resume after interruptions.
 6. **Cache vs DB separation:**
-   - **Cache layer:** per-image embeddings, raw label scores/logits, detection boxes, raw OCR text keyed by `image_hash`.
+   - **Cache layer:** per-image embeddings, raw label scores/logits, detection boxes, raw OCR text keyed by the stable content hash (`image_id`).
    - **Database layer:** normalized tags, extracted models (e.g., `iPhone 14 Pro`), vector index references; rebuilt easily when models change.
 
 ## Processing Topology
