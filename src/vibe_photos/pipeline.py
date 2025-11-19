@@ -16,7 +16,17 @@ from utils.logging import get_logger
 from vibe_photos.cache_manifest import CACHE_FORMAT_VERSION, write_cache_manifest
 from vibe_photos.classifier import SceneClassifierWithAttributes, build_scene_classifier
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import Image, ImageCaption, ImageEmbedding, ImageNearDuplicate, ImageRegion, ImageScene, open_primary_session, open_projection_session
+from vibe_photos.db import (
+    Image,
+    ImageCaption,
+    ImageEmbedding,
+    ImageNearDuplicate,
+    ImageRegion,
+    ImageScene,
+    PreprocessTask,
+    open_primary_session,
+    open_projection_session,
+)
 from vibe_photos.hasher import (
     CONTENT_HASH_ALGO,
     PHASH_ALGO,
@@ -1085,6 +1095,176 @@ class PreprocessingPipeline:
             "embeddings_and_captions_complete",
             extra={"embeddings_created": total_embeddings, "captions_created": total_captions},
         )
+
+    def process_embedding_task(self, primary_session, image_id: str) -> None:
+        """Compute SigLIP embedding for a single image and persist it."""
+
+        if self._cache_root is None:
+            raise RuntimeError("cache_root is not initialized")
+
+        cache_root = self._cache_root
+        embedding_cfg = self._settings.models.embedding
+        embedding_model_name = embedding_cfg.resolved_model_name()
+
+        row = primary_session.get(Image, image_id)
+        if row is None or row.status != "active":
+            return
+
+        path_str = row.primary_path
+
+        existing = primary_session.execute(
+            select(ImageEmbedding).where(
+                and_(ImageEmbedding.image_id == image_id, ImageEmbedding.model_name == embedding_model_name)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return
+
+        from PIL import Image as _Image
+        import numpy as np
+        import torch
+
+        try:
+            img = _Image.open(path_str).convert("RGB")
+        except Exception as exc:
+            self._logger.error(
+                "embedding_image_open_error",
+                extra={"image_id": image_id, "path": path_str, "error": str(exc)},
+            )
+            return
+
+        siglip_processor, siglip_model, siglip_device = get_siglip_embedding_model(settings=self._settings)
+
+        inputs = siglip_processor(images=[img], return_tensors="pt")
+        inputs = inputs.to(siglip_device)
+
+        with torch.no_grad():
+            features = siglip_model.get_image_features(**inputs)
+
+        emb = features[0]
+        emb = emb / emb.norm(dim=-1, keepdim=True)
+        vec = emb.detach().cpu().numpy().astype(np.float32)
+
+        embeddings_dir = cache_root / "embeddings"
+        embeddings_dir.mkdir(parents=True, exist_ok=True)
+
+        rel_path = f"{image_id}.npy"
+        emb_path = embeddings_dir / rel_path
+        np.save(emb_path, vec)
+
+        now = time.time()
+
+        meta_payload = {
+            "image_id": image_id,
+            "model_name": embedding_model_name,
+            "model_backend": embedding_cfg.backend,
+            "embedding_dim": int(vec.shape[-1]),
+            "updated_at": now,
+            "cache_format_version": CACHE_FORMAT_VERSION,
+        }
+        meta_path = embeddings_dir / f"{image_id}.json"
+        meta_path.write_text(json.dumps(meta_payload), encoding="utf-8")
+
+        stmt = sqlite_insert(ImageEmbedding).values(
+            image_id=image_id,
+            model_name=embedding_model_name,
+            embedding_path=rel_path,
+            embedding_dim=int(vec.shape[-1]),
+            model_backend=embedding_cfg.backend,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ImageEmbedding.image_id, ImageEmbedding.model_name],
+            set_={
+                "embedding_path": stmt.excluded.embedding_path,
+                "embedding_dim": stmt.excluded.embedding_dim,
+                "model_backend": stmt.excluded.model_backend,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        )
+        primary_session.execute(stmt)
+        primary_session.commit()
+
+    def process_caption_task(self, primary_session, image_id: str) -> None:
+        """Compute a BLIP caption for a single image and persist it."""
+
+        if self._cache_root is None:
+            raise RuntimeError("cache_root is not initialized")
+
+        cache_root = self._cache_root
+        caption_cfg = self._settings.models.caption
+        caption_model_name = caption_cfg.resolved_model_name()
+
+        row = primary_session.get(Image, image_id)
+        if row is None or row.status != "active":
+            return
+
+        existing = primary_session.execute(
+            select(ImageCaption).where(
+                and_(ImageCaption.image_id == image_id, ImageCaption.model_name == caption_model_name)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return
+
+        path_str = row.primary_path
+
+        from PIL import Image as _ImageCaption
+        import torch
+
+        try:
+            img = _ImageCaption.open(path_str).convert("RGB")
+        except Exception as exc:
+            self._logger.error(
+                "caption_image_open_error",
+                extra={"image_id": image_id, "path": path_str, "error": str(exc)},
+            )
+            return
+
+        blip_processor, blip_model, blip_device = get_blip_caption_model(settings=self._settings)
+
+        inputs = blip_processor(images=[img], return_tensors="pt")
+        inputs = inputs.to(blip_device)
+
+        with torch.no_grad():
+            generated_ids = blip_model.generate(**inputs)
+
+        token_ids = generated_ids[0]
+        caption_text = blip_processor.decode(token_ids, skip_special_tokens=True)
+
+        captions_dir = cache_root / "captions"
+        captions_dir.mkdir(parents=True, exist_ok=True)
+
+        now = time.time()
+        rel_path = f"{image_id}.json"
+        caption_path = captions_dir / rel_path
+        payload = {
+            "image_id": image_id,
+            "caption": caption_text,
+            "model_name": caption_model_name,
+            "model_backend": caption_cfg.backend,
+            "updated_at": now,
+            "cache_format_version": CACHE_FORMAT_VERSION,
+        }
+        caption_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        stmt = sqlite_insert(ImageCaption).values(
+            image_id=image_id,
+            model_name=caption_model_name,
+            caption=caption_text,
+            model_backend=caption_cfg.backend,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ImageCaption.image_id, ImageCaption.model_name],
+            set_={
+                "caption": stmt.excluded.caption,
+                "model_backend": stmt.excluded.model_backend,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        )
+        primary_session.execute(stmt)
+        primary_session.commit()
 
     def _run_perceptual_hashing_and_duplicates(self, primary_session, _projection_session) -> None:
         """Compute perceptual hashes and rebuild near-duplicate groups."""

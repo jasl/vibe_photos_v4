@@ -24,6 +24,18 @@ Environment Setup
   - `TRANSFORMERS_CACHE=./models/transformers`
   - `PADDLEOCR_HOME=./models/paddleocr`
 
+GPU Acceleration (CUDA)
+-----------------------
+
+On Linux or Windows machines with a compatible NVIDIA GPU and CUDA 13.0:
+
+- Ensure the GPU environment is set up (NVIDIA driver + CUDA runtime) and run `uv sync` on that machine so PyTorch with CUDA is installed from the configured `pytorch-cuda` index.
+- In `config/settings.yaml`, set:
+  - `models.embedding.device: "cuda"`
+  - `models.caption.device: "cuda"`
+  - `models.detection.device: "cuda"` (if detection is enabled)
+- Alternatively, pass `--device cuda` to the preprocessing CLI or workers to override the configured device at runtime.
+
 Running the M1 Preprocessing Pipeline
 -------------------------------------
 
@@ -122,6 +134,41 @@ What `rebuild_cache` currently restores:
 - Captions: from `cache/captions/<image_id>.json` into `image_caption`.
 - Scene attributes: from `cache/detections/<image_id>.json` into `image_scene`.
 - Regions: from `cache/regions/<image_id>.json` into `image_region`.
+
+Concurrent Heavy-Model Processing (Queue + Workers)
+---------------------------------------------------
+
+For larger libraries or repeated model upgrades, you can run SigLIP/BLIP-heavy
+steps concurrently using a lightweight SQLite-backed queue.
+
+1. Enqueue heavy-model tasks based on the current primary database:
+
+- `uv run python -m vibe_photos.dev.enqueue_heavy --db data/index.db`
+
+   - Scans `images` for active rows.
+   - Applies duplicate gating when `pipeline.skip_duplicates_for_heavy_models` is enabled.
+   - Enqueues `embedding` and `caption` tasks in the `preprocess_task` table for
+     images that do not yet have outputs for the current embedding and caption
+     model names.
+
+2. Run workers to process tasks concurrently:
+
+- `uv run python -m vibe_photos.dev.worker --db data/index.db --cache-root cache --workers 4`
+
+   - Spawns the requested number of worker threads.
+   - Each worker repeatedly pulls pending tasks from `preprocess_task`, runs the
+     appropriate heavy-model step, and marks the task as completed or failed.
+   - Tasks stuck in `processing` state from a previous crash are reset to
+     `pending` when the worker CLI starts, so runs are resumable.
+
+Advanced options:
+
+- `--task-type embedding` or `--task-type caption` to focus on a specific task kind.
+- `--batch-size` to control how many tasks a worker claims per iteration (default 1).
+
+This queue + worker flow is optional. The main preprocessing CLI remains
+single-process for simplicity; use the queue only when you specifically want to
+parallelize SigLIP/BLIP runs over an existing library.
 
 Cache Versioning
 ----------------
