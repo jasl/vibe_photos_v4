@@ -25,6 +25,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - [ ] Implement a resumable, concurrent preprocessing pipeline (queue + workers).
 - [ ] Define a stable, versioned on-disk format for preprocessing caches under `cache/` that is decoupled from the database schema.
 - [ ] Build a simple Flask-based debug UI to list canonical photos and show per-photo preprocessing details and similar images.
+- [x] Standardize database access on SQLAlchemy ORM/Core models and prohibit new raw SQL usage in pipeline and web UI.
 
 ### M2 — Search & Tools
 

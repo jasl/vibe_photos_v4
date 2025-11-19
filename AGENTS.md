@@ -12,6 +12,8 @@ Python 3.12 + `uv` is non-negotiable. Create the env (`uv venv --python 3.12`,
 
 Follow `AI_CODING_STANDARDS.md`: `black` + `ruff` enforce the 150-char line cap, import grouping (stdlib → third-party → local), and lint suites (`E/W/F/I/B/UP`). Public APIs require type hints + docstrings, dataclasses/TypedDicts trump loose dicts, and everything (code, comments, logs) stays in English. Use the shared logger with structured `extra={}` metadata, avoid prints, and rely on guard clauses to keep functions short.
 
+All database interactions must go through SQLAlchemy ORM/Core models defined in `src/vibe_photos/db.py`. Avoid raw SQL unless a specific operation cannot be expressed with SQLAlchemy.
+
 ## AI Assistant Library Usage Rules
 
 - If you are not clearly familiar with a library or dependency API, inspect local usages and pinned versions (including `pyproject.toml` and `DEPENDENCIES.md`) before writing or modifying code.

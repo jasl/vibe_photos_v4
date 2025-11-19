@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from flask import Flask, abort, redirect, render_template, request, send_file, url_for
+from sqlalchemy import and_, func, select
 
 from utils.logging import get_logger
-from vibe_photos.db import open_primary_db, open_projection_db
+from vibe_photos.db import Image, ImageCaption, ImageScene, open_primary_session
 
 
 LOGGER = get_logger(__name__)
@@ -18,10 +19,6 @@ app = Flask(__name__)
 
 def _get_primary_db_path() -> Path:
     return Path("data/index.db")
-
-
-def _get_projection_db_path() -> Path:
-    return Path("cache/index.db")
 
 
 @app.route("/")
@@ -45,57 +42,50 @@ def images() -> Any:
     page_size = max(1, min(64, int(request.args.get("page_size", "24"))))
     offset = (page - 1) * page_size
 
-    filters: List[str] = ["i.status = 'active'"]
-    params: List[Any] = []
-
+    filters = [Image.status == "active"]
     if scene_type:
-        filters.append("s.scene_type = ?")
-        params.append(scene_type)
+        filters.append(ImageScene.scene_type == scene_type)
 
-    def _flag_clause(value: Optional[str], column: str) -> None:
+    def _flag_clause(value: Optional[str], column) -> None:
         if value is None or value == "":
             return
         if value.lower() in {"1", "true", "yes"}:
-            filters.append(f"s.{column} = 1")
+            filters.append(column.is_(True))
         elif value.lower() in {"0", "false", "no"}:
-            filters.append(f"s.{column} = 0")
+            filters.append(column.is_(False))
 
-    _flag_clause(has_text, "has_text")
-    _flag_clause(has_person, "has_person")
-    _flag_clause(is_screenshot, "is_screenshot")
-    _flag_clause(is_document, "is_document")
-
-    where_sql = " AND ".join(filters) if filters else "1=1"
+    _flag_clause(has_text, ImageScene.has_text)
+    _flag_clause(has_person, ImageScene.has_person)
+    _flag_clause(is_screenshot, ImageScene.is_screenshot)
+    _flag_clause(is_document, ImageScene.is_document)
 
     primary_path = _get_primary_db_path()
 
-    with open_primary_db(primary_path) as primary_conn:
-        cursor = primary_conn.cursor()
+    with open_primary_session(primary_path) as session:
+        base_query = (
+            select(ImageScene.image_id)
+            .join(Image, Image.image_id == ImageScene.image_id)
+            .where(and_(*filters))
+        )
+        total_stmt = select(func.count()).select_from(base_query.subquery())
+        total = int(session.execute(total_stmt).scalar_one())
 
-        count_sql = f"""
-            SELECT COUNT(*)
-            FROM image_scene s
-            JOIN images i ON i.image_id = s.image_id
-            WHERE {where_sql}
-        """
-        cursor.execute(count_sql, params)
-        total = int(cursor.fetchone()[0])
-
-        query_sql = f"""
-            SELECT s.image_id,
-                   s.scene_type,
-                   s.has_text,
-                   s.has_person,
-                   s.is_screenshot,
-                   s.is_document
-            FROM image_scene s
-            JOIN images i ON i.image_id = s.image_id
-            WHERE {where_sql}
-            ORDER BY s.image_id
-            LIMIT ? OFFSET ?
-        """
-        cursor.execute(query_sql, params + [page_size, offset])
-        rows = cursor.fetchall()
+        query_stmt = (
+            select(
+                ImageScene.image_id,
+                ImageScene.scene_type,
+                ImageScene.has_text,
+                ImageScene.has_person,
+                ImageScene.is_screenshot,
+                ImageScene.is_document,
+            )
+            .join(Image, Image.image_id == ImageScene.image_id)
+            .where(and_(*filters))
+            .order_by(ImageScene.image_id)
+            .limit(page_size)
+            .offset(offset)
+        )
+        rows = session.execute(query_stmt).all()
 
     items: List[Dict[str, Any]] = []
     for row in rows:
@@ -130,84 +120,55 @@ def image_detail(image_id: str) -> Any:
 
     primary_path = _get_primary_db_path()
 
-    with open_primary_db(primary_path) as primary_conn:
-        primary_cursor = primary_conn.cursor()
-
-        primary_cursor.execute(
-            """
-            SELECT image_id, primary_path, size_bytes, mtime, width, height, status, phash, phash_algo
-            FROM images
-            WHERE image_id = ?
-            """,
-            (image_id,),
-        )
-        image_row = primary_cursor.fetchone()
+    with open_primary_session(primary_path) as session:
+        image_row = session.get(Image, image_id)
         if image_row is None:
             abort(404)
 
-        primary_cursor.execute(
-            """
-            SELECT scene_type,
-                   scene_confidence,
-                   has_text,
-                   has_person,
-                   is_screenshot,
-                   is_document,
-                   classifier_name,
-                   classifier_version
-            FROM image_scene
-            WHERE image_id = ?
-            """,
-            (image_id,),
-        )
-        scene_row = primary_cursor.fetchone()
+        scene_row = session.execute(select(ImageScene).where(ImageScene.image_id == image_id)).scalar_one_or_none()
 
-        primary_cursor.execute(
-            """
-            SELECT caption, model_name
-            FROM image_caption
-            WHERE image_id = ?
-            """,
-            (image_id,),
-        )
-        caption_row = primary_cursor.fetchone()
+        caption_row = (
+            session.execute(
+                select(ImageCaption.caption, ImageCaption.model_name).where(ImageCaption.image_id == image_id).order_by(ImageCaption.model_name)
+            )
+        ).first()
 
-    primary_path_str = image_row["primary_path"]
+    primary_path_str = image_row.primary_path
     logical_name = Path(primary_path_str).name
 
     scene_info: Dict[str, Any] | None = None
     if scene_row is not None:
         scene_info = {
-            "scene_type": scene_row["scene_type"],
-            "scene_confidence": scene_row["scene_confidence"],
-            "has_text": bool(scene_row["has_text"]),
-            "has_person": bool(scene_row["has_person"]),
-            "is_screenshot": bool(scene_row["is_screenshot"]),
-            "is_document": bool(scene_row["is_document"]),
-            "classifier_name": scene_row["classifier_name"],
-            "classifier_version": scene_row["classifier_version"],
+            "scene_type": scene_row.scene_type,
+            "scene_confidence": scene_row.scene_confidence,
+            "has_text": bool(scene_row.has_text),
+            "has_person": bool(scene_row.has_person),
+            "is_screenshot": bool(scene_row.is_screenshot),
+            "is_document": bool(scene_row.is_document),
+            "classifier_name": scene_row.classifier_name,
+            "classifier_version": scene_row.classifier_version,
         }
 
     caption_text: Optional[str] = None
     caption_model: Optional[str] = None
     if caption_row is not None:
-        caption_text = caption_row["caption"]
-        caption_model = caption_row["model_name"]
+        caption_text = caption_row.caption
+        caption_model = caption_row.model_name
 
     return render_template(
         "image_detail.html",
         image_id=image_id,
         logical_name=logical_name,
-        size_bytes=image_row["size_bytes"],
-        mtime=image_row["mtime"],
-        width=image_row["width"],
-        height=image_row["height"],
-        status=image_row["status"],
+        size_bytes=image_row.size_bytes,
+        mtime=image_row.mtime,
+        width=image_row.width,
+        height=image_row.height,
+        status=image_row.status,
         scene=scene_info,
         caption=caption_text,
         caption_model=caption_model,
-        phash=image_row["phash"],
-        phash_algo=image_row["phash_algo"],
+        phash=image_row.phash,
+        phash_algo=image_row.phash_algo,
     )
 
 
@@ -217,17 +178,14 @@ def image_thumbnail(image_id: str) -> Any:
 
     primary_path = _get_primary_db_path()
 
-    with open_primary_db(primary_path) as primary_conn:
-        cursor = primary_conn.cursor()
-        cursor.execute(
-            "SELECT primary_path FROM images WHERE image_id = ? AND status = 'active'",
-            (image_id,),
-        )
-        row = cursor.fetchone()
+    with open_primary_session(primary_path) as session:
+        row = session.execute(
+            select(Image.primary_path).where(and_(Image.image_id == image_id, Image.status == "active"))
+        ).first()
         if row is None:
             abort(404)
 
-        path_str = row["primary_path"]
+        path_str = row.primary_path
 
     try:
         return send_file(path_str)

@@ -8,11 +8,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
+from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from torch import Tensor
 from utils.logging import get_logger
 from vibe_photos.classifier import SceneClassifierWithAttributes, build_scene_classifier
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import open_primary_db, open_projection_db
+from vibe_photos.db import (
+    Image,
+    ImageCaption,
+    ImageEmbedding,
+    ImageNearDuplicate,
+    ImageScene,
+    open_primary_session,
+    open_projection_session,
+)
 from vibe_photos.hasher import (
     CONTENT_HASH_ALGO,
     PHASH_ALGO,
@@ -125,15 +135,15 @@ class PreprocessingPipeline:
                 extra={"stage": journal.stage, "cursor_image_id": journal.cursor_image_id},
             )
 
-        with open_primary_db(primary_db_path) as primary_conn, open_projection_db(projection_db_path) as projection_conn:
-            self._run_scan_and_hash(roots, primary_conn)
+        with open_primary_session(primary_db_path) as primary_session, open_projection_session(projection_db_path) as projection_session:
+            self._run_scan_and_hash(roots, primary_session)
             save_run_journal(cache_root, RunJournalRecord(stage="scan_and_hash", cursor_image_id=None, updated_at=time.time()))
 
-            self._run_perceptual_hashing_and_duplicates(primary_conn, projection_conn)
+            self._run_perceptual_hashing_and_duplicates(primary_session, projection_session)
             save_run_journal(cache_root, RunJournalRecord(stage="phash_and_duplicates", cursor_image_id=None, updated_at=time.time()))
 
-            self._run_embeddings_and_captions(primary_conn, projection_conn)
-            self._run_scene_classification(primary_conn, projection_conn)
+            self._run_embeddings_and_captions(primary_session, projection_session)
+            self._run_scene_classification(primary_session, projection_session)
 
         # Best-effort: remove run journal after a successful full run to avoid
         # stale cursors influencing future runs.
@@ -147,30 +157,16 @@ class PreprocessingPipeline:
 
         self._logger.info("pipeline_complete", extra={})
 
-    def _run_scan_and_hash(self, roots: Sequence[Path], primary_conn) -> None:
-        """Scan album roots and populate the images table with content hashes.
-
-        This stage is responsible for maintaining the ``images`` table in the
-        primary database:
-
-        - Insert rows for new content hashes discovered under the configured roots.
-        - Merge paths for existing hashes, keeping one canonical ``primary_path``.
-        - Handle file content changes by moving a path from the old ``image_id``
-          to the new one.
-        - Update deletion status when all recorded paths for an ``image_id``
-          disappear from disk.
-        """
+    def _run_scan_and_hash(self, roots: Sequence[Path], primary_session) -> None:
+        """Scan album roots and populate the images table with content hashes."""
 
         self._logger.info("scan_and_hash_start", extra={})
         files: List[FileInfo] = list(scan_roots(roots))
         self._logger.info("scan_and_hash_files_discovered", extra={"file_count": len(files)})
 
-        cursor = primary_conn.cursor()
-
-        # Build a mapping from path -> image_id based on existing rows.
         path_to_image_id: Dict[str, str] = {}
-        cursor.execute("SELECT image_id, all_paths FROM images")
-        for row in cursor.fetchall():
+        existing_rows = primary_session.execute(select(Image.image_id, Image.all_paths)).mappings()
+        for row in existing_rows:
             raw_paths = row["all_paths"]
             try:
                 paths = json.loads(raw_paths) if raw_paths else []
@@ -181,136 +177,98 @@ class PreprocessingPipeline:
 
         now = time.time()
 
-        # Scan files and upsert image records.
         for file_info in files:
             path = file_info.path.resolve()
             path_str = str(path)
             new_image_id = compute_content_hash(path)
             old_image_id = path_to_image_id.get(path_str)
 
-            # If the file existed before but its content hash changed, detach it
-            # from the previous image row.
             if old_image_id is not None and old_image_id != new_image_id:
-                cursor.execute("SELECT all_paths, primary_path, status FROM images WHERE image_id = ?", (old_image_id,))
-                old_row = cursor.fetchone()
-                if old_row is not None:
+                old_image = primary_session.get(Image, old_image_id)
+                if old_image is not None:
                     try:
-                        old_paths = json.loads(old_row["all_paths"]) if old_row["all_paths"] else []
+                        old_paths = json.loads(old_image.all_paths) if old_image.all_paths else []
                     except json.JSONDecodeError:
                         old_paths = []
 
                     new_paths = [p for p in old_paths if p != path_str]
-                    status = old_row["status"]
-                    primary_path = old_row["primary_path"]
+                    status = old_image.status
+                    primary_path = old_image.primary_path
 
                     if new_paths:
                         if primary_path not in new_paths:
                             primary_path = new_paths[0]
-                        # If the row was previously marked deleted but still has
-                        # remaining paths, restore it to active.
                         if status == "deleted":
                             status = "active"
                     else:
-                        # All paths removed for this image_id; mark as deleted.
                         status = "deleted"
 
-                    cursor.execute(
-                        "UPDATE images SET all_paths = ?, primary_path = ?, status = ?, updated_at = ? WHERE image_id = ?",
-                        (json.dumps(new_paths), primary_path, status, now, old_image_id),
-                    )
+                    old_image.all_paths = json.dumps(new_paths)
+                    old_image.primary_path = primary_path
+                    old_image.status = status
+                    old_image.updated_at = now
+                    primary_session.add(old_image)
 
                 path_to_image_id.pop(path_str, None)
                 old_image_id = None
 
-            # Upsert the row for the new image_id.
-            cursor.execute(
-                "SELECT image_id, primary_path, all_paths, size_bytes, mtime, status FROM images WHERE image_id = ?",
-                (new_image_id,),
-            )
-            existing = cursor.fetchone()
+            existing = primary_session.get(Image, new_image_id)
 
             if existing is not None:
                 try:
-                    paths = json.loads(existing["all_paths"]) if existing["all_paths"] else []
+                    paths = json.loads(existing.all_paths) if existing.all_paths else []
                 except json.JSONDecodeError:
                     paths = []
 
                 if path_str not in paths:
                     paths.append(path_str)
 
-                primary_path = existing["primary_path"] or path_str
-                status = existing["status"] or "active"
+                primary_path = existing.primary_path or path_str
+                status = existing.status or "active"
                 if status == "deleted":
                     status = "active"
 
-                cursor.execute(
-                    """
-                    UPDATE images
-                    SET primary_path = ?, all_paths = ?, size_bytes = ?, mtime = ?, hash_algo = ?, status = ?, updated_at = ?
-                    WHERE image_id = ?
-                    """,
-                    (
-                        primary_path,
-                        json.dumps(paths),
-                        file_info.size_bytes,
-                        file_info.mtime,
-                        CONTENT_HASH_ALGO,
-                        status,
-                        now,
-                        new_image_id,
-                    ),
-                )
+                existing.primary_path = primary_path
+                existing.all_paths = json.dumps(paths)
+                existing.size_bytes = file_info.size_bytes
+                existing.mtime = file_info.mtime
+                existing.hash_algo = CONTENT_HASH_ALGO
+                existing.status = status
+                existing.updated_at = now
+                primary_session.add(existing)
             else:
                 all_paths_json = json.dumps([path_str])
-                cursor.execute(
-                    """
-                    INSERT INTO images (
-                        image_id,
-                        primary_path,
-                        all_paths,
-                        size_bytes,
-                        mtime,
-                        width,
-                        height,
-                        exif_datetime,
-                        camera_model,
-                        hash_algo,
-                        phash,
-                        phash_algo,
-                        phash_updated_at,
-                        created_at,
-                        updated_at,
-                        status,
-                        error_message,
-                        schema_version
-                    ) VALUES (
-                        ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, NULL, NULL, NULL, ?, ?, ?, NULL, ?
+                primary_session.add(
+                    Image(
+                        image_id=new_image_id,
+                        primary_path=path_str,
+                        all_paths=all_paths_json,
+                        size_bytes=file_info.size_bytes,
+                        mtime=file_info.mtime,
+                        width=None,
+                        height=None,
+                        exif_datetime=None,
+                        camera_model=None,
+                        hash_algo=CONTENT_HASH_ALGO,
+                        phash=None,
+                        phash_algo=None,
+                        phash_updated_at=None,
+                        created_at=now,
+                        updated_at=now,
+                        status="active",
+                        error_message=None,
+                        schema_version=1,
                     )
-                    """,
-                    (
-                        new_image_id,
-                        path_str,
-                        all_paths_json,
-                        file_info.size_bytes,
-                        file_info.mtime,
-                        CONTENT_HASH_ALGO,
-                        now,
-                        now,
-                        "active",
-                        1,
-                    ),
                 )
 
             path_to_image_id[path_str] = new_image_id
 
-        primary_conn.commit()
+        primary_session.commit()
 
-        # Second pass: remove paths that no longer exist on disk and mark rows
-        # as deleted when all paths disappear.
         now = time.time()
-        cursor.execute("SELECT image_id, all_paths, primary_path, status FROM images")
-        for row in cursor.fetchall():
-            raw_paths = row["all_paths"]
+        images = primary_session.execute(select(Image)).scalars()
+        for image in images:
+            raw_paths = image.all_paths
             try:
                 paths = json.loads(raw_paths) if raw_paths else []
             except json.JSONDecodeError:
@@ -326,14 +284,13 @@ class PreprocessingPipeline:
                     if Path(stored_path_str).exists():
                         existing_paths.append(stored_path_str)
                 except OSError:
-                    # Treat paths that raise OS errors as missing.
                     continue
 
             if existing_paths == paths:
                 continue
 
-            primary_path = row["primary_path"]
-            status = row["status"]
+            primary_path = image.primary_path
+            status = image.status
 
             if existing_paths:
                 if primary_path not in existing_paths:
@@ -343,15 +300,16 @@ class PreprocessingPipeline:
             else:
                 status = "deleted"
 
-            cursor.execute(
-                "UPDATE images SET all_paths = ?, primary_path = ?, status = ?, updated_at = ? WHERE image_id = ?",
-                (json.dumps(existing_paths), primary_path, status, now, row["image_id"]),
-            )
+            image.all_paths = json.dumps(existing_paths)
+            image.primary_path = primary_path
+            image.status = status
+            image.updated_at = now
+            primary_session.add(image)
 
-        primary_conn.commit()
+        primary_session.commit()
         self._logger.info("scan_and_hash_complete", extra={"file_count": len(files)})
 
-    def _run_scene_classification(self, primary_conn, projection_conn) -> None:
+    def _run_scene_classification(self, primary_session, _projection_session) -> None:
         """Run lightweight scene classification based on cached embeddings."""
 
         if self._cache_root is None:
@@ -360,28 +318,28 @@ class PreprocessingPipeline:
         self._logger.info("scene_classification_start", extra={})
 
         cache_root = self._cache_root
-        primary_cursor = primary_conn.cursor()
 
         classifier: SceneClassifierWithAttributes = build_scene_classifier(self._settings)
         classifier_version = classifier.classifier_version
 
         embedding_model_name = self._settings.models.embedding.resolved_model_name()
 
-        # Map image_id -> existing classifier_version to detect stale rows.
-        primary_cursor.execute("SELECT image_id, classifier_version FROM image_scene")
-        existing_versions = {row["image_id"]: row["classifier_version"] for row in primary_cursor.fetchall()}
+        existing_versions = {
+            row.image_id: row.classifier_version
+            for row in primary_session.execute(select(ImageScene.image_id, ImageScene.classifier_version))
+        }
 
-        # Determine which embeddings are available for the configured model.
-        primary_cursor.execute(
-            "SELECT image_id, embedding_path FROM image_embedding WHERE model_name = ?",
-            (embedding_model_name,),
+        embedding_rows = primary_session.execute(
+            select(ImageEmbedding.image_id, ImageEmbedding.embedding_path).where(ImageEmbedding.model_name == embedding_model_name)
         )
-        embedding_rows = primary_cursor.fetchall()
-        embedding_path_by_id = {row["image_id"]: row["embedding_path"] for row in embedding_rows}
+        embedding_path_by_id = {row.image_id: row.embedding_path for row in embedding_rows}
 
-        # Only classify active images with an embedding and missing or stale classifier_version.
-        primary_cursor.execute("SELECT image_id FROM images WHERE status = 'active' ORDER BY image_id")
-        candidate_ids = [row["image_id"] for row in primary_cursor.fetchall()]
+        candidate_ids = [
+            row.image_id
+            for row in primary_session.execute(
+                select(Image.image_id).where(Image.status == "active").order_by(Image.image_id)
+            )
+        ]
 
         target_ids: List[str] = []
         for image_id in candidate_ids:
@@ -393,7 +351,6 @@ class PreprocessingPipeline:
             if existing_versions[image_id] != classifier_version:
                 target_ids.append(image_id)
 
-        # Apply journal-based cursor if we are resuming this stage.
         if self._journal is not None and self._journal.stage == "scene_classification" and self._journal.cursor_image_id:
             cursor_id = self._journal.cursor_image_id
             target_ids = [image_id for image_id in target_ids if image_id > cursor_id]
@@ -447,49 +404,34 @@ class PreprocessingPipeline:
 
             now = time.time()
             for image_id, attributes in zip(valid_ids, attributes_list):
-                # Persist to SQLite projection DB.
-                primary_cursor.execute(
-                    """
-                    INSERT INTO image_scene (
-                        image_id,
-                        scene_type,
-                        scene_confidence,
-                        has_text,
-                        has_person,
-                        is_screenshot,
-                        is_document,
-                        classifier_name,
-                        classifier_version,
-                        updated_at
-                    ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                    )
-                    ON CONFLICT(image_id) DO UPDATE SET
-                        scene_type = excluded.scene_type,
-                        scene_confidence = excluded.scene_confidence,
-                        has_text = excluded.has_text,
-                        has_person = excluded.has_person,
-                        is_screenshot = excluded.is_screenshot,
-                        is_document = excluded.is_document,
-                        classifier_name = excluded.classifier_name,
-                        classifier_version = excluded.classifier_version,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        image_id,
-                        attributes.scene_type,
-                        attributes.scene_confidence,
-                        int(attributes.has_text),
-                        int(attributes.has_person),
-                        int(attributes.is_screenshot),
-                        int(attributes.is_document),
-                        attributes.classifier_name,
-                        attributes.classifier_version,
-                        now,
-                    ),
+                stmt = sqlite_insert(ImageScene).values(
+                    image_id=image_id,
+                    scene_type=attributes.scene_type,
+                    scene_confidence=attributes.scene_confidence,
+                    has_text=bool(attributes.has_text),
+                    has_person=bool(attributes.has_person),
+                    is_screenshot=bool(attributes.is_screenshot),
+                    is_document=bool(attributes.is_document),
+                    classifier_name=attributes.classifier_name,
+                    classifier_version=attributes.classifier_version,
+                    updated_at=now,
                 )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[ImageScene.image_id],
+                    set_={
+                        "scene_type": stmt.excluded.scene_type,
+                        "scene_confidence": stmt.excluded.scene_confidence,
+                        "has_text": stmt.excluded.has_text,
+                        "has_person": stmt.excluded.has_person,
+                        "is_screenshot": stmt.excluded.is_screenshot,
+                        "is_document": stmt.excluded.is_document,
+                        "classifier_name": stmt.excluded.classifier_name,
+                        "classifier_version": stmt.excluded.classifier_version,
+                        "updated_at": stmt.excluded.updated_at,
+                    },
+                )
+                primary_session.execute(stmt)
 
-                # Persist a lightweight detection cache for rebuilds.
                 detection_payload = {
                     "image_id": image_id,
                     "scene_type": attributes.scene_type,
@@ -506,16 +448,15 @@ class PreprocessingPipeline:
                 cache_path.write_text(json.dumps(detection_payload), encoding="utf-8")
                 updated_rows += 1
 
-            # Update run journal after each batch for resumable execution.
             save_run_journal(
                 cache_root,
                 RunJournalRecord(stage="scene_classification", cursor_image_id=batch_ids[-1], updated_at=time.time()),
             )
 
-        primary_conn.commit()
+        primary_session.commit()
         self._logger.info("scene_classification_complete", extra={"updated_rows": updated_rows})
 
-    def _run_embeddings_and_captions(self, primary_conn, projection_conn) -> None:
+    def _run_embeddings_and_captions(self, primary_session, _projection_session) -> None:
         """Compute SigLIP embeddings and BLIP captions for canonical images."""
 
         if self._cache_root is None:
@@ -524,7 +465,6 @@ class PreprocessingPipeline:
         self._logger.info("embeddings_and_captions_start", extra={})
 
         cache_root = self._cache_root
-        primary_cursor = primary_conn.cursor()
 
         embedding_cfg = self._settings.models.embedding
         caption_cfg = self._settings.models.caption
@@ -535,10 +475,10 @@ class PreprocessingPipeline:
         siglip_processor, siglip_model, siglip_device = get_siglip_embedding_model(settings=self._settings)
         blip_processor, blip_model, blip_device = get_blip_caption_model(settings=self._settings)
 
-        # Determine active images and apply near-duplicate gating for heavy models.
-        primary_cursor.execute("SELECT image_id, primary_path FROM images WHERE status = 'active' ORDER BY image_id")
-        active_rows = primary_cursor.fetchall()
-        paths_by_id: Dict[str, str] = {row["image_id"]: row["primary_path"] for row in active_rows}
+        active_rows = primary_session.execute(
+            select(Image.image_id, Image.primary_path).where(Image.status == "active").order_by(Image.image_id)
+        )
+        paths_by_id: Dict[str, str] = {row.image_id: row.primary_path for row in active_rows}
 
         if not paths_by_id:
             self._logger.info("embeddings_and_captions_noop", extra={})
@@ -547,22 +487,23 @@ class PreprocessingPipeline:
         process_ids = sorted(paths_by_id.keys())
 
         if self._settings.pipeline.skip_duplicates_for_heavy_models:
-            primary_cursor.execute("SELECT duplicate_image_id FROM image_near_duplicate")
-            duplicate_rows = primary_cursor.fetchall()
-            duplicate_ids = {row["duplicate_image_id"] for row in duplicate_rows}
+            duplicate_rows = primary_session.execute(select(ImageNearDuplicate.duplicate_image_id))
+            duplicate_ids = {row.duplicate_image_id for row in duplicate_rows}
             process_ids = [image_id for image_id in process_ids if image_id not in duplicate_ids]
 
-        # Apply journal-based cursor if we are resuming this stage.
         if self._journal is not None and self._journal.stage == "embeddings_and_captions" and self._journal.cursor_image_id:
             cursor_id = self._journal.cursor_image_id
             process_ids = [image_id for image_id in process_ids if image_id > cursor_id]
 
-        # Exclude images that already have embeddings/captions for the configured models.
-        primary_cursor.execute("SELECT image_id FROM image_embedding WHERE model_name = ?", (embedding_model_name,))
-        existing_embedding_ids = {row["image_id"] for row in primary_cursor.fetchall()}
+        existing_embedding_ids = {
+            row.image_id
+            for row in primary_session.execute(select(ImageEmbedding.image_id).where(ImageEmbedding.model_name == embedding_model_name))
+        }
 
-        primary_cursor.execute("SELECT image_id FROM image_caption WHERE model_name = ?", (caption_model_name,))
-        existing_caption_ids = {row["image_id"] for row in primary_cursor.fetchall()}
+        existing_caption_ids = {
+            row.image_id
+            for row in primary_session.execute(select(ImageCaption.image_id).where(ImageCaption.model_name == caption_model_name))
+        }
 
         embedding_targets = [image_id for image_id in process_ids if image_id not in existing_embedding_ids]
         caption_targets = [image_id for image_id in process_ids if image_id not in existing_caption_ids]
@@ -577,7 +518,6 @@ class PreprocessingPipeline:
 
         now = time.time()
 
-        # Embeddings
         embedding_batch_size = max(1, embedding_cfg.batch_size)
         total_embeddings = 0
 
@@ -620,44 +560,33 @@ class PreprocessingPipeline:
                 emb_path = embeddings_dir / rel_path
                 np.save(emb_path, vec)
 
-                primary_cursor.execute(
-                    """
-                    INSERT INTO image_embedding (
-                        image_id,
-                        model_name,
-                        embedding_path,
-                        embedding_dim,
-                        model_backend,
-                        updated_at
-                    ) VALUES (
-                        ?, ?, ?, ?, ?, ?
-                    )
-                    ON CONFLICT(image_id, model_name) DO UPDATE SET
-                        embedding_path = excluded.embedding_path,
-                        embedding_dim = excluded.embedding_dim,
-                        model_backend = excluded.model_backend,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        image_id,
-                        embedding_model_name,
-                        rel_path,
-                        int(vec.shape[-1]),
-                        embedding_cfg.backend,
-                        now,
-                    ),
+                stmt = sqlite_insert(ImageEmbedding).values(
+                    image_id=image_id,
+                    model_name=embedding_model_name,
+                    embedding_path=rel_path,
+                    embedding_dim=int(vec.shape[-1]),
+                    model_backend=embedding_cfg.backend,
+                    updated_at=now,
                 )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[ImageEmbedding.image_id, ImageEmbedding.model_name],
+                    set_={
+                        "embedding_path": stmt.excluded.embedding_path,
+                        "embedding_dim": stmt.excluded.embedding_dim,
+                        "model_backend": stmt.excluded.model_backend,
+                        "updated_at": stmt.excluded.updated_at,
+                    },
+                )
+                primary_session.execute(stmt)
                 total_embeddings += 1
 
-            # Update run journal after each embedding batch.
-            primary_conn.commit()
+            primary_session.commit()
             if batch_ids:
                 save_run_journal(
                     cache_root,
                     RunJournalRecord(stage="embeddings_and_captions", cursor_image_id=batch_ids[-1], updated_at=time.time()),
                 )
 
-        # Captions
         caption_batch_size = max(1, caption_cfg.batch_size)
         total_captions = 0
 
@@ -706,33 +635,25 @@ class PreprocessingPipeline:
                 }
                 caption_path.write_text(json.dumps(payload), encoding="utf-8")
 
-                primary_cursor.execute(
-                    """
-                    INSERT INTO image_caption (
-                        image_id,
-                        model_name,
-                        caption,
-                        model_backend,
-                        updated_at
-                    ) VALUES (
-                        ?, ?, ?, ?, ?
-                    )
-                    ON CONFLICT(image_id, model_name) DO UPDATE SET
-                        caption = excluded.caption,
-                        model_backend = excluded.model_backend,
-                        updated_at = excluded.updated_at
-                    """,
-                    (
-                        image_id,
-                        caption_model_name,
-                        caption_text,
-                        caption_cfg.backend,
-                        now,
-                    ),
+                stmt = sqlite_insert(ImageCaption).values(
+                    image_id=image_id,
+                    model_name=caption_model_name,
+                    caption=caption_text,
+                    model_backend=caption_cfg.backend,
+                    updated_at=now,
                 )
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=[ImageCaption.image_id, ImageCaption.model_name],
+                    set_={
+                        "caption": stmt.excluded.caption,
+                        "model_backend": stmt.excluded.model_backend,
+                        "updated_at": stmt.excluded.updated_at,
+                    },
+                )
+                primary_session.execute(stmt)
                 total_captions += 1
 
-            primary_conn.commit()
+            primary_session.commit()
 
             if batch_ids:
                 save_run_journal(
@@ -740,41 +661,38 @@ class PreprocessingPipeline:
                     RunJournalRecord(stage="embeddings_and_captions", cursor_image_id=batch_ids[-1], updated_at=time.time()),
                 )
 
-        primary_conn.commit()
+        primary_session.commit()
         self._logger.info(
             "embeddings_and_captions_complete",
             extra={"embeddings_created": total_embeddings, "captions_created": total_captions},
         )
 
-    def _run_perceptual_hashing_and_duplicates(self, primary_conn, projection_conn) -> None:
+    def _run_perceptual_hashing_and_duplicates(self, primary_session, _projection_session) -> None:
         """Compute perceptual hashes and rebuild near-duplicate groups."""
 
         self._logger.info("phash_and_duplicates_start", extra={})
 
-        cursor = primary_conn.cursor()
         now = time.time()
 
-        cursor.execute(
-            """
-            SELECT image_id, primary_path
-            FROM images
-            WHERE status = 'active'
-              AND (
-                phash IS NULL
-                OR phash_algo IS NULL
-                OR phash_algo != ?
-                OR width IS NULL
-                OR height IS NULL
-              )
-            """,
-            (PHASH_ALGO,),
+        rows = primary_session.execute(
+            select(Image.image_id, Image.primary_path).where(
+                and_(
+                    Image.status == "active",
+                    or_(
+                        Image.phash.is_(None),
+                        Image.phash_algo.is_(None),
+                        Image.phash_algo != PHASH_ALGO,
+                        Image.width.is_(None),
+                        Image.height.is_(None),
+                    ),
+                )
+            )
         )
-        rows = cursor.fetchall()
 
         phash_updated = 0
         for row in rows:
-            image_id = row["image_id"]
-            path_str = row["primary_path"]
+            image_id = row.image_id
+            path_str = row.primary_path
             try:
                 from PIL import Image
 
@@ -782,13 +700,10 @@ class PreprocessingPipeline:
                 width, height = image.size
             except Exception as exc:
                 self._logger.error("phash_image_open_error", extra={"image_id": image_id, "path": path_str, "error": str(exc)})
-                cursor.execute(
-                    """
-                    UPDATE images
-                    SET status = ?, error_message = ?, updated_at = ?
-                    WHERE image_id = ?
-                    """,
-                    ("error", f"phash_image_open_error: {exc}", now, image_id),
+                primary_session.execute(
+                    update(Image)
+                    .where(Image.image_id == image_id)
+                    .values(status="error", error_message=f"phash_image_open_error: {exc}", updated_at=now)
                 )
                 continue
 
@@ -796,50 +711,48 @@ class PreprocessingPipeline:
                 phash_hex = compute_perceptual_hash(image)
             except Exception as exc:  # pragma: no cover - defensive
                 self._logger.error("phash_compute_error", extra={"image_id": image_id, "path": path_str, "error": str(exc)})
-                cursor.execute(
-                    """
-                    UPDATE images
-                    SET status = ?, error_message = ?, updated_at = ?
-                    WHERE image_id = ?
-                    """,
-                    ("error", f"phash_compute_error: {exc}", now, image_id),
+                primary_session.execute(
+                    update(Image)
+                    .where(Image.image_id == image_id)
+                    .values(status="error", error_message=f"phash_compute_error: {exc}", updated_at=now)
                 )
                 continue
 
-            cursor.execute(
-                """
-                UPDATE images
-                SET width = ?, height = ?, phash = ?, phash_algo = ?, phash_updated_at = ?, status = ?, error_message = NULL, updated_at = ?
-                WHERE image_id = ?
-                """,
-                (int(width), int(height), phash_hex, PHASH_ALGO, now, "active", now, image_id),
+            primary_session.execute(
+                update(Image)
+                .where(Image.image_id == image_id)
+                .values(
+                    width=int(width),
+                    height=int(height),
+                    phash=phash_hex,
+                    phash_algo=PHASH_ALGO,
+                    phash_updated_at=now,
+                    status="active",
+                    error_message=None,
+                    updated_at=now,
+                )
             )
             phash_updated += 1
 
-        primary_conn.commit()
+        primary_session.commit()
         self._logger.info("phash_update_complete", extra={"updated_count": phash_updated})
 
-        # Build near-duplicate groups using prefix buckets on the high-order bits.
-        cursor.execute(
-            """
-            SELECT image_id, phash
-            FROM images
-            WHERE status = 'active' AND phash IS NOT NULL AND phash_algo = ?
-            """,
-            (PHASH_ALGO,),
+        rows = primary_session.execute(
+            select(Image.image_id, Image.phash).where(
+                and_(Image.status == "active", Image.phash.is_not(None), Image.phash_algo == PHASH_ALGO)
+            )
         )
-        rows = cursor.fetchall()
 
         BUCKET_PREFIX_HEX_LEN = 4  # 16 high bits
         HAMMING_THRESHOLD = 12
 
         buckets: Dict[str, List[Dict[str, str]]] = {}
         for row in rows:
-            phash_hex = row["phash"]
+            phash_hex = row.phash
             if not phash_hex or len(phash_hex) < BUCKET_PREFIX_HEX_LEN:
                 continue
             prefix = phash_hex[:BUCKET_PREFIX_HEX_LEN]
-            buckets.setdefault(prefix, []).append({"image_id": row["image_id"], "phash": phash_hex})
+            buckets.setdefault(prefix, []).append({"image_id": row.image_id, "phash": phash_hex})
 
         near_pairs: List[tuple[str, str, int]] = []
         for prefix, items in buckets.items():
@@ -860,17 +773,17 @@ class PreprocessingPipeline:
                         used.add(candidate_id)
                 used.add(anchor_id)
 
-        proj_cursor = primary_conn.cursor()
-        proj_cursor.execute("DELETE FROM image_near_duplicate")
+        primary_session.execute(delete(ImageNearDuplicate))
         for anchor_id, duplicate_id, distance in near_pairs:
-            proj_cursor.execute(
-                """
-                INSERT INTO image_near_duplicate (anchor_image_id, duplicate_image_id, phash_distance, created_at)
-                VALUES (?, ?, ?, ?)
-                """,
-                (anchor_id, duplicate_id, distance, now),
+            primary_session.add(
+                ImageNearDuplicate(
+                    anchor_image_id=anchor_id,
+                    duplicate_image_id=duplicate_id,
+                    phash_distance=distance,
+                    created_at=now,
+                )
             )
-        primary_conn.commit()
+        primary_session.commit()
 
         self._logger.info(
             "phash_and_duplicates_complete",
