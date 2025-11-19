@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -261,6 +262,25 @@ def image_detail(image_id: str) -> Any:
 
     near_duplicates.sort(key=lambda item: (item.get("phash_distance", 0), item["image_id"]))
 
+    gps_latitude: float | None = None
+    gps_longitude: float | None = None
+    metadata_path = Path("cache") / "images" / "metadata" / f"{image_id}.json"
+    if metadata_path.exists():
+        try:
+            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+            gps_payload = payload.get("gps") or {}
+            lat_val = gps_payload.get("latitude")
+            lon_val = gps_payload.get("longitude")
+            if isinstance(lat_val, (int, float)):
+                gps_latitude = float(lat_val)
+            if isinstance(lon_val, (int, float)):
+                gps_longitude = float(lon_val)
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.error(
+                "metadata_load_error",
+                extra={"image_id": image_id, "path": str(metadata_path), "error": str(exc)},
+            )
+
     regions: List[Dict[str, Any]] = []
     for region in region_rows:
         regions.append(
@@ -288,6 +308,10 @@ def image_detail(image_id: str) -> Any:
         width=image_row.width,
         height=image_row.height,
         status=image_row.status,
+        exif_datetime=image_row.exif_datetime,
+        camera_model=image_row.camera_model,
+        gps_latitude=gps_latitude,
+        gps_longitude=gps_longitude,
         scene=scene_info,
         caption=caption_text,
         caption_model=caption_model,
@@ -306,12 +330,36 @@ def image_thumbnail(image_id: str) -> Any:
 
     with open_primary_session(primary_path) as session:
         row = session.execute(
-            select(Image.primary_path).where(and_(Image.image_id == image_id, Image.status == "active"))
+            select(Image.primary_path, Image.phash).where(and_(Image.image_id == image_id, Image.status == "active"))
         ).first()
         if row is None:
             abort(404)
 
         path_str = row.primary_path
+        phash_hex = row.phash
+
+    thumb_path = Path("cache") / "images" / "thumbnails" / f"{image_id}.jpg"
+
+    if thumb_path.exists():
+        try:
+            return send_file(thumb_path)
+        except Exception as exc:
+            LOGGER.error(
+                "thumbnail_send_error",
+                extra={"image_id": image_id, "path": str(thumb_path), "error": str(exc)},
+            )
+
+    # Backward-compatibility: fall back to legacy pHash-keyed thumbnails if present.
+    if phash_hex:
+        legacy_thumb_path = Path("cache") / "images" / "thumbnails" / f"{phash_hex}.jpg"
+        if legacy_thumb_path.exists():
+            try:
+                return send_file(legacy_thumb_path)
+            except Exception as exc:
+                LOGGER.error(
+                    "thumbnail_send_error",
+                    extra={"image_id": image_id, "path": str(legacy_thumb_path), "error": str(exc)},
+                )
 
     try:
         return send_file(path_str)

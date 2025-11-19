@@ -40,6 +40,11 @@
           <li>Size: {{ size_bytes }} bytes</li>
           <li>Modified time (mtime): {{ mtime }}</li>
           <li>Width × Height: {{ width }} × {{ height }}</li>
+          <li>EXIF datetime: {{ exif_datetime or "N/A" }}</li>
+          <li>Camera model: {{ camera_model or "N/A" }}</li>
+          {% if gps_latitude is not none and gps_longitude is not none %}
+            <li>GPS: {{ "%.6f"|format(gps_latitude) }}, {{ "%.6f"|format(gps_longitude) }}</li>
+          {% endif %}
         </ul>
       </div>
 

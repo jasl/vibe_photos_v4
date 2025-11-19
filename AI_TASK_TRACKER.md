@@ -13,19 +13,36 @@ This file tracks high-level implementation tasks and their status for the Phase 
 
 ### M1 — Preprocessing & Feature Extraction
 
-- [ ] Set up `uv` environment and base dependencies.
-- [ ] Implement shared logging and configuration modules.
-- [ ] Define initial SQLite schema for photos, metadata, and model outputs.
-- [ ] Implement photo scanning and registration for local folders/NAS mounts.
-- [ ] Normalize images and generate thumbnails / web-friendly versions.
-- [ ] Extract EXIF, capture time, GPS (when present), and file timestamps.
-- [ ] Compute file hashes and perceptual hashes; record near-duplicate relationships.
-- [ ] Integrate SigLIP embeddings and BLIP captions; cache results.
-- [ ] (Optional) Integrate Grounding DINO / OWL-ViT detection and SigLIP re-ranking.
-- [ ] Implement a resumable, concurrent preprocessing pipeline (queue + workers).
-- [ ] Define a stable, versioned on-disk format for preprocessing caches under `cache/` that is decoupled from the database schema.
-- [ ] Build a simple Flask-based debug UI to list canonical photos and show per-photo preprocessing details and similar images.
+- [x] Set up `uv` environment and base dependencies. (Project is pinned to Python 3.12 with `uv` metadata in `pyproject.toml`.)
+- [x] Implement shared logging and configuration modules. (See `src/utils/logging.py` and `src/vibe_photos/config.py`.)
+- [x] Define initial SQLite schema for photos, metadata, and model outputs. (See ORM models in `src/vibe_photos/db.py`.)
+- [x] Implement photo scanning and registration for local folders/NAS mounts. (Implemented in `src/vibe_photos/scanner.py` and `_run_scan_and_hash` in `src/vibe_photos/pipeline.py`.)
+- [x] Normalize images and generate thumbnails / web-friendly versions. (A preprocessing stage now writes configurable JPEG thumbnails (default 512×512) to `cache/images/thumbnails/`, keyed by `image_id`; `/thumbnail/<image_id>` reads from the cache with a fallback to originals. Full normalized copies under `cache/images/processed/` remain future work.)
+- [x] Extract EXIF, capture time, GPS (when present), and file timestamps. (EXIF datetime and camera model are populated on `images` rows during preprocessing; a metadata sidecar is written to `cache/images/metadata/<image_id>.json` with parsed GPS coordinates when present, and the Flask UI displays these fields.)
+- [x] Compute file hashes and perceptual hashes; record near-duplicate relationships. (Content hashes and pHash-based near-duplicate groups are implemented in `src/vibe_photos/hasher.py` and `_run_perceptual_hashing_and_duplicates` in `src/vibe_photos/pipeline.py`.)
+- [x] Integrate SigLIP embeddings and BLIP captions; cache results. (Implemented in `_run_embeddings_and_captions` with NPY/JSON caches under `cache/` and projections in SQLite.)
+- [x] (Optional) Integrate Grounding DINO / OWL-ViT detection and SigLIP re-ranking. (OWL-ViT + SigLIP region re-ranking and JSON caches are implemented; enabled via `models.detection.enabled` and `pipeline.run_detection` settings.)
+- [ ] Implement a resumable, concurrent preprocessing pipeline (queue + workers). (A resumable single-process pipeline with run journal is implemented; queue-based concurrency and worker fan-out are deferred.)
+- [ ] Define a stable, versioned on-disk format for preprocessing caches under `cache/` that is decoupled from the database schema. (Embeddings, captions, detections, and regions are cached under `cache/`, but cache versioning and projection DB rebuild flows are still minimal.)
+- [x] Build a simple Flask-based debug UI to list canonical photos and show per-photo preprocessing details and similar images. (Implemented in `src/vibe_photos/webui/__init__.py` with templates under `src/vibe_photos/webui/templates`.)
 - [x] Standardize database access on SQLAlchemy ORM/Core models and prohibit new raw SQL usage in pipeline and web UI.
+
+#### M1 — Extras beyond the original plan
+
+- OWL-ViT region detection with SigLIP-based label re-ranking is fully wired into the pipeline, with results stored in the `image_region` table and JSON caches under `cache/regions/`.
+- A standalone SigLIP+BLIP helper (`SiglipBlipDetector` in `src/vibe_photos/ml/siglip_blip.py`) is available for ad-hoc zero-shot classification + captioning outside the main pipeline.
+- The Flask debug UI exposes additional filters such as duplicate-hiding, near-duplicate facets, and region-label filtering on top of the planned scene/attribute filters.
+
+#### M1 — Known PoC / placeholder areas
+
+- Full image normalization and storage under `cache/images/processed/` is not yet implemented; only thumbnails are generated in the preprocessing pipeline today.
+- EXIF and GPS metadata are parsed during preprocessing and surfaced in the debug UI, but the on-disk metadata format is minimal and may evolve as later milestones add richer EXIF/sidecar handling.
+- The preprocessing pipeline is resumable via a JSON run journal in `cache/run_journal.json`, but it still runs as a single-process loop; queue + worker orchestration is a planned upgrade.
+- The projection database (`cache/index.db`) is created but not yet used for read models; projection-table maintenance remains a placeholder for later milestones.
+
+#### Future technical improvements (beyond M1)
+
+- Optimize pHash-based near-duplicate grouping to reduce worst-case O(N²) behavior (for example via bucketing or approximate nearest-neighbor strategies) once library scale and performance bottlenecks are better understood.
 
 ### M2 — Search & Tools
 

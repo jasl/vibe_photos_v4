@@ -34,3 +34,10 @@ pipeline:
   skip_duplicates_for_heavy_models: true
   # Hamming distance threshold for near-duplicate grouping (default 12).
   phash_hamming_threshold: 16
+  # Target thumbnail size (max width/height in pixels) for web previews.
+  thumbnail_size: 512
+  # JPEG quality (1–100) for thumbnails.
+  thumbnail_quality: 85
+  # How to store EXIF datetime in the database: "raw" uses the original camera string;
+  # "iso" normalizes to an ISO-8601-like "YYYY-MM-DDTHH:MM:SS" format when parsing succeeds.
+  exif_datetime_format: "iso"

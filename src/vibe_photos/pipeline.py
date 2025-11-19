@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -36,6 +37,106 @@ class RunJournalRecord:
     stage: str
     cursor_image_id: Optional[str]
     updated_at: float
+
+
+def _extract_exif_and_gps(image, datetime_format: str = "raw") -> tuple[Optional[str], Optional[str], Optional[Dict[str, object]]]:
+    """Extract EXIF datetime, camera model, and GPS coordinates from a PIL image.
+
+    Returns a tuple of ``(exif_datetime, camera_model, gps_payload)`` where the GPS payload,
+    when present, contains ``latitude`` and ``longitude`` in decimal degrees and associated
+    reference fields.
+    """
+
+    try:
+        from PIL import ExifTags as _ExifTags
+    except Exception:
+        return None, None, None
+
+    try:
+        exif = image.getexif()
+    except Exception:
+        return None, None, None
+
+    if not exif:
+        return None, None, None
+
+    exif_dict = dict(exif)
+    exif_by_name: Dict[str, object] = {}
+    for tag_id, value in exif_dict.items():
+        name = _ExifTags.TAGS.get(tag_id, str(tag_id))
+        exif_by_name[name] = value
+
+    exif_datetime: Optional[str] = None
+    camera_model: Optional[str] = None
+
+    raw_dt = exif_by_name.get("DateTimeOriginal") or exif_by_name.get("DateTime")
+    if isinstance(raw_dt, str):
+        if datetime_format == "iso":
+            try:
+                # Common EXIF format: "YYYY:MM:DD HH:MM:SS"
+                dt = datetime.strptime(raw_dt, "%Y:%m:%d %H:%M:%S")
+                exif_datetime = dt.isoformat(timespec="seconds")
+            except Exception:
+                exif_datetime = raw_dt
+        else:
+            exif_datetime = raw_dt
+
+    model = exif_by_name.get("Model")
+    make = exif_by_name.get("Make")
+    if isinstance(model, str) and isinstance(make, str):
+        camera_model = f"{make} {model}".strip()
+    elif isinstance(model, str):
+        camera_model = model
+    elif isinstance(make, str):
+        camera_model = make
+
+    gps_info = exif_by_name.get("GPSInfo")
+    if not gps_info or not isinstance(gps_info, dict):
+        return exif_datetime, camera_model, None
+
+    gps_tags: Dict[str, object] = {}
+    for key, value in gps_info.items():
+        name = _ExifTags.GPSTAGS.get(key, str(key))
+        gps_tags[name] = value
+
+    lat = gps_tags.get("GPSLatitude")
+    lat_ref = gps_tags.get("GPSLatitudeRef")
+    lon = gps_tags.get("GPSLongitude")
+    lon_ref = gps_tags.get("GPSLongitudeRef")
+
+    def _to_degrees(value) -> Optional[float]:
+        try:
+            d, m, s = value
+        except Exception:
+            return None
+        try:
+            d_val = float(d)
+            m_val = float(m)
+            s_val = float(s)
+        except Exception:
+            return None
+        return d_val + (m_val / 60.0) + (s_val / 3600.0)
+
+    if not (lat and lon and isinstance(lat_ref, str) and isinstance(lon_ref, str)):
+        return exif_datetime, camera_model, None
+
+    lat_deg = _to_degrees(lat)
+    lon_deg = _to_degrees(lon)
+    if lat_deg is None or lon_deg is None:
+        return exif_datetime, camera_model, None
+
+    if lat_ref.upper() == "S":
+        lat_deg = -lat_deg
+    if lon_ref.upper() == "W":
+        lon_deg = -lon_deg
+
+    gps_payload: Dict[str, object] = {
+        "latitude": lat_deg,
+        "longitude": lon_deg,
+        "latitude_ref": lat_ref,
+        "longitude_ref": lon_ref,
+    }
+    return exif_datetime, camera_model, gps_payload
 
 
 def load_run_journal(cache_root: Path) -> Optional[RunJournalRecord]:
@@ -133,6 +234,9 @@ class PreprocessingPipeline:
 
             self._run_perceptual_hashing_and_duplicates(primary_session, projection_session)
             save_run_journal(cache_root, RunJournalRecord(stage="phash_and_duplicates", cursor_image_id=None, updated_at=time.time()))
+
+            self._run_thumbnails(primary_session)
+            save_run_journal(cache_root, RunJournalRecord(stage="thumbnails", cursor_image_id=None, updated_at=time.time()))
 
             self._run_embeddings_and_captions(primary_session, projection_session)
             self._run_scene_classification(primary_session, projection_session)
@@ -303,6 +407,80 @@ class PreprocessingPipeline:
 
         primary_session.commit()
         self._logger.info("scan_and_hash_complete", extra={"file_count": len(files)})
+
+    def _run_thumbnails(self, primary_session) -> None:
+        """Generate web-friendly thumbnails for active images under cache/images/thumbnails/."""
+
+        if self._cache_root is None:
+            raise RuntimeError("cache_root is not initialized")
+
+        cache_root = self._cache_root
+        thumbnails_dir = cache_root / "images" / "thumbnails"
+        thumbnails_dir.mkdir(parents=True, exist_ok=True)
+
+        self._logger.info("thumbnails_start", extra={"thumbnails_dir": str(thumbnails_dir)})
+
+        rows = primary_session.execute(
+            select(Image.image_id, Image.primary_path).where(Image.status == "active")
+        )
+
+        created = 0
+        skipped = 0
+
+        try:
+            from PIL import Image as _ImageThumb
+        except Exception as exc:  # pragma: no cover - defensive
+            self._logger.error("thumbnail_pil_import_error", extra={"error": str(exc)})
+            return
+
+        max_side = max(1, int(self._settings.pipeline.thumbnail_size))
+        quality = int(self._settings.pipeline.thumbnail_quality)
+
+        for row in rows:
+            image_id = row.image_id
+            path_str = row.primary_path
+            thumb_path = thumbnails_dir / f"{image_id}.jpg"
+
+            if thumb_path.exists():
+                skipped += 1
+                continue
+
+            try:
+                image = _ImageThumb.open(path_str).convert("RGB")
+            except Exception as exc:
+                self._logger.error(
+                    "thumbnail_image_open_error",
+                    extra={"image_id": image_id, "path": path_str, "error": str(exc)},
+                )
+                continue
+
+            try:
+                max_size = (max_side, max_side)
+                resample_attr = getattr(_ImageThumb, "Resampling", None)
+                if resample_attr is not None:
+                    resample = resample_attr.LANCZOS
+                else:
+                    resample = _ImageThumb.LANCZOS
+
+                image.thumbnail(max_size, resample=resample)
+                image.save(thumb_path, format="JPEG", quality=quality)
+                created += 1
+            except Exception as exc:  # pragma: no cover - defensive
+                self._logger.error(
+                    "thumbnail_generate_error",
+                    extra={"image_id": image_id, "path": path_str, "error": str(exc)},
+                )
+                try:
+                    if thumb_path.exists():
+                        thumb_path.unlink()
+                except OSError:
+                    pass
+                continue
+
+        self._logger.info(
+            "thumbnails_complete",
+            extra={"created": created, "skipped_existing": skipped, "thumbnails_dir": str(thumbnails_dir)},
+        )
 
     def _run_region_detection_and_reranking(self, primary_session) -> None:
         """Run optional object-level detection and prepare region metadata."""
@@ -897,6 +1075,13 @@ class PreprocessingPipeline:
 
         self._logger.info("phash_and_duplicates_start", extra={})
 
+        if self._cache_root is None:
+            raise RuntimeError("cache_root is not initialized")
+
+        cache_root = self._cache_root
+        metadata_dir = cache_root / "images" / "metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+
         now = time.time()
 
         rows = primary_session.execute(
@@ -909,6 +1094,8 @@ class PreprocessingPipeline:
                         Image.phash_algo != PHASH_ALGO,
                         Image.width.is_(None),
                         Image.height.is_(None),
+                        Image.exif_datetime.is_(None),
+                        Image.camera_model.is_(None),
                     ),
                 )
             )
@@ -932,6 +1119,20 @@ class PreprocessingPipeline:
                 )
                 continue
 
+            exif_datetime: Optional[str]
+            camera_model: Optional[str]
+            gps_payload: Optional[Dict[str, object]]
+
+            try:
+                exif_datetime, camera_model, gps_payload = _extract_exif_and_gps(
+                    image, datetime_format=self._settings.pipeline.exif_datetime_format
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                self._logger.error("exif_parse_error", extra={"image_id": image_id, "path": path_str, "error": str(exc)})
+                exif_datetime = None
+                camera_model = None
+                gps_payload = None
+
             try:
                 phash_hex = compute_perceptual_hash(image)
             except Exception as exc:  # pragma: no cover - defensive
@@ -949,6 +1150,8 @@ class PreprocessingPipeline:
                 .values(
                     width=int(width),
                     height=int(height),
+                    exif_datetime=exif_datetime,
+                    camera_model=camera_model,
                     phash=phash_hex,
                     phash_algo=PHASH_ALGO,
                     phash_updated_at=now,
@@ -958,6 +1161,23 @@ class PreprocessingPipeline:
                 )
             )
             phash_updated += 1
+
+            metadata_payload = {
+                "image_id": image_id,
+                "primary_path": path_str,
+                "exif_datetime": exif_datetime,
+                "camera_model": camera_model,
+                "gps": gps_payload,
+                "updated_at": now,
+            }
+            try:
+                metadata_path = metadata_dir / f"{image_id}.json"
+                metadata_path.write_text(json.dumps(metadata_payload), encoding="utf-8")
+            except OSError as exc:
+                self._logger.error(
+                    "exif_metadata_write_error",
+                    extra={"image_id": image_id, "path": str(metadata_dir), "error": str(exc)},
+                )
 
         primary_session.commit()
         self._logger.info("phash_update_complete", extra={"updated_count": phash_updated})

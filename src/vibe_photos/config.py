@@ -112,6 +112,9 @@ class PipelineConfig:
     run_detection: bool = False
     skip_duplicates_for_heavy_models: bool = True
     phash_hamming_threshold: int = 12
+    thumbnail_size: int = 512
+    thumbnail_quality: int = 85
+    exif_datetime_format: str = "raw"
 
 
 @dataclass
@@ -203,6 +206,12 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         pipeline_cfg.skip_duplicates_for_heavy_models = pipeline_raw["skip_duplicates_for_heavy_models"]
     if isinstance(pipeline_raw.get("phash_hamming_threshold"), int):
         pipeline_cfg.phash_hamming_threshold = pipeline_raw["phash_hamming_threshold"]
+    if isinstance(pipeline_raw.get("thumbnail_size"), int):
+        pipeline_cfg.thumbnail_size = pipeline_raw["thumbnail_size"]
+    if isinstance(pipeline_raw.get("thumbnail_quality"), int):
+        pipeline_cfg.thumbnail_quality = pipeline_raw["thumbnail_quality"]
+    if isinstance(pipeline_raw.get("exif_datetime_format"), str):
+        pipeline_cfg.exif_datetime_format = pipeline_raw["exif_datetime_format"]
 
     return settings
 
