@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import List, Protocol, Sequence
+from typing import List, Protocol, Sequence, Tuple
 
 import torch
 from PIL import Image
@@ -44,6 +45,129 @@ class Detector(Protocol):
 
     def detect(self, image: Image.Image, prompts: Sequence[str]) -> List[Detection]:
         """Run detection on a single image given text prompts."""
+
+
+def iou(a: BoundingBox, b: BoundingBox) -> float:
+    """Compute intersection-over-union (IoU) for normalized bounding boxes."""
+
+    ax1, ay1, ax2, ay2 = a.x_min, a.y_min, a.x_max, a.y_max
+    bx1, by1, bx2, by2 = b.x_min, b.y_min, b.x_max, b.y_max
+
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    if inter_area <= 0.0:
+        return 0.0
+
+    area_a = max(0.0, (ax2 - ax1) * (ay2 - ay1))
+    area_b = max(0.0, (bx2 - bx1) * (by2 - by1))
+    union = area_a + area_b - inter_area
+    if union <= 0.0:
+        return 0.0
+
+    return inter_area / union
+
+
+def non_max_suppression(detections: Sequence[Detection], iou_threshold: float) -> List[Detection]:
+    """Class-agnostic non-max suppression.
+
+    For highly overlapping boxes, keep only the highest-score detection.
+    """
+
+    if not detections:
+        return []
+
+    if iou_threshold <= 0.0:
+        return list(detections)
+
+    sorted_dets = sorted(detections, key=lambda det: det.score, reverse=True)
+    kept: List[Detection] = []
+
+    for det in sorted_dets:
+        duplicate = False
+        for kept_det in kept:
+            if iou(det.bbox, kept_det.bbox) >= iou_threshold:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(det)
+
+    return kept
+
+
+def detection_priority(det: Detection, *, area_gamma: float = 0.3, center_penalty: float = 0.6) -> float:
+    """Compute a heuristic priority score for a detection.
+
+    Higher when the region is larger, closer to the image center, and has a higher detector score.
+    """
+
+    bbox = det.bbox
+    width = max(0.0, bbox.x_max - bbox.x_min)
+    height = max(0.0, bbox.y_max - bbox.y_min)
+    area = max(1e-6, width * height)
+
+    cx = 0.5 * (bbox.x_min + bbox.x_max)
+    cy = 0.5 * (bbox.y_min + bbox.y_max)
+    distance = math.sqrt((cx - 0.5) ** 2 + (cy - 0.5) ** 2)
+
+    area_weight = area**area_gamma
+    center_weight = 1.0 - center_penalty * distance
+    if center_weight < 0.0:
+        center_weight = 0.0
+
+    return det.score * area_weight * center_weight
+
+
+def filter_secondary_regions_by_priority(
+    detections: Sequence[Detection],
+    priorities: Sequence[float],
+    *,
+    max_regions: int,
+    secondary_min_priority: float,
+    secondary_min_relative_to_primary: float,
+) -> Tuple[List[Detection], List[float]]:
+    """Filter low-priority secondary regions after sorting by priority.
+
+    Assumes detections and priorities are aligned and already sorted from highest to lowest priority.
+    Always keeps the primary region and retains secondary regions that meet both absolute and
+    relative thresholds, up to ``max_regions`` total.
+    """
+
+    if not detections:
+        return [], []
+
+    if len(detections) != len(priorities):
+        raise ValueError("detections and priorities must have the same length")
+
+    primary_priority = float(priorities[0])
+
+    kept_detections: List[Detection] = [detections[0]]
+    kept_priorities: List[float] = [primary_priority]
+
+    if max_regions <= 1:
+        return kept_detections, kept_priorities
+
+    for det, priority in zip(detections[1:], priorities[1:]):
+        if len(kept_detections) >= max_regions:
+            break
+
+        if priority < secondary_min_priority:
+            continue
+
+        if primary_priority > 0.0:
+            relative = priority / primary_priority
+            if relative < secondary_min_relative_to_primary:
+                continue
+
+        kept_detections.append(det)
+        kept_priorities.append(priority)
+
+    return kept_detections, kept_priorities
 
 
 class OwlVitDetector:
@@ -130,10 +254,6 @@ class OwlVitDetector:
                 )
             )
 
-        if self._config.max_regions_per_image > 0 and len(detections) > self._config.max_regions_per_image:
-            detections.sort(key=lambda det: det.score, reverse=True)
-            detections = detections[: int(self._config.max_regions_per_image)]
-
         return detections
 
 
@@ -153,4 +273,14 @@ def build_owlvit_detector(settings: Settings | None = None) -> OwlVitDetector:
     return OwlVitDetector(config=cfg, device=device)
 
 
-__all__ = ["BoundingBox", "Detection", "Detector", "OwlVitDetector", "build_owlvit_detector"]
+__all__ = [
+    "BoundingBox",
+    "Detection",
+    "Detector",
+    "OwlVitDetector",
+    "build_owlvit_detector",
+    "iou",
+    "non_max_suppression",
+    "detection_priority",
+    "filter_secondary_regions_by_priority",
+]

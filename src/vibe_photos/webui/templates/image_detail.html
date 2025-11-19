@@ -118,6 +118,7 @@
                 <th>BBox (x_min, y_min, x_max, y_max)</th>
                 <th>Detector</th>
                 <th>SigLIP refined</th>
+                <th>Priority</th>
               </tr>
             </thead>
             <tbody>
@@ -142,6 +143,13 @@
                       score: {{ "%.3f"|format(region.refined_score or 0.0) }}
                     {% else %}
                       <span class="pill">N/A</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {{ "%.4f"|format(region.priority or 0.0) }}
+                    {% if region.backend == "caption-fallback" %}
+                      <br />
+                      <span class="pill">caption-fallback</span>
                     {% endif %}
                   </td>
                 </tr>

@@ -524,22 +524,30 @@ class PreprocessingPipeline:
         if self._cache_root is None:
             raise RuntimeError("cache_root is not initialized")
 
+        detection_cfg = self._settings.models.detection
+
         self._logger.info(
             "region_detection_start",
             extra={
-                "detection_backend": self._settings.models.detection.backend,
-                "detection_model": self._settings.models.detection.model_name,
+                "detection_backend": detection_cfg.backend,
+                "detection_model": detection_cfg.model_name,
             },
         )
 
-        from vibe_photos.ml.detection import OwlVitDetector, build_owlvit_detector
+        from vibe_photos.ml.detection import (
+            BoundingBox,
+            Detection as RegionDetection,
+            OwlVitDetector,
+            build_owlvit_detector,
+            detection_priority,
+            filter_secondary_regions_by_priority,
+            non_max_suppression,
+        )
         from vibe_photos.ml.models import get_siglip_embedding_model
 
         cache_root = self._cache_root
         regions_dir = cache_root / "regions"
         regions_dir.mkdir(parents=True, exist_ok=True)
-
-        detection_cfg = self._settings.models.detection
 
         if detection_cfg.backend != "owlvit":
             self._logger.info(
@@ -577,6 +585,13 @@ class PreprocessingPipeline:
         )
         paths_by_id: Dict[str, str] = {row.image_id: row.primary_path for row in active_rows}
 
+        caption_cfg = self._settings.models.caption
+        caption_model_name = caption_cfg.resolved_model_name()
+        caption_rows = primary_session.execute(
+            select(ImageCaption.image_id, ImageCaption.caption).where(ImageCaption.model_name == caption_model_name)
+        )
+        captions_by_id: Dict[str, str] = {row.image_id: row.caption for row in caption_rows}
+
         if not paths_by_id:
             self._logger.info("region_detection_noop", extra={})
             return
@@ -604,6 +619,18 @@ class PreprocessingPipeline:
         base_min_prob = max(0.0, float(detection_cfg.siglip_min_prob))
         min_margin = max(0.0, float(detection_cfg.siglip_min_margin))
 
+        nms_iou_threshold = float(detection_cfg.nms_iou_threshold)
+        area_gamma = float(detection_cfg.primary_area_gamma)
+        center_penalty = float(detection_cfg.primary_center_penalty)
+        caption_fallback_enabled = bool(detection_cfg.caption_primary_enabled)
+        min_primary_priority = float(detection_cfg.caption_primary_min_priority)
+        margin_x = float(detection_cfg.caption_primary_box_margin_x)
+        margin_y = float(detection_cfg.caption_primary_box_margin_y)
+        caption_keyword_groups = detection_cfg.caption_primary_keywords
+        secondary_min_priority = float(detection_cfg.secondary_min_priority)
+        secondary_min_relative_to_primary = float(detection_cfg.secondary_min_relative_to_primary)
+        max_regions = int(detection_cfg.max_regions_per_image)
+
         updated_rows = 0
         now = time.time()
 
@@ -619,13 +646,15 @@ class PreprocessingPipeline:
                 continue
 
             try:
-                detections = detector.detect(image=image, prompts=candidate_labels)
+                detections: List[RegionDetection] = detector.detect(image=image, prompts=candidate_labels)
             except Exception as exc:  # pragma: no cover - defensive
                 self._logger.error(
                     "region_detection_backend_error",
                     extra={"image_id": image_id, "path": path_str, "error": str(exc)},
                 )
                 continue
+
+            detections = non_max_suppression(detections, iou_threshold=nms_iou_threshold)
 
             # Remove any existing regions for this image_id to keep results consistent with the current model.
             primary_session.execute(
@@ -637,6 +666,84 @@ class PreprocessingPipeline:
             # Prepare SigLIP inputs for region crops.
             region_images: List["_Image.Image"] = []
             region_indices: List[int] = []
+            priorities: List[float] = []
+
+            for detection in detections:
+                priorities.append(
+                    detection_priority(
+                        detection,
+                        area_gamma=area_gamma,
+                        center_penalty=center_penalty,
+                    )
+                )
+
+            caption_text = captions_by_id.get(image_id, "")
+            caption_lower = caption_text.lower()
+
+            top_priority = max(priorities) if priorities else 0.0
+            need_caption_fallback = caption_fallback_enabled and (
+                not detections or top_priority < min_primary_priority
+            )
+
+            if need_caption_fallback and caption_lower and caption_keyword_groups:
+                fallback_label: str | None = None
+                for group_name, group_cfg in caption_keyword_groups.items():
+                    label_value = group_cfg.get("label")
+                    label = str(label_value).strip() if isinstance(label_value, str) else ""
+                    raw_keywords = group_cfg.get("keywords", [])
+                    if not isinstance(raw_keywords, list):
+                        continue
+                    for raw_keyword in raw_keywords:
+                        keyword = str(raw_keyword).strip().lower()
+                        if not keyword:
+                            continue
+                        if keyword in caption_lower:
+                            fallback_label = label or group_name
+                            break
+                    if fallback_label:
+                        break
+
+                if fallback_label:
+                    bbox = BoundingBox(
+                        x_min=margin_x,
+                        y_min=margin_y,
+                        x_max=max(margin_x, 1.0 - margin_x),
+                        y_max=max(margin_y, 1.0 - margin_y),
+                    )
+                    fallback_detection = RegionDetection(
+                        bbox=bbox,
+                        label=fallback_label,
+                        score=0.5,
+                        backend="caption-fallback",
+                        model_name="caption-primary",
+                    )
+                    detections.append(fallback_detection)
+                    priorities.append(
+                        detection_priority(
+                            fallback_detection,
+                            area_gamma=area_gamma,
+                            center_penalty=center_penalty,
+                        )
+                    )
+
+            if detections:
+                pairs = list(zip(detections, priorities))
+                pairs.sort(key=lambda pair: pair[1], reverse=True)
+                detections, priorities = zip(*pairs)
+                detections = list(detections)
+                priorities = list(priorities)
+
+                if max_regions > 0:
+                    detections, priorities = filter_secondary_regions_by_priority(
+                        detections,
+                        priorities,
+                        max_regions=max_regions,
+                        secondary_min_priority=secondary_min_priority,
+                        secondary_min_relative_to_primary=secondary_min_relative_to_primary,
+                    )
+            else:
+                detections = []
+                priorities = []
 
             for index, det in enumerate(detections):
                 x_min_px = int(max(0, min(width, round(det.bbox.x_min * width))))
@@ -707,14 +814,14 @@ class PreprocessingPipeline:
             # Persist regions to SQLite and cache JSON.
             region_payloads = []
 
-            for index, det in enumerate(detections):
-                refined_label = refined_labels.get(index)
-                refined_score = refined_scores.get(index)
+            for new_index, det in enumerate(detections):
+                refined_label = refined_labels.get(new_index)
+                refined_score = refined_scores.get(new_index)
 
                 primary_session.add(
                     ImageRegion(
                         image_id=image_id,
-                        region_index=index,
+                        region_index=new_index,
                         x_min=float(det.bbox.x_min),
                         y_min=float(det.bbox.y_min),
                         x_max=float(det.bbox.x_max),

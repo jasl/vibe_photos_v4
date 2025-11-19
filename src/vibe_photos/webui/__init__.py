@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -10,6 +11,7 @@ from flask import Flask, abort, redirect, render_template, request, send_file, u
 from sqlalchemy import and_, func, or_, select
 
 from utils.logging import get_logger
+from vibe_photos.config import load_settings
 from vibe_photos.db import Image, ImageCaption, ImageNearDuplicate, ImageRegion, ImageScene, open_primary_session
 
 
@@ -17,9 +19,13 @@ LOGGER = get_logger(__name__)
 
 app = Flask(__name__)
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_DATA_ROOT = _PROJECT_ROOT / "data"
+_CACHE_ROOT = _PROJECT_ROOT / "cache"
+
 
 def _get_primary_db_path() -> Path:
-    return Path("data/index.db")
+    return _DATA_ROOT / "index.db"
 
 
 @app.route("/")
@@ -282,22 +288,44 @@ def image_detail(image_id: str) -> Any:
             )
 
     regions: List[Dict[str, Any]] = []
-    for region in region_rows:
-        regions.append(
-            {
-                "index": region.region_index,
-                "x_min": region.x_min,
-                "y_min": region.y_min,
-                "x_max": region.x_max,
-                "y_max": region.y_max,
-                "detector_label": region.detector_label,
-                "detector_score": region.detector_score,
-                "refined_label": region.refined_label,
-                "refined_score": region.refined_score,
-                "backend": region.backend,
-                "model_name": region.model_name,
-            }
-        )
+    if region_rows:
+        settings = load_settings()
+        detection_cfg = settings.models.detection
+        area_gamma = float(detection_cfg.primary_area_gamma)
+        center_penalty = float(detection_cfg.primary_center_penalty)
+
+        for region in region_rows:
+            width = max(0.0, float(region.x_max) - float(region.x_min))
+            height = max(0.0, float(region.y_max) - float(region.y_min))
+            area = max(1e-6, width * height)
+
+            cx = 0.5 * (float(region.x_min) + float(region.x_max))
+            cy = 0.5 * (float(region.y_min) + float(region.y_max))
+            distance = math.sqrt((cx - 0.5) ** 2 + (cy - 0.5) ** 2)
+
+            area_weight = area**area_gamma
+            center_weight = 1.0 - center_penalty * distance
+            if center_weight < 0.0:
+                center_weight = 0.0
+
+            priority = float(region.detector_score) * area_weight * center_weight
+
+            regions.append(
+                {
+                    "index": region.region_index,
+                    "x_min": region.x_min,
+                    "y_min": region.y_min,
+                    "x_max": region.x_max,
+                    "y_max": region.y_max,
+                    "detector_label": region.detector_label,
+                    "detector_score": region.detector_score,
+                    "refined_label": region.refined_label,
+                    "refined_score": region.refined_score,
+                    "backend": region.backend,
+                    "model_name": region.model_name,
+                    "priority": priority,
+                }
+            )
 
     return render_template(
         "image_detail.html",
@@ -338,11 +366,16 @@ def image_thumbnail(image_id: str) -> Any:
         path_str = row.primary_path
         phash_hex = row.phash
 
-    thumb_path = Path("cache") / "images" / "thumbnails" / f"{image_id}.jpg"
+    thumb_path = _CACHE_ROOT / "images" / "thumbnails" / f"{image_id}.jpg"
 
     if thumb_path.exists():
         try:
             return send_file(thumb_path)
+        except FileNotFoundError as exc:
+            LOGGER.warning(
+                "thumbnail_file_missing",
+                extra={"image_id": image_id, "path": str(thumb_path), "error": str(exc)},
+            )
         except Exception as exc:
             LOGGER.error(
                 "thumbnail_send_error",
@@ -351,10 +384,15 @@ def image_thumbnail(image_id: str) -> Any:
 
     # Backward-compatibility: fall back to legacy pHash-keyed thumbnails if present.
     if phash_hex:
-        legacy_thumb_path = Path("cache") / "images" / "thumbnails" / f"{phash_hex}.jpg"
+        legacy_thumb_path = _CACHE_ROOT / "images" / "thumbnails" / f"{phash_hex}.jpg"
         if legacy_thumb_path.exists():
             try:
                 return send_file(legacy_thumb_path)
+            except FileNotFoundError as exc:
+                LOGGER.warning(
+                    "thumbnail_legacy_file_missing",
+                    extra={"image_id": image_id, "path": str(legacy_thumb_path), "error": str(exc)},
+                )
             except Exception as exc:
                 LOGGER.error(
                     "thumbnail_send_error",
@@ -363,9 +401,12 @@ def image_thumbnail(image_id: str) -> Any:
 
     try:
         return send_file(path_str)
+    except FileNotFoundError as exc:
+        LOGGER.warning("image_file_missing", extra={"image_id": image_id, "path": path_str, "error": str(exc)})
+        abort(404, description="Image content not found on disk. Run the preprocessing pipeline again or rescan your album roots.")
     except Exception as exc:
         LOGGER.error("thumbnail_send_error", extra={"image_id": image_id, "path": path_str, "error": str(exc)})
-        abort(404)
+        abort(500, description="Unexpected error while serving thumbnail.")
 
 
 __all__ = ["app"]

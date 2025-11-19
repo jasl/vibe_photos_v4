@@ -263,11 +263,14 @@ def analyze_image(image: Image.Image, prompts: list[str], labels: list[str]) -> 
     - Building detection prompt lists.
     - SigLIP candidate label sets.
     - Query normalization (mapping queries like “披萨” to `pizza`).
+  - In a later milestone, add a configuration‑driven label blacklist / remapping layer that can suppress or coarsen low‑information nouns (for example `butter`, `water`) when producing final region and image‑level labels, without changing underlying model logits or the shared label dictionary.
 
 - **Region constraints & filtering:**
   - Limit the number of stored regions per image (e.g. top N by SigLIP‑refined score) to avoid noisy, low‑value boxes.
   - Apply a minimum confidence threshold after SigLIP re‑ranking; discard regions below this threshold.
   - Prefer fewer, higher‑quality detections over many uncertain ones, especially for search and UI explanations.
+  - Use a configurable priority heuristic that combines detector score, normalized region area, and distance to the image center to order regions and select a small set of primary/secondary boxes per image.
+  - Allow caption‑aware synthetic “primary” regions as a fallback when detection misses an obvious subject (for example, when the caption strongly indicates a drink but no high‑priority drink box is present), and mark these regions explicitly in the backend so the UI can surface them.
 - **Performance:**
   - Prefer GPU when available for detector and SigLIP/BLIP.
   - On CPU‑only machines:

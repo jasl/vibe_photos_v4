@@ -32,6 +32,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - OWL-ViT region detection with SigLIP-based label re-ranking is fully wired into the pipeline, with results stored in the `image_region` table and JSON caches under `cache/regions/`. SigLIP re-ranking now applies confidence and margin thresholds and only refines labels within the same semantic group as the original detector label; if a detector label cannot be grouped confidently, the region keeps only the detector output (no cross-category overrides such as random `AirPods` on food regions).
 - A standalone SigLIP+BLIP helper (`SiglipBlipDetector` in `src/vibe_photos/ml/siglip_blip.py`) is available for ad-hoc zero-shot classification + captioning outside the main pipeline.
 - The Flask debug UI exposes additional filters such as duplicate-hiding, near-duplicate facets, and region-label filtering on top of the planned scene/attribute filters.
+- Region detection now includes: (1) class-agnostic NMS to merge highly overlapping boxes; (2) a configurable priority heuristic combining detector score, normalized box area, and distance to image center; (3) caption-based fallback regions for cases where detection misses an obvious primary object (e.g., drinks in front of background food); and (4) priority-aware filtering of low-value secondary regions so the database and UI focus on a small number of high-quality boxes per image. Priority is not stored in the database but is recomputed in the Web UI using the same heuristic for transparency and tuning.
 
 #### M1 — Known PoC / placeholder areas
 
@@ -39,10 +40,12 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - EXIF and GPS metadata are parsed during preprocessing and surfaced in the debug UI, but the on-disk metadata format is minimal and may evolve as later milestones add richer EXIF/sidecar handling.
 - The preprocessing pipeline is resumable via a JSON run journal in `cache/run_journal.json`, but it still runs as a single-process loop; queue + worker orchestration is a planned upgrade.
 - The projection database (`cache/index.db`) is created but not yet used for read models; projection-table maintenance remains a placeholder for later milestones.
+ - Caption-aware primary-region fallback in the detection stage assumes that BLIP captions have already been computed and written to `image_caption` for any image that runs detection. Future incremental “detection-only” entry points must either preserve this ordering (captions first) or gracefully disable/adjust caption-based fallbacks to avoid surprising gaps in primary regions.
 
 #### Future technical improvements (beyond M1)
 
 - Optimize pHash-based near-duplicate grouping to reduce worst-case O(N²) behavior (for example via bucketing or approximate nearest-neighbor strategies) once library scale and performance bottlenecks are better understood.
+- Introduce a configurable label blacklist / remapping layer for region and image-level labels so low-information or noisy nouns (for example `butter`, `water`) can be suppressed or mapped to coarser categories during SigLIP refinement and caption-based fallbacks. The blacklist should live in configuration (alongside SigLIP label groups) and be applied as a post-processing step, without changing underlying model logits or shared label dictionaries.
 
 ### M2 — Search & Tools
 
