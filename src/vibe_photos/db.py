@@ -1,10 +1,13 @@
-"""SQLite helpers and schema initialization for the M1 pipeline."""
+"""SQLAlchemy helpers, schema definitions, and session management."""
 
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
-from typing import Iterable
+from typing import Dict
+
+from sqlalchemy import Boolean, Float, Index, Integer, String, Text, create_engine, delete
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from utils.logging import get_logger
 
@@ -12,111 +15,112 @@ from utils.logging import get_logger
 LOGGER = get_logger(__name__)
 
 
-PRIMARY_DB_SCHEMA_STATEMENTS: tuple[str, ...] = (
-    """
-    CREATE TABLE IF NOT EXISTS images (
-      image_id        TEXT PRIMARY KEY,
-      primary_path    TEXT NOT NULL,
-      all_paths       TEXT NOT NULL,
-      size_bytes      INTEGER NOT NULL,
-      mtime           REAL NOT NULL,
-      width           INTEGER,
-      height          INTEGER,
-      exif_datetime   TEXT,
-      camera_model    TEXT,
-      hash_algo       TEXT NOT NULL,
-      phash           TEXT,
-      phash_algo      TEXT,
-      phash_updated_at REAL,
-      created_at      REAL NOT NULL,
-      updated_at      REAL NOT NULL,
-      status          TEXT NOT NULL,
-      error_message   TEXT,
-      schema_version  INTEGER NOT NULL
-    );
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_images_primary_path ON images(primary_path);
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_images_status ON images(status);
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS image_scene (
-      image_id           TEXT PRIMARY KEY,
-      scene_type         TEXT NOT NULL,
-      scene_confidence   REAL,
-      has_text           INTEGER NOT NULL,
-      has_person         INTEGER NOT NULL,
-      is_screenshot      INTEGER NOT NULL,
-      is_document        INTEGER NOT NULL,
-      classifier_name    TEXT NOT NULL,
-      classifier_version TEXT NOT NULL,
-      updated_at         REAL NOT NULL
-    );
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_image_scene_scene_type ON image_scene(scene_type);
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_image_scene_has_text ON image_scene(has_text);
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_image_scene_has_person ON image_scene(has_person);
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_image_scene_is_screenshot ON image_scene(is_screenshot);
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_image_scene_is_document ON image_scene(is_document);
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS image_embedding (
-      image_id       TEXT NOT NULL,
-      model_name     TEXT NOT NULL,
-      embedding_path TEXT NOT NULL,
-      embedding_dim  INTEGER NOT NULL,
-      model_backend  TEXT NOT NULL,
-      updated_at     REAL NOT NULL,
-      PRIMARY KEY (image_id, model_name)
-    );
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_image_embedding_model_name ON image_embedding(model_name);
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS image_caption (
-      image_id      TEXT NOT NULL,
-      model_name    TEXT NOT NULL,
-      caption       TEXT NOT NULL,
-      model_backend TEXT NOT NULL,
-      updated_at    REAL NOT NULL,
-      PRIMARY KEY (image_id, model_name)
-    );
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_image_caption_model_name ON image_caption(model_name);
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS image_near_duplicate (
-      anchor_image_id    TEXT NOT NULL,
-      duplicate_image_id TEXT NOT NULL,
-      phash_distance     INTEGER NOT NULL,
-      created_at         REAL NOT NULL,
-      PRIMARY KEY (anchor_image_id, duplicate_image_id)
-    );
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_image_near_duplicate_duplicate ON image_near_duplicate(duplicate_image_id);
-    """,
-)
+class Base(DeclarativeBase):
+    """Declarative base for all ORM models."""
 
 
-PROJECTION_DB_SCHEMA_STATEMENTS: tuple[str, ...] = PRIMARY_DB_SCHEMA_STATEMENTS
+class Image(Base):
+    """Primary image metadata and processing state."""
+
+    __tablename__ = "images"
+
+    image_id: Mapped[str] = mapped_column(String, primary_key=True)
+    primary_path: Mapped[str] = mapped_column(String, nullable=False)
+    all_paths: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    mtime: Mapped[float] = mapped_column(Float, nullable=False)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    exif_datetime: Mapped[str | None] = mapped_column(String, nullable=True)
+    camera_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    hash_algo: Mapped[str] = mapped_column(String, nullable=False)
+    phash: Mapped[str | None] = mapped_column(String, nullable=True)
+    phash_algo: Mapped[str | None] = mapped_column(String, nullable=True)
+    phash_updated_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    __table_args__ = (
+        Index("idx_images_primary_path", "primary_path"),
+        Index("idx_images_status", "status"),
+    )
+
+
+class ImageScene(Base):
+    """Scene classification outputs for an image."""
+
+    __tablename__ = "image_scene"
+
+    image_id: Mapped[str] = mapped_column(String, primary_key=True)
+    scene_type: Mapped[str] = mapped_column(String, nullable=False)
+    scene_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    has_text: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    has_person: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    is_screenshot: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    is_document: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    classifier_name: Mapped[str] = mapped_column(String, nullable=False)
+    classifier_version: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("idx_image_scene_scene_type", "scene_type"),
+        Index("idx_image_scene_has_text", "has_text"),
+        Index("idx_image_scene_has_person", "has_person"),
+        Index("idx_image_scene_is_screenshot", "is_screenshot"),
+        Index("idx_image_scene_is_document", "is_document"),
+    )
+
+
+class ImageEmbedding(Base):
+    """Model embeddings for an image."""
+
+    __tablename__ = "image_embedding"
+
+    image_id: Mapped[str] = mapped_column(String, primary_key=True)
+    model_name: Mapped[str] = mapped_column(String, primary_key=True)
+    embedding_path: Mapped[str] = mapped_column(String, nullable=False)
+    embedding_dim: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_backend: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (Index("idx_image_embedding_model_name", "model_name"),)
+
+
+class ImageCaption(Base):
+    """Caption text for an image and model variant."""
+
+    __tablename__ = "image_caption"
+
+    image_id: Mapped[str] = mapped_column(String, primary_key=True)
+    model_name: Mapped[str] = mapped_column(String, primary_key=True)
+    caption: Mapped[str] = mapped_column(Text, nullable=False)
+    model_backend: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (Index("idx_image_caption_model_name", "model_name"),)
+
+
+class ImageNearDuplicate(Base):
+    """Near-duplicate relationships computed from perceptual hashes."""
+
+    __tablename__ = "image_near_duplicate"
+
+    anchor_image_id: Mapped[str] = mapped_column(String, primary_key=True)
+    duplicate_image_id: Mapped[str] = mapped_column(String, primary_key=True)
+    phash_distance: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (Index("idx_image_near_duplicate_duplicate", "duplicate_image_id"),)
+
+
+_ENGINE_CACHE: Dict[Path, Engine] = {}
 
 
 def _ensure_parent_directory(path: Path) -> None:
-    """Ensure that the parent directory of a database path exists."""
+    """Ensure the parent directory for a database file exists."""
 
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,47 +129,51 @@ def _ensure_parent_directory(path: Path) -> None:
         raise
 
 
-def _apply_schema(connection: sqlite3.Connection, statements: Iterable[str]) -> None:
-    """Apply a sequence of SQL statements to a SQLite connection."""
+def _get_engine(path: Path) -> Engine:
+    """Return a cached SQLite engine for the provided path, creating schema if needed."""
 
-    cursor = connection.cursor()
-    for statement in statements:
-        cursor.execute(statement)
-    connection.commit()
-
-
-def open_primary_db(path: Path) -> sqlite3.Connection:
-    """Open the primary SQLite database and ensure the M1 schema exists.
-
-    Args:
-        path: Filesystem path to the primary database, typically under ``data/``.
-
-    Returns:
-        An open SQLite connection with the schema initialized.
-    """
-
-    _ensure_parent_directory(path)
-    connection = sqlite3.connect(str(path))
-    connection.row_factory = sqlite3.Row
-    _apply_schema(connection, PRIMARY_DB_SCHEMA_STATEMENTS)
-    return connection
+    resolved = path.resolve()
+    engine = _ENGINE_CACHE.get(resolved)
+    if engine is None:
+        _ensure_parent_directory(resolved)
+        engine = create_engine(f"sqlite:///{resolved}", future=True)
+        Base.metadata.create_all(engine)
+        _ENGINE_CACHE[resolved] = engine
+    return engine
 
 
-def open_projection_db(path: Path) -> sqlite3.Connection:
-    """Open the projection SQLite database and ensure the M1 schema exists.
+def open_primary_session(path: Path) -> Session:
+    """Open a SQLAlchemy session for the primary database."""
 
-    Args:
-        path: Filesystem path to the projection database, typically under ``cache/``.
-
-    Returns:
-        An open SQLite connection with the schema initialized.
-    """
-
-    _ensure_parent_directory(path)
-    connection = sqlite3.connect(str(path))
-    connection.row_factory = sqlite3.Row
-    _apply_schema(connection, PROJECTION_DB_SCHEMA_STATEMENTS)
-    return connection
+    engine = _get_engine(path)
+    return Session(engine, future=True)
 
 
-__all__ = ["open_primary_db", "open_projection_db"]
+def open_projection_session(path: Path) -> Session:
+    """Open a SQLAlchemy session for the projection database."""
+
+    engine = _get_engine(path)
+    return Session(engine, future=True)
+
+
+def reset_projection_tables(session: Session) -> None:
+    """Remove projection tables for a clean rebuild when re-running the pipeline."""
+
+    session.execute(delete(ImageScene))
+    session.execute(delete(ImageEmbedding))
+    session.execute(delete(ImageCaption))
+    session.execute(delete(ImageNearDuplicate))
+    session.commit()
+
+
+__all__ = [
+    "Base",
+    "Image",
+    "ImageCaption",
+    "ImageEmbedding",
+    "ImageNearDuplicate",
+    "ImageScene",
+    "open_primary_session",
+    "open_projection_session",
+    "reset_projection_tables",
+]
