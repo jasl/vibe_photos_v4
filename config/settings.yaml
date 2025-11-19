@@ -23,9 +23,74 @@ models:
     device: "auto"
     max_regions_per_image: 10
     score_threshold: 0.25
+    # SigLIP-based region re-ranking thresholds for per-region labels.
+    # ``siglip_min_prob`` is the minimum probability required for the
+    # top-1 label within its semantic group. ``siglip_min_margin`` is
+    # the required gap between the best and second-best label within
+    # that group. Regions that do not meet both thresholds keep only
+    # the original detector label (no refined label is written).
+    siglip_min_prob: 0.15
+    siglip_min_margin: 0.05
 
   ocr:
     enabled: false           # M1 MUST work with OCR disabled
+
+  # Shared SigLIP label dictionaries for region re-ranking, diagnostics,
+  # and prototype detectors. Keeping these in configuration avoids
+  # duplicating label lists across modules.
+  siglip_labels:
+    # Coarse semantic groups for SigLIP labels. Used as the single
+    # source of truth for:
+    #   - region re-ranking candidate labels,
+    #   - mapping detector labels to semantic groups,
+    #   - and SimpleDetector label prompts.
+    # Downstream code flattens this mapping to build candidate label
+    # lists and human-friendly category prompts.
+    label_groups:
+      food:
+        - "food"
+        - "tapas"
+        - "pizza"
+        - "burger"
+        - "sushi"
+        - "noodles"
+        - "dessert"
+        - "cake"
+      electronics:
+        - "phone"
+        - "smartphone"
+        - "iPhone"
+        - "Android phone"
+        - "computer"
+        - "laptop"
+        - "MacBook"
+        - "tablet"
+        - "iPad"
+        - "headphones"
+        - "AirPods"
+        - "camera"
+      document:
+        - "document"
+        - "book"
+        - "notes"
+      person:
+        - "person"
+        - "people"
+      scene:
+        - "landscape"
+        - "architecture"
+        - "building"
+      animal:
+        - "animal"
+        - "pet"
+      specific_products:
+        - "iPhone"
+        - "MacBook"
+        - "iPad"
+        - "AirPods"
+        - "Samsung Galaxy"
+        - "ThinkPad"
+        - "Surface"
 
 pipeline:
   # Whether to run detection step in M1.

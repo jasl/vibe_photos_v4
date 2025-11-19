@@ -15,7 +15,7 @@ from torch import Tensor
 from utils.logging import get_logger
 from vibe_photos.cache_manifest import CACHE_FORMAT_VERSION, write_cache_manifest
 from vibe_photos.classifier import SceneClassifierWithAttributes, build_scene_classifier
-from vibe_photos.config import Settings, load_settings
+from vibe_photos.config import Settings, _normalize_siglip_label, load_settings
 from vibe_photos.db import (
     Image,
     ImageCaption,
@@ -148,6 +148,28 @@ def _extract_exif_and_gps(image, datetime_format: str = "raw") -> tuple[Optional
         "longitude_ref": lon_ref,
     }
     return exif_datetime, camera_model, gps_payload
+
+
+def _siglip_label_group(
+    label: str,
+    label_groups: Dict[str, Sequence[str]] | None = None,
+    canonical_map: Dict[str, str] | None = None,
+) -> Optional[str]:
+    """Return a coarse semantic group name for a SigLIP label."""
+
+    if canonical_map is not None:
+        normalized = _normalize_siglip_label(label)
+        return canonical_map.get(normalized)
+
+    if not label_groups:
+        return None
+
+    normalized = _normalize_siglip_label(label)
+    for group_name, members in label_groups.items():
+        for member in members:
+            if normalized == _normalize_siglip_label(member):
+                return group_name
+    return None
 
 
 def load_run_journal(cache_root: Path) -> Optional[RunJournalRecord]:
@@ -537,38 +559,15 @@ class PreprocessingPipeline:
 
         siglip_processor, siglip_model, siglip_device = get_siglip_embedding_model(settings=self._settings)
 
-        # Candidate labels for SigLIP re-ranking (can be aligned with label dictionary in future milestones).
-        candidate_labels = [
-            "phone",
-            "smartphone",
-            "iPhone",
-            "Android phone",
-            "computer",
-            "laptop",
-            "MacBook",
-            "tablet",
-            "iPad",
-            "headphones",
-            "AirPods",
-            "camera",
-            "food",
-            "pizza",
-            "burger",
-            "sushi",
-            "noodles",
-            "dessert",
-            "cake",
-            "document",
-            "book",
-            "notes",
-            "person",
-            "people",
-            "landscape",
-            "architecture",
-            "building",
-            "animal",
-            "pet",
-        ]
+        siglip_labels_cfg = self._settings.models.siglip_labels
+        candidate_labels = list(siglip_labels_cfg.candidate_labels)
+        label_groups = siglip_labels_cfg.label_groups
+        canonical_group_map: Dict[str, str] = {}
+        for group_name, members in label_groups.items():
+            for member in members:
+                key = _normalize_siglip_label(member)
+                if key and key not in canonical_group_map:
+                    canonical_group_map[key] = group_name
 
         import numpy as np
         from PIL import Image as _Image
@@ -597,6 +596,13 @@ class PreprocessingPipeline:
         with torch.no_grad():
             text_emb = siglip_model.get_text_features(**text_inputs)
         text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
+
+        candidate_label_groups = [
+            _siglip_label_group(label, canonical_map=canonical_group_map) for label in candidate_labels
+        ]
+        num_candidate_labels = len(candidate_labels)
+        base_min_prob = max(0.0, float(detection_cfg.siglip_min_prob))
+        min_margin = max(0.0, float(detection_cfg.siglip_min_margin))
 
         updated_rows = 0
         now = time.time()
@@ -662,11 +668,41 @@ class PreprocessingPipeline:
 
                 for idx, region_index in enumerate(region_indices):
                     row = probs_cpu[idx]
-                    best_pos = int(row.argmax())
+
+                    det_label = detections[region_index].label
+                    det_group = _siglip_label_group(det_label, canonical_map=canonical_group_map)
+
+                    if det_group is None:
+                        # When the detector label cannot be mapped to a semantic group,
+                        # skip SigLIP refinement to avoid cross-group overrides.
+                        continue
+
+                    group_indices = [
+                        label_index
+                        for label_index, group_name in enumerate(candidate_label_groups)
+                        if group_name == det_group
+                    ]
+
+                    if not group_indices:
+                        # No candidate labels in the same group; keep detector-only result.
+                        continue
+
+                    scores = [(label_index, float(row[label_index])) for label_index in group_indices]
+                    scores.sort(key=lambda item: item[1], reverse=True)
+
+                    best_pos, best_prob = scores[0]
+                    second_prob = scores[1][1] if len(scores) > 1 else 0.0
+
+                    group_size = len(group_indices)
+                    uniform_prob = 1.0 / float(group_size) if group_size > 0 else 0.0
+                    min_prob = max(base_min_prob, uniform_prob + 0.05)
+
+                    if best_prob < min_prob or (best_prob - second_prob) < min_margin:
+                        continue
+
                     best_label = candidate_labels[best_pos]
-                    best_score = float(row[best_pos])
                     refined_labels[region_index] = best_label
-                    refined_scores[region_index] = best_score
+                    refined_scores[region_index] = best_prob
 
             # Persist regions to SQLite and cache JSON.
             region_payloads = []

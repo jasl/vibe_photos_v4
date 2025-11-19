@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
+import inflect
 import yaml
 
 from vibe_photos.ml.model_presets import (
@@ -86,6 +87,151 @@ class DetectionModelConfig:
     device: str = "auto"
     max_regions_per_image: int = 10
     score_threshold: float = 0.25
+    siglip_min_prob: float = 0.15
+    siglip_min_margin: float = 0.05
+
+
+_INFLECT_ENGINE: Any | None = None
+
+
+def _get_inflect_engine() -> Any:
+    global _INFLECT_ENGINE
+    if _INFLECT_ENGINE is None:
+        _INFLECT_ENGINE = inflect.engine()
+    return _INFLECT_ENGINE
+
+
+def _normalize_siglip_label(label: str) -> str:
+    """Normalize a label for grouping by case and plurality."""
+
+    text = str(label).strip().lower()
+    if not text:
+        return text
+
+    engine = _get_inflect_engine()
+    singular = engine.singular_noun(text)
+    if singular:
+        text = singular
+
+    return text
+
+
+@dataclass
+class SiglipLabelConfig:
+    """Configuration for SigLIP label and category prompts."""
+
+    label_groups: Dict[str, List[str]] = field(
+        default_factory=lambda: {
+            "food": [
+                "food",
+                "tapas",
+                "pizza",
+                "burger",
+                "sushi",
+                "noodles",
+                "dessert",
+                "cake",
+            ],
+            "electronics": [
+                "phone",
+                "smartphone",
+                "iPhone",
+                "Android phone",
+                "computer",
+                "laptop",
+                "MacBook",
+                "tablet",
+                "iPad",
+                "headphones",
+                "AirPods",
+                "camera",
+            ],
+            "document": [
+                "document",
+                "book",
+                "notes",
+            ],
+            "person": [
+                "person",
+                "people",
+            ],
+            "scene": [
+                "landscape",
+                "architecture",
+                "building",
+            ],
+            "animal": [
+                "animal",
+                "pet",
+            ],
+            "specific_products": [
+                "iPhone",
+                "MacBook",
+                "iPad",
+                "AirPods",
+                "Samsung Galaxy",
+                "ThinkPad",
+                "Surface",
+            ],
+        }
+    )
+
+    @property
+    def candidate_labels(self) -> List[str]:
+        """Flatten label groups into a unique list of candidate labels."""
+
+        labels: List[str] = []
+        seen: set[str] = set()
+
+        for group_labels in self.label_groups.values():
+            for label in group_labels:
+                text = str(label).strip()
+                if not text:
+                    continue
+                if text in seen:
+                    continue
+                seen.add(text)
+                labels.append(text)
+
+        return labels
+
+    @property
+    def simple_detector_categories(self) -> Dict[str, List[str]]:
+        """Derive SimpleDetector label sets from label groups.
+
+        - ``general``: pluralized, human-friendly group names + ``Other``.
+        - per-group sets: title-cased labels for each group key.
+        """
+
+        categories: Dict[str, List[str]] = {}
+        general: List[str] = []
+
+        for raw_group_name, group_labels in self.label_groups.items():
+            key = str(raw_group_name)
+            base_name = key.replace("_", " ")
+            general.append(base_name.title())
+
+            fine_labels: List[str] = []
+            for label in group_labels:
+                fine_labels.append(self._format_label_for_display(str(label)))
+            categories[key] = fine_labels
+
+        general.append("Other")
+        categories["general"] = general
+
+        return categories
+
+    @staticmethod
+    def _format_label_for_display(label: str) -> str:
+        text = label.strip()
+        if not text:
+            return text
+
+        # Preserve labels that already contain uppercase characters (likely brand names).
+        if any(ch.isupper() for ch in text):
+            return text
+
+        return text.title()
 
 
 @dataclass
@@ -103,6 +249,7 @@ class ModelsConfig:
     caption: CaptionModelConfig = field(default_factory=CaptionModelConfig)
     detection: DetectionModelConfig = field(default_factory=DetectionModelConfig)
     ocr: OcrConfig = field(default_factory=OcrConfig)
+    siglip_labels: SiglipLabelConfig = field(default_factory=SiglipLabelConfig)
 
 
 @dataclass
@@ -155,6 +302,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     caption_raw = _as_dict(models_raw.get("caption"))
     detection_raw = _as_dict(models_raw.get("detection"))
     ocr_raw = _as_dict(models_raw.get("ocr"))
+    siglip_labels_raw = _as_dict(models_raw.get("siglip_labels"))
 
     embedding_cfg = settings.models.embedding
     if isinstance(embedding_raw.get("backend"), str):
@@ -193,10 +341,24 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         detection_cfg.max_regions_per_image = detection_raw["max_regions_per_image"]
     if isinstance(detection_raw.get("score_threshold"), (int, float)):
         detection_cfg.score_threshold = float(detection_raw["score_threshold"])
+    if isinstance(detection_raw.get("siglip_min_prob"), (int, float)):
+        detection_cfg.siglip_min_prob = float(detection_raw["siglip_min_prob"])
+    if isinstance(detection_raw.get("siglip_min_margin"), (int, float)):
+        detection_cfg.siglip_min_margin = float(detection_raw["siglip_min_margin"])
 
     ocr_cfg = settings.models.ocr
     if isinstance(ocr_raw.get("enabled"), bool):
         ocr_cfg.enabled = ocr_raw["enabled"]
+
+    siglip_labels_cfg = settings.models.siglip_labels
+    label_groups_raw = _as_dict(siglip_labels_raw.get("label_groups"))
+    if label_groups_raw:
+        parsed_label_groups: Dict[str, List[str]] = {}
+        for group_name, labels in label_groups_raw.items():
+            if isinstance(labels, list):
+                parsed_label_groups[str(group_name)] = [str(label) for label in labels]
+        if parsed_label_groups:
+            siglip_labels_cfg.label_groups = parsed_label_groups
 
     pipeline_raw = _as_dict(raw.get("pipeline"))
     pipeline_cfg = settings.pipeline
@@ -234,6 +396,7 @@ __all__ = [
     "EmbeddingModelConfig",
     "CaptionModelConfig",
     "DetectionModelConfig",
+    "SiglipLabelConfig",
     "OcrConfig",
     "ModelsConfig",
     "PipelineConfig",

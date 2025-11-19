@@ -29,7 +29,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 
 #### M1 — Extras beyond the original plan
 
-- OWL-ViT region detection with SigLIP-based label re-ranking is fully wired into the pipeline, with results stored in the `image_region` table and JSON caches under `cache/regions/`.
+- OWL-ViT region detection with SigLIP-based label re-ranking is fully wired into the pipeline, with results stored in the `image_region` table and JSON caches under `cache/regions/`. SigLIP re-ranking now applies confidence and margin thresholds and only refines labels within the same semantic group as the original detector label; if a detector label cannot be grouped confidently, the region keeps only the detector output (no cross-category overrides such as random `AirPods` on food regions).
 - A standalone SigLIP+BLIP helper (`SiglipBlipDetector` in `src/vibe_photos/ml/siglip_blip.py`) is available for ad-hoc zero-shot classification + captioning outside the main pipeline.
 - The Flask debug UI exposes additional filters such as duplicate-hiding, near-duplicate facets, and region-label filtering on top of the planned scene/attribute filters.
 

@@ -76,6 +76,7 @@ def demo() -> None:
             "sushi",
             "noodles",
             "dessert",
+            "tapas",
             "cake",
             "document",
             "book",

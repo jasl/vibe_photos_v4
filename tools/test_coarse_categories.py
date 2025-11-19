@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 from PIL import Image
 import torch
@@ -13,39 +13,6 @@ from transformers import AutoModel, AutoProcessor
 
 from vibe_photos.config import load_settings
 from vibe_photos.ml import DEFAULT_COARSE_CATEGORIES, build_siglip_coarse_classifier
-
-
-RAW_SIGLIP_LABELS: List[str] = [
-    "phone",
-    "smartphone",
-    "iPhone",
-    "Android phone",
-    "computer",
-    "laptop",
-    "MacBook",
-    "tablet",
-    "iPad",
-    "headphones",
-    "AirPods",
-    "camera",
-    "food",
-    "pizza",
-    "burger",
-    "sushi",
-    "noodles",
-    "dessert",
-    "cake",
-    "document",
-    "book",
-    "notes",
-    "person",
-    "people",
-    "landscape",
-    "architecture",
-    "building",
-    "animal",
-    "pet",
-]
 
 
 def iter_image_paths(root: Path) -> Iterable[Path]:
@@ -101,6 +68,7 @@ def classify_images(
     model_name: str,
     threshold: float,
     score_min: float,
+    raw_labels: Sequence[str] | None,
 ) -> None:
     """Run coarse category classification on a sequence of images and print results."""
 
@@ -128,9 +96,10 @@ def classify_images(
     )
 
     raw_label_embeddings: torch.Tensor | None = None
-    if RAW_SIGLIP_LABELS:
+    labels_for_raw: Sequence[str] = tuple(raw_labels) if raw_labels is not None else ()
+    if labels_for_raw:
         print("[setup] Encoding raw SigLIP label prompts for reference...")
-        text_inputs = processor(text=RAW_SIGLIP_LABELS, padding=True, return_tensors="pt").to(device)
+        text_inputs = processor(text=list(labels_for_raw), padding=True, return_tensors="pt").to(device)
         with torch.no_grad():
             raw_label_embeddings = model.get_text_features(**text_inputs)
         raw_label_embeddings = raw_label_embeddings / raw_label_embeddings.norm(dim=-1, keepdim=True)
@@ -158,7 +127,7 @@ def classify_images(
             emb = emb / emb.norm()
             sims = emb @ raw_label_embeddings.T  # shape: (num_labels,)
             raw_scores: Dict[str, float] = {
-                label: float(score) for label, score in zip(RAW_SIGLIP_LABELS, sims.tolist())
+                label: float(score) for label, score in zip(labels_for_raw, sims.tolist())
             }
             top_raw = sorted(raw_scores.items(), key=lambda pair: pair[1], reverse=True)[:5]
             print("  raw SigLIP top-5:")
@@ -174,10 +143,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     images_dir: Path = args.images_dir
 
+    settings = load_settings()
+
     if args.model_name is not None:
         model_name = args.model_name
     else:
-        settings = load_settings()
         model_name = settings.models.embedding.resolved_model_name()
 
     if not images_dir.exists() or not images_dir.is_dir():
@@ -185,11 +155,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     image_paths = list(iter_image_paths(images_dir))
+    raw_labels: List[str] = list(settings.models.siglip_labels.candidate_labels)
     classify_images(
         image_paths=image_paths,
         model_name=model_name,
         threshold=args.threshold,
         score_min=args.score_min,
+        raw_labels=raw_labels,
     )
     return 0
 

@@ -9,6 +9,8 @@ import torch
 from PIL import Image
 from transformers import AutoModel, AutoProcessor
 
+from vibe_photos.config import load_settings
+
 
 @dataclass
 class DetectionResult:
@@ -28,47 +30,8 @@ class SimpleDetector:
         self.model = AutoModel.from_pretrained(model_name)
         self.processor = AutoProcessor.from_pretrained(model_name)
 
-        self.categories: Dict[str, List[str]] = {
-            "general": [
-                "Electronics",
-                "Food",
-                "Documents",
-                "Landscape",
-                "People",
-                "Animals",
-                "Architecture",
-                "Other",
-            ],
-            "electronics": [
-                "Smartphone",
-                "Laptop",
-                "Tablet",
-                "Camera",
-                "Headphones",
-                "Watch",
-                "Monitor",
-                "Keyboard",
-            ],
-            "food": [
-                "Pizza",
-                "Burger",
-                "Noodles",
-                "Rice",
-                "Dessert",
-                "Fruit",
-                "Beverage",
-                "Vegetables",
-            ],
-            "specific_products": [
-                "iPhone",
-                "MacBook",
-                "iPad",
-                "AirPods",
-                "Samsung Galaxy",
-                "ThinkPad",
-                "Surface",
-            ],
-        }
+        settings = load_settings()
+        self.categories = dict(settings.models.siglip_labels.simple_detector_categories)
 
     def detect(self, image_path: Path, category_set: str = "general", threshold: float = 0.3) -> DetectionResult:
         """Run zero-shot classification over a predefined label set."""
