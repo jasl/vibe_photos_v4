@@ -13,7 +13,13 @@ from utils.logging import get_logger
 from vibe_photos.classifier import SceneClassifierWithAttributes, build_scene_classifier
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import open_primary_db, open_projection_db
-from vibe_photos.hasher import CONTENT_HASH_ALGO, PHASH_ALGO, compute_content_hash, compute_perceptual_hash, hamming_distance_phash
+from vibe_photos.hasher import (
+    CONTENT_HASH_ALGO,
+    PHASH_ALGO,
+    compute_content_hash,
+    compute_perceptual_hash,
+    hamming_distance_phash,
+)
 from vibe_photos.ml.models import get_blip_caption_model, get_siglip_embedding_model
 from vibe_photos.scanner import FileInfo, scan_roots
 
@@ -644,6 +650,7 @@ class PreprocessingPipeline:
                 total_embeddings += 1
 
             # Update run journal after each embedding batch.
+            primary_conn.commit()
             if batch_ids:
                 save_run_journal(
                     cache_root,
@@ -724,6 +731,14 @@ class PreprocessingPipeline:
                     ),
                 )
                 total_captions += 1
+
+            primary_conn.commit()
+
+            if batch_ids:
+                save_run_journal(
+                    cache_root,
+                    RunJournalRecord(stage="embeddings_and_captions", cursor_image_id=batch_ids[-1], updated_at=time.time()),
+                )
 
         primary_conn.commit()
         self._logger.info(
