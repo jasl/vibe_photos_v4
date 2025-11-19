@@ -518,8 +518,12 @@ class PreprocessingPipeline:
             extra={"created": created, "skipped_existing": skipped, "thumbnails_dir": str(thumbnails_dir)},
         )
 
-    def _run_region_detection_and_reranking(self, primary_session) -> None:
-        """Run optional object-level detection and prepare region metadata."""
+    def _run_region_detection_and_reranking(self, primary_session, target_image_ids: Optional[Sequence[str]] = None) -> None:
+        """Run optional object-level detection and prepare region metadata.
+
+        When ``target_image_ids`` is provided, restrict processing to that subset of
+        active images; otherwise, process all active images as in the full pipeline.
+        """
 
         if self._cache_root is None:
             raise RuntimeError("cache_root is not initialized")
@@ -584,6 +588,10 @@ class PreprocessingPipeline:
             select(Image.image_id, Image.primary_path).where(Image.status == "active").order_by(Image.image_id)
         )
         paths_by_id: Dict[str, str] = {row.image_id: row.primary_path for row in active_rows}
+
+        if target_image_ids is not None:
+            allowed_ids = {str(image_id) for image_id in target_image_ids}
+            paths_by_id = {image_id: path for image_id, path in paths_by_id.items() if image_id in allowed_ids}
 
         caption_cfg = self._settings.models.caption
         caption_model_name = caption_cfg.resolved_model_name()
@@ -1408,6 +1416,17 @@ class PreprocessingPipeline:
         )
         primary_session.execute(stmt)
         primary_session.commit()
+
+    def process_region_detection_task(self, primary_session, image_id: str) -> None:
+        """Run region detection for a single image via the detection pipeline."""
+
+        if not self._settings.pipeline.run_detection or not self._settings.models.detection.enabled:
+            return
+
+        if self._cache_root is None:
+            raise RuntimeError("cache_root is not initialized")
+
+        self._run_region_detection_and_reranking(primary_session, target_image_ids=[image_id])
 
     def _run_perceptual_hashing_and_duplicates(self, primary_session, _projection_session) -> None:
         """Compute perceptual hashes and rebuild near-duplicate groups."""

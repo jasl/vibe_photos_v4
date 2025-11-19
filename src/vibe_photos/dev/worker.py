@@ -163,6 +163,8 @@ def main(
                             pipeline.process_embedding_task(session, image_id)
                         elif ttype == "caption":
                             pipeline.process_caption_task(session, image_id)
+                        elif ttype == "detection":
+                            pipeline.process_region_detection_task(session, image_id)
                         else:
                             LOGGER.info(
                                 "worker_skip_task_type",
@@ -208,4 +210,3 @@ if __name__ == "__main__":
 
 
 __all__ = ["main"]
-
