@@ -23,7 +23,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - [x] Integrate SigLIP embeddings and BLIP captions; cache results. (Implemented in `_run_embeddings_and_captions` with NPY/JSON caches under `cache/` and projections in SQLite.)
 - [x] (Optional) Integrate Grounding DINO / OWL-ViT detection and SigLIP re-ranking. (OWL-ViT + SigLIP region re-ranking and JSON caches are implemented; enabled via `models.detection.enabled` and `pipeline.run_detection` settings.)
 - [ ] Implement a resumable, concurrent preprocessing pipeline (queue + workers). (A resumable single-process pipeline with run journal is implemented; queue-based concurrency and worker fan-out are deferred.)
-- [ ] Define a stable, versioned on-disk format for preprocessing caches under `cache/` that is decoupled from the database schema. (Embeddings, captions, detections, and regions are cached under `cache/`, but cache versioning and projection DB rebuild flows are still minimal.)
+- [x] Define a stable, versioned on-disk format for preprocessing caches under `cache/` that is decoupled from the database schema. (A cache manifest (`cache/manifest.json`) and per-image JSON sidecars now version embeddings, captions, detections, and regions; `vibe_photos.dev.rebuild_cache` rebuilds projection tables from cache when needed.)
 - [x] Build a simple Flask-based debug UI to list canonical photos and show per-photo preprocessing details and similar images. (Implemented in `src/vibe_photos/webui/__init__.py` with templates under `src/vibe_photos/webui/templates`.)
 - [x] Standardize database access on SQLAlchemy ORM/Core models and prohibit new raw SQL usage in pipeline and web UI.
 

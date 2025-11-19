@@ -146,6 +146,34 @@ class ImageRegion(Base):
     )
 
 
+class PreprocessTask(Base):
+    """Queue of preprocessing tasks for concurrent workers.
+
+    This lightweight table lives in SQLite alongside the primary or projection
+    database and is safe to rebuild if needed. Tasks are idempotent: workers
+    may safely retry failed tasks without affecting correctness.
+    """
+
+    __tablename__ = "preprocess_task"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    image_id: Mapped[str] = mapped_column(String, nullable=False)
+    task_type: Mapped[str] = mapped_column(String, nullable=False)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    started_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+    completed_at: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    __table_args__ = (
+        Index("idx_preprocess_task_status_priority", "status", "priority"),
+        Index("idx_preprocess_task_image_type", "image_id", "task_type"),
+    )
+
+
 _ENGINE_CACHE: Dict[Path, Engine] = {}
 
 
@@ -205,6 +233,7 @@ __all__ = [
     "ImageNearDuplicate",
     "ImageRegion",
     "ImageScene",
+    "PreprocessTask",
     "open_primary_session",
     "open_projection_session",
     "reset_projection_tables",

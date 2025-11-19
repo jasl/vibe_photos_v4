@@ -13,6 +13,7 @@ from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from torch import Tensor
 from utils.logging import get_logger
+from vibe_photos.cache_manifest import CACHE_FORMAT_VERSION, write_cache_manifest
 from vibe_photos.classifier import SceneClassifierWithAttributes, build_scene_classifier
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import Image, ImageCaption, ImageEmbedding, ImageNearDuplicate, ImageRegion, ImageScene, open_primary_session, open_projection_session
@@ -211,6 +212,9 @@ class PreprocessingPipeline:
 
         cache_root = projection_db_path.parent
         self._cache_root = cache_root
+        # Ensure cache manifest exists and reflects current settings; this also
+        # provides a single place to bump cache format versions in future.
+        write_cache_manifest(cache_root, self._settings)
         self._logger.info(
             "pipeline_start",
             extra={
@@ -963,6 +967,17 @@ class PreprocessingPipeline:
                 emb_path = embeddings_dir / rel_path
                 np.save(emb_path, vec)
 
+                meta_payload = {
+                    "image_id": image_id,
+                    "model_name": embedding_model_name,
+                    "model_backend": embedding_cfg.backend,
+                    "embedding_dim": int(vec.shape[-1]),
+                    "updated_at": now,
+                    "cache_format_version": CACHE_FORMAT_VERSION,
+                }
+                meta_path = embeddings_dir / f"{image_id}.json"
+                meta_path.write_text(json.dumps(meta_payload), encoding="utf-8")
+
                 stmt = sqlite_insert(ImageEmbedding).values(
                     image_id=image_id,
                     model_name=embedding_model_name,
@@ -1035,6 +1050,7 @@ class PreprocessingPipeline:
                     "model_name": caption_model_name,
                     "model_backend": caption_cfg.backend,
                     "updated_at": now,
+                    "cache_format_version": CACHE_FORMAT_VERSION,
                 }
                 caption_path.write_text(json.dumps(payload), encoding="utf-8")
 
