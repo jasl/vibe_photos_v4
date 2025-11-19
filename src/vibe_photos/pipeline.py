@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence
 
 from sqlalchemy import and_, delete, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -229,6 +229,22 @@ class PreprocessingPipeline:
         self._cache_root: Optional[Path] = None
         self._journal: Optional[RunJournalRecord] = None
 
+    def _stage_start_index(self, stage_names: Sequence[str]) -> int:
+        """Return the first stage index to execute based on the run journal."""
+
+        if self._journal is None:
+            return 0
+
+        try:
+            current_idx = stage_names.index(self._journal.stage)
+        except ValueError:
+            return 0
+
+        if self._journal.cursor_image_id is None:
+            return min(current_idx + 1, len(stage_names))
+
+        return current_idx
+
     def run(self, roots: Sequence[Path], primary_db_path: Path, projection_db_path: Path) -> None:
         """Run the preprocessing pipeline for the given album roots.
 
@@ -265,20 +281,62 @@ class PreprocessingPipeline:
             )
 
         with open_primary_session(primary_db_path) as primary_session, open_projection_session(projection_db_path) as projection_session:
-            self._run_scan_and_hash(roots, primary_session)
-            save_run_journal(cache_root, RunJournalRecord(stage="scan_and_hash", cursor_image_id=None, updated_at=time.time()))
-
-            self._run_perceptual_hashing_and_duplicates(primary_session, projection_session)
-            save_run_journal(cache_root, RunJournalRecord(stage="phash_and_duplicates", cursor_image_id=None, updated_at=time.time()))
-
-            self._run_thumbnails(primary_session)
-            save_run_journal(cache_root, RunJournalRecord(stage="thumbnails", cursor_image_id=None, updated_at=time.time()))
-
-            self._run_embeddings_and_captions(primary_session, projection_session)
-            self._run_scene_classification(primary_session, projection_session)
+            stage_plan: List[tuple[str, Callable[[], None], bool]] = [
+                (
+                    "scan_and_hash",
+                    lambda: self._run_scan_and_hash(roots, primary_session),
+                    True,
+                ),
+                (
+                    "phash_and_duplicates",
+                    lambda: self._run_perceptual_hashing_and_duplicates(primary_session, projection_session),
+                    True,
+                ),
+                ("thumbnails", lambda: self._run_thumbnails(primary_session), True),
+                (
+                    "embeddings_and_captions",
+                    lambda: self._run_embeddings_and_captions(primary_session, projection_session),
+                    False,
+                ),
+                ("scene_classification", lambda: self._run_scene_classification(primary_session, projection_session), False),
+            ]
 
             if self._settings.pipeline.run_detection and self._settings.models.detection.enabled:
-                self._run_region_detection_and_reranking(primary_session)
+                stage_plan.append(
+                    (
+                        "region_detection",
+                        lambda: self._run_region_detection_and_reranking(primary_session),
+                        False,
+                    )
+                )
+
+            stage_names = [name for name, _, _ in stage_plan]
+            start_index = self._stage_start_index(stage_names)
+            if start_index > 0:
+                resume_stage = stage_names[start_index] if start_index < len(stage_names) else None
+                self._logger.info(
+                    "pipeline_resume_plan",
+                    extra={"skipped_stages": stage_names[:start_index], "resume_stage": resume_stage},
+                )
+
+            for idx, (stage_name, stage_callable, record_completion) in enumerate(stage_plan):
+                if idx < start_index:
+                    self._logger.info("pipeline_stage_skipped", extra={"stage": stage_name})
+                    continue
+
+                if self._journal is not None and self._journal.stage == stage_name and self._journal.cursor_image_id:
+                    self._logger.info(
+                        "pipeline_stage_resume_cursor",
+                        extra={"stage": stage_name, "cursor_image_id": self._journal.cursor_image_id},
+                    )
+
+                stage_callable()
+
+                if record_completion:
+                    save_run_journal(
+                        cache_root,
+                        RunJournalRecord(stage=stage_name, cursor_image_id=None, updated_at=time.time()),
+                    )
 
         # Best-effort: remove run journal after a successful full run to avoid
         # stale cursors influencing future runs.
@@ -921,7 +979,12 @@ class PreprocessingPipeline:
 
         if self._journal is not None and self._journal.stage == "scene_classification" and self._journal.cursor_image_id:
             cursor_id = self._journal.cursor_image_id
+            before = len(target_ids)
             target_ids = [image_id for image_id in target_ids if image_id > cursor_id]
+            self._logger.info(
+                "scene_classification_resume_from_cursor",
+                extra={"cursor_image_id": cursor_id, "skipped": before - len(target_ids)},
+            )
 
         if not target_ids:
             self._logger.info("scene_classification_noop", extra={})
@@ -1061,7 +1124,12 @@ class PreprocessingPipeline:
 
         if self._journal is not None and self._journal.stage == "embeddings_and_captions" and self._journal.cursor_image_id:
             cursor_id = self._journal.cursor_image_id
+            before = len(process_ids)
             process_ids = [image_id for image_id in process_ids if image_id > cursor_id]
+            self._logger.info(
+                "embeddings_resume_from_cursor",
+                extra={"cursor_image_id": cursor_id, "skipped": before - len(process_ids)},
+            )
 
         existing_embedding_ids = {
             row.image_id

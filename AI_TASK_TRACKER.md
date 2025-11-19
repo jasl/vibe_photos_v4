@@ -38,7 +38,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 
 - Full image normalization and storage under `cache/images/processed/` is not yet implemented; only thumbnails are generated in the preprocessing pipeline today.
 - EXIF and GPS metadata are parsed during preprocessing and surfaced in the debug UI, but the on-disk metadata format is minimal and may evolve as later milestones add richer EXIF/sidecar handling.
-- The preprocessing pipeline is resumable via a JSON run journal in `cache/run_journal.json`, but it still runs as a single-process loop; queue + worker orchestration is a planned upgrade.
+- The preprocessing pipeline is resumable via a JSON run journal in `cache/run_journal.json`; it now skips completed stages and resumes batch cursors but still runs as a single-process loop. Queue + worker orchestration is a planned upgrade.
 - The projection database (`cache/index.db`) is created but not yet used for read models; projection-table maintenance remains a placeholder for later milestones.
  - Caption-aware primary-region fallback in the detection stage assumes that BLIP captions have already been computed and written to `image_caption` for any image that runs detection. Future incremental “detection-only” entry points must either preserve this ordering (captions first) or gracefully disable/adjust caption-based fallbacks to avoid surprising gaps in primary regions.
 
