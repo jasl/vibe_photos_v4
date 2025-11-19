@@ -83,7 +83,7 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
 - Fingerprints & deduplication:
   - Compute:
     - Content hash using a 64-bit xxHash (`xxhash64-v1`) over the raw file bytes, stored as a 16-character hexadecimal `image_id`.
-    - Perceptual hash (`phash64-v1`) using a fixed 64-bit DCT-based pHash (32×32 grayscale → 8×8 low-frequency block → median threshold) for near-duplicate detection, following `blueprints/m1/m1_development_plan.md`.
+    - Perceptual hash (`phash64-v2`) using a fixed 64-bit DCT-based pHash (32×32 grayscale → 8×8 low-frequency block → median threshold) for near-duplicate detection, following `blueprints/m1/m1_development_plan.md`.
   - Identify near-duplicate groups:
     - Treat two active images as near-duplicates when the Hamming distance between their 64-bit `phash` values is less than or equal to 5.
     - Record near-duplicate relationships in `image_near_duplicate` (for SQLite) or the equivalent table in PostgreSQL/pgvector, designating an anchor/canonical image and linking duplicates to it.
@@ -142,7 +142,7 @@ To start M1 development, build on the existing groundwork in the following order
    - Create a dedicated preprocessing module under `src/vibe_photos/ml/` or `src/vibe_photos/core/` that:
      - Walks configured photo roots.
      - Normalizes images and writes thumbnails into `cache/`.
-     - Computes content hashes and perceptual hashes following the M1 blueprint (`xxhash64-v1` over file bytes for `image_id`, `phash64-v1` for perceptual hash) and stores them in the `images` table in the primary SQLite database (`data/index.db`).
+     - Computes content hashes and perceptual hashes following the M1 blueprint (`xxhash64-v1` over file bytes for `image_id`, `phash64-v2` for perceptual hash) and stores them in the `images` table in the primary SQLite database (`data/index.db`).
    - Integrate SigLIP and BLIP via `get_siglip_embedding_model()` and `get_blip_caption_model()` (`src/vibe_photos/ml/models.py`):
      - Batch images using the configured batch sizes.
      - Persist embeddings and captions both to caches (`cache/`) and to the SQLite schema.
@@ -176,7 +176,7 @@ Implement Phase Final — M1 (Preprocessing & Feature Extraction) for a local‑
 
 M1 must:
 
-1. Scan local photo folders and register photos (path, content hash, perceptual hash, timestamps, EXIF, etc.) following the M1 blueprint (`xxhash64-v1` for `image_id`, `phash64-v1` for `phash`).
+1. Scan local photo folders and register photos (path, content hash, perceptual hash, timestamps, EXIF, etc.) following the M1 blueprint (`xxhash64-v1` for `image_id`, `phash64-v2` for `phash`).
 2. Generate normalized images and thumbnails.
 3. Compute:
    - SigLIP image embeddings (for vector search and coarse categories).
@@ -297,7 +297,7 @@ Priority steps:
    - Implement a preprocessing module that:
      - Walks configured photo roots.
      - Normalizes images and writes thumbnails under `cache/`.
-     - Computes content hashes and perceptual hashes using `xxhash64-v1` and `phash64-v1` as specified in `blueprints/m1/m1_development_plan.md`, and writes them to caches and the appropriate SQLite databases.
+     - Computes content hashes and perceptual hashes using `xxhash64-v1` and `phash64-v2` as specified in `blueprints/m1/m1_development_plan.md`, and writes them to caches and the appropriate SQLite databases.
 4. Embeddings and coarse categories
    - Use SigLIP to compute embeddings in batches and classify coarse categories via `build_siglip_coarse_classifier()`.
 5. Captions

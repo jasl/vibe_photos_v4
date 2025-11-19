@@ -113,7 +113,7 @@ Vibe Photos should act as a **local, privacy‑preserving photo search engine** 
 3. **Dedupe and quality control**
    - Detect and mark:
      - Exact duplicates (same content hash computed over the file bytes; in M1 this is a 64-bit xxHash, `xxhash64-v1`).
-     - Near duplicates (cropped, resized, slightly edited) based on perceptual hash similarity (in M1 this is a 64-bit DCT-based pHash, `phash64-v1`, with a Hamming-distance threshold).
+    - Near duplicates (cropped, resized, slightly edited) based on perceptual hash similarity (in M1 this is a 64-bit DCT-based pHash, `phash64-v2`, with a Hamming-distance threshold).
    - Allow users to bulk hide or group duplicates.
    - Preprocessing must:
      - Compute robust fingerprints (content hash + perceptual hash) for every image, following the canonical M1 hashing scheme.

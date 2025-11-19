@@ -15,7 +15,7 @@ from utils.logging import get_logger
 LOGGER = get_logger(__name__)
 
 CONTENT_HASH_ALGO: Final[str] = "xxhash64-v1"
-PHASH_ALGO: Final[str] = "phash64-v1"
+PHASH_ALGO: Final[str] = "phash64-v2"
 
 _PHASH_SIZE: Final[int] = 32
 _PHASH_REDUCED_SIZE: Final[int] = 8
@@ -88,7 +88,8 @@ def compute_perceptual_hash(image: Image.Image) -> str:
     """
 
     # Normalize to grayscale 32×32.
-    gray = image.convert("L").resize((_PHASH_SIZE, _PHASH_SIZE), Image.LANCZOS)
+    resample = getattr(Image, "Resampling", Image).LANCZOS
+    gray = image.convert("L").resize((_PHASH_SIZE, _PHASH_SIZE), resample=resample)
     pixels = np.asarray(gray, dtype=np.float64)
 
     dct_mat = _get_dct_matrix(_PHASH_SIZE)
@@ -121,4 +122,3 @@ def hamming_distance_phash(a_hex: str, b_hex: str) -> int:
 
 
 __all__ = ["CONTENT_HASH_ALGO", "PHASH_ALGO", "compute_content_hash", "compute_perceptual_hash", "hamming_distance_phash"]
-

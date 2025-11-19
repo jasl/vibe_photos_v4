@@ -96,7 +96,7 @@ The architecture is **local‑first**: once models are downloaded and the stack 
 1. **Scan & Register**
    - User points the system at one or more root folders.
    - API/CLI scans the filesystem:
-     - Creates “photo” records with basic metadata (path, filename, content hash, perceptual hash, timestamps) following the canonical M1 hashing scheme (`xxhash64-v1` for content, `phash64-v1` for perceptual hash).
+    - Creates “photo” records with basic metadata (path, filename, content hash, perceptual hash, timestamps) following the canonical M1 hashing scheme (`xxhash64-v1` for content, `phash64-v2` for perceptual hash).
      - Schedules tasks into the processing queue.
    - Incremental behavior:
      - Detects new or modified files based on content hashes and timestamps.

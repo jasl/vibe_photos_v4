@@ -17,7 +17,7 @@ Status: ready for implementation (implements reviewed guidance for the first mil
 
 2. **Lightweight pre-classification**
    - Produce per-image attributes such as:
-     - `scene_type`: `PORTRAIT / GROUP / FOOD / ELECTRONICS / DOCUMENT / SCREENSHOT / LANDSCAPE / OTHER`
+     - `scene_type`: `PEOPLE / FOOD / ELECTRONICS / DOCUMENT / SCREENSHOT / LANDSCAPE / OTHER`
      - `has_text`, `has_person`, `is_screenshot`, `is_document`
    - Models load once; support batch inference.
 
@@ -59,8 +59,8 @@ Run modes:
 
 ## 4. Data Model (SQLite)
 M1 uses two SQLite databases:
-- A **primary operational database** at `data/index.db` for canonical image metadata and run state.
-- A **projection database** at `cache/index.db` for model outputs (`image_scene`, embeddings, captions) and near-duplicate relationships, all derived from cache artifacts or `images.phash`. The projection database is fully rebuildable from the contents of `cache/` and the primary database.
+- A **primary operational database** at `data/index.db` for canonical image metadata, model outputs, near-duplicate relationships, and run state. This database is the only one that production-facing services (CLI, Web UI, future APIs) MUST read and write.
+- A **projection database** at `cache/index.db` that MAY mirror the same schema for experimentation or ad-hoc analysis. It is considered disposable and rebuildable from the primary database and cache artifacts; production services SHOULD NOT depend on it.
 
 ### Hash Strategy: Content vs Perceptual
 M1 uses two distinct hash types:
@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS images (
   camera_model    TEXT,
   hash_algo       TEXT NOT NULL,
   phash           TEXT,           -- e.g. 64-bit perceptual hash as 16-char hex
-  phash_algo      TEXT,           -- e.g. "phash64-v1"
+  phash_algo      TEXT,           -- e.g. "phash64-v2"
   phash_updated_at REAL,          -- last computation time (POSIX timestamp)
   created_at      REAL NOT NULL,
   updated_at      REAL NOT NULL,
@@ -197,7 +197,7 @@ CREATE INDEX IF NOT EXISTS idx_image_near_duplicate_duplicate
 
 By convention:
 - `anchor_image_id` identifies the canonical representative of a near-duplicate group (for example, the first image in sorted `image_id` order).
-- `duplicate_image_id` is another image assigned to that group where the Hamming distance between `phash` values is within the configured threshold (for M1, `<= 5`).
+- `duplicate_image_id` is another image assigned to that group where the Hamming distance between `phash` values is within the configured threshold (for M1, `<= 12`).
 
 ## 5. Pipeline Design
 All model and pipeline parameters (model IDs, devices, batch sizes, duplicate handling, detection toggles) are read from `config/settings.yaml` via `vibe_photos.config.load_settings()`. The CLI MAY provide overrides for common options (for example `--batch-size`, `--device`), and these take precedence over config values when supplied.
@@ -258,8 +258,7 @@ pipeline:
   - `classifier_version` SHOULD append a simple version tag (for example `google/siglip2-base-patch16-224-v1`) so stale rows can be detected and refreshed.
 - Scene types and prompts (zero-shot over SigLIP embeddings):
   - Define the following scene types and English prompts:
-    - `PORTRAIT` → `"a photo of a single person"`
-    - `GROUP` → `"a group photo of people"`
+    - `PEOPLE` → `"a portrait or group photo of people"`
     - `FOOD` → `"a photo of food"`
     - `ELECTRONICS` → `"a photo of electronic devices"`
     - `DOCUMENT` → `"a photo of a document or ID card"`
@@ -314,13 +313,13 @@ pipeline:
   - `image_id` (or corresponding primary paths) for `status = "active"` images in the `images` table.
 - Processing:
   - Load images from `images.primary_path` using a standard imaging library.
-  - Compute a 64-bit perceptual hash (`phash64-v1`) per image using a DCT-based algorithm:
+  - Compute a 64-bit perceptual hash (`phash64-v2`) per image using a DCT-based algorithm:
     - Convert to grayscale and resize to a fixed resolution of 32×32 pixels.
     - Apply 2D DCT (type II) over the 32×32 grayscale matrix.
     - Take the top-left 8×8 low-frequency block (64 coefficients, including the DC term).
     - Compute the median of these 64 coefficients.
     - Set a bit to 1 if `coeff > median`, else 0, producing a 64-bit value.
-    - Store as a 16-character hexadecimal string (`phash`), with `phash_algo = "phash64-v1"`.
+    - Store as a 16-character hexadecimal string (`phash`), with `phash_algo = "phash64-v2"`.
   - Write back `phash`, `phash_algo`, and `phash_updated_at` in the `images` table.
 - Implementation guidance:
   - Prefer reusing decoded images from the scene classification stage to avoid duplicate I/O:
@@ -332,9 +331,9 @@ pipeline:
 - Incremental behavior:
   - When `image_id` (content hash) changes, treat the asset as a new image and recompute `phash`.
   - When only `primary_path` changes but `image_id` remains stable, do not recompute `phash`.
-  - When the configured algorithm version changes (for example from `"phash64-v1"` to `"phash64-v2"`), select rows where `phash_algo != current_algo` and recompute.
+  - When the configured algorithm version changes (for example from `"phash64-v2"` to `"phash64-v3"`), select rows where `phash_algo != current_algo` and recompute.
 - Near-duplicate grouping:
-  - Define near-duplicates using the Hamming distance between 64-bit `phash` values: two active images are considered near-duplicates when `distance(phash_a, phash_b) <= 5`.
+  - Define near-duplicates using the Hamming distance between 64-bit `phash` values: two active images are considered near-duplicates when `distance(phash_a, phash_b) <= 12`.
   - Periodically (for example as a separate stage after phash computation), build near-duplicate groups by:
     - Selecting all active images with non-null `phash`.
     - Sorting them deterministically by `image_id`.
@@ -412,7 +411,7 @@ project_root/
 - `uv run python -m vibe_photos.dev.preprocess --root <album> --db data/index.db --cache-db cache/index.db --batch-size 16 --device cpu|cuda`:
   - Populates `images` with active assets, content hashes (`image_id`), and perceptual hashes (`phash`) for all decodable images.
   - Populates `image_scene` for active images and writes corresponding cache files under `cache/detections/`; records errors without stopping.
-  - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 5`) and persists them into `image_near_duplicate` in `cache/index.db`.
+  - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 12`) and persists them into `image_near_duplicate` in `cache/index.db`.
   - Computes SigLIP embeddings and BLIP captions for canonical images and persists them under `cache/embeddings/` and `cache/captions/`, with optional projections into `image_embedding` and `image_caption`.
 - Preprocessing respects `config/settings.yaml` defaults for model IDs, devices, batch sizes, and pipeline flags, with CLI arguments overriding config values when supplied.
 - Re-running skips unchanged images; updates new/modified assets; flags missing paths appropriately.

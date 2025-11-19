@@ -8,6 +8,11 @@ from typing import Any, Callable, Dict, List, Sequence, Tuple
 import torch
 from torch import Tensor
 
+from utils.logging import get_logger
+
+
+LOGGER = get_logger(__name__)
+
 
 @dataclass(frozen=True)
 class CoarseCategory:
@@ -23,14 +28,16 @@ class CoarseCategoryClassifier:
 
     This helper is model-agnostic: callers provide a function that turns a sequence of
     prompt strings into a 2D tensor of text embeddings. The classifier only handles
-    normalization and cosine-similarity style scoring against a single image embedding.
+    normalization and cosine-similarity style scoring against a single image embedding
+    and converts them into probability-like scores.
     """
 
     def __init__(
         self,
         categories: Sequence[CoarseCategory],
         encode_text: Callable[[Sequence[str]], Tensor],
-        threshold: float = 0.01,
+        threshold: float = 0.05,
+        score_min: float = 0.30,
         fallback_category_id: str = "other",
     ) -> None:
         """Initialize the classifier.
@@ -40,18 +47,25 @@ class CoarseCategoryClassifier:
             encode_text: Function that encodes a sequence of prompt strings into
                 a tensor of shape ``(num_prompts, embedding_dim)``.
             threshold: Minimum margin (difference between the top-1 and top-2
-                category scores) required for a category to be selected as
-                primary. Below this, the fallback category is used when available.
+                probabilities) required for a category to be selected as
+                primary. Below this, the fallback category is used when
+                available.
+            score_min: Minimum top-1 probability required for a category to be
+                considered confident. If the top-1 probability falls below this
+                value, the fallback category is used.
             fallback_category_id: Category identifier to use as a fallback when
-                all scores are below the threshold. The category does not need to
-                have any prompts; it is treated as a catch-all bucket.
+                confidence is low. The category does not need to have any
+                prompts; it is treated as a catch-all bucket.
         """
         if threshold < 0.0:
             raise ValueError("threshold must be non-negative")
+        if score_min < 0.0:
+            raise ValueError("score_min must be non-negative")
 
         self._categories: List[CoarseCategory] = list(categories)
         self._encode_text: Callable[[Sequence[str]], Tensor] = encode_text
         self._threshold: float = threshold
+        self._score_min: float = score_min
         self._fallback_category_id: str = fallback_category_id
         self._text_embeddings: Dict[str, Tensor] = {}
 
@@ -65,9 +79,15 @@ class CoarseCategoryClassifier:
 
     @property
     def threshold(self) -> float:
-        """Return the minimum score margin required for a category to become primary."""
+        """Return the minimum probability margin required for a category to become primary."""
 
         return self._threshold
+
+    @property
+    def score_min(self) -> float:
+        """Return the minimum top-1 probability required for a confident prediction."""
+
+        return self._score_min
 
     def _prepare_text_embeddings(self) -> None:
         """Encode and normalize all category prompts once at startup."""
@@ -97,7 +117,7 @@ class CoarseCategoryClassifier:
         Returns:
             A tuple of:
                 - primary_category_id: identifier of the selected coarse category.
-                - scores: mapping from category identifier to similarity score.
+                - scores: mapping from category identifier to probability in [0.0, 1.0].
         """
         if image_embedding.ndim == 2:
             if image_embedding.shape[0] != 1:
@@ -114,6 +134,7 @@ class CoarseCategoryClassifier:
         normalized_image = image_embedding / norm
 
         scores: Dict[str, float] = {}
+        scored_category_ids: List[str] = []
 
         for category in self._categories:
             text_embeddings = self._text_embeddings.get(category.id)
@@ -125,15 +146,48 @@ class CoarseCategoryClassifier:
             similarities = normalized_image @ text_embeddings.T
             max_score = float(similarities.max().item())
             scores[category.id] = max_score
+            scored_category_ids.append(category.id)
 
-        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-        if not ranked:
+        if not scored_category_ids:
             primary_category_id = self._fallback_category_id
+            if self._fallback_category_id not in scores:
+                scores[self._fallback_category_id] = 0.0
+            return primary_category_id, scores
+
+        raw_scores = torch.tensor([scores[cid] for cid in scored_category_ids], dtype=normalized_image.dtype)
+        probs = torch.softmax(raw_scores, dim=-1)
+        probs_cpu = probs.detach().cpu()
+
+        for idx, category_id in enumerate(scored_category_ids):
+            scores[category_id] = float(probs_cpu[idx])
+
+        num_categories = probs.shape[0]
+        if num_categories == 1:
+            best_index = 0
+            best_prob = float(probs_cpu[0])
+            second_prob = 0.0
         else:
-            best_category_id, best_score = ranked[0]
-            second_score = ranked[1][1] if len(ranked) > 1 else float("-inf")
-            margin = best_score - second_score
-            primary_category_id = best_category_id if margin >= self._threshold else self._fallback_category_id
+            top_values, top_indices = torch.topk(probs, k=2)
+            best_prob = float(top_values[0])
+            second_prob = float(top_values[1])
+            best_index = int(top_indices[0])
+
+        best_category_id = scored_category_ids[best_index]
+        margin = best_prob - second_prob
+
+        primary_category_id = best_category_id
+        if primary_category_id != self._fallback_category_id:
+            if best_prob < self._score_min and margin < self._threshold:
+                LOGGER.debug(
+                    "coarse_category_fallback_other",
+                    extra={
+                        "top1_category": best_category_id,
+                        "top1_prob": best_prob,
+                        "top2_prob": second_prob,
+                        "margin": margin,
+                    },
+                )
+                primary_category_id = self._fallback_category_id
 
         if self._fallback_category_id not in scores:
             scores[self._fallback_category_id] = 0.0
@@ -205,6 +259,7 @@ def build_siglip_coarse_classifier(
     siglip_processor: Any,
     categories: Sequence[CoarseCategory] | None = None,
     threshold: float = 0.01,
+    score_min: float = 0.15,
     device: str | torch.device | None = None,
 ) -> CoarseCategoryClassifier:
     """Create a coarse category classifier wired to a SigLIP-style model.
@@ -222,8 +277,10 @@ def build_siglip_coarse_classifier(
             the model.
         categories: Optional custom coarse categories. When omitted,
             :data:`DEFAULT_COARSE_CATEGORIES` is used.
-        threshold: Minimum score required for a category to be selected as
-            primary.
+        threshold: Minimum margin between top-1 and top-2 probabilities
+            required for a category to be selected as primary.
+        score_min: Minimum top-1 probability required for a category to be
+            considered confident.
         device: Optional device string or torch device on which to perform text
             encoding. When ``None``, the processor outputs are left on their
             default device.
@@ -249,6 +306,7 @@ def build_siglip_coarse_classifier(
         categories=categories or DEFAULT_COARSE_CATEGORIES,
         encode_text=encode_text,
         threshold=threshold,
+        score_min=score_min,
     )
 
 

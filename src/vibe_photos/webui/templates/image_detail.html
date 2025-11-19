@@ -17,6 +17,12 @@
     <li>Width × Height: {{ width }} × {{ height }}</li>
   </ul>
 
+  <h3>Hashes</h3>
+  <ul>
+    <li>Content hash (image_id): {{ image_id }}</li>
+    <li>Perceptual hash: {% if phash %}{{ phash }} ({{ phash_algo or "unknown" }}){% else %}N/A{% endif %}</li>
+  </ul>
+
   {% if scene %}
     <h3>Scene</h3>
     <ul>
@@ -38,4 +44,3 @@
     {% endif %}
   {% endif %}
 {% endblock %}
-

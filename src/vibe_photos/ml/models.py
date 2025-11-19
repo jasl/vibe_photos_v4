@@ -10,7 +10,7 @@ from typing import Tuple
 
 import torch
 from torch import device as TorchDevice
-from transformers import AutoModel, AutoModelForSeq2SeqLM, AutoProcessor, PreTrainedModel, PreTrainedTokenizerBase
+from transformers import AutoModel, AutoModelForImageTextToText, AutoProcessor, PreTrainedModel
 
 from vibe_photos.config import EmbeddingModelConfig, CaptionModelConfig, Settings, load_settings
 
@@ -50,7 +50,7 @@ _SIGLIP_DEVICE: TorchDevice | None = None
 _SIGLIP_MODEL_NAME: str | None = None
 
 _BLIP_PROCESSOR: AutoProcessor | None = None
-_BLIP_MODEL: AutoModelForSeq2SeqLM | None = None
+_BLIP_MODEL: PreTrainedModel | None = None
 _BLIP_DEVICE: TorchDevice | None = None
 _BLIP_MODEL_NAME: str | None = None
 
@@ -69,7 +69,7 @@ def _load_siglip(config: EmbeddingModelConfig) -> Tuple[AutoProcessor, PreTraine
     ):
         return _SIGLIP_PROCESSOR, _SIGLIP_MODEL, _SIGLIP_DEVICE
 
-    processor = AutoProcessor.from_pretrained(model_name)
+    processor = AutoProcessor.from_pretrained(model_name, use_fast=True)
     model = AutoModel.from_pretrained(model_name).to(device)
     model.eval()
 
@@ -81,7 +81,7 @@ def _load_siglip(config: EmbeddingModelConfig) -> Tuple[AutoProcessor, PreTraine
     return processor, model, device
 
 
-def _load_blip_caption(config: CaptionModelConfig) -> Tuple[AutoProcessor, AutoModelForSeq2SeqLM, TorchDevice]:
+def _load_blip_caption(config: CaptionModelConfig) -> Tuple[AutoProcessor, PreTrainedModel, TorchDevice]:
     model_name = config.resolved_model_name()
     device = _select_device(config.device)
 
@@ -95,8 +95,8 @@ def _load_blip_caption(config: CaptionModelConfig) -> Tuple[AutoProcessor, AutoM
     ):
         return _BLIP_PROCESSOR, _BLIP_MODEL, _BLIP_DEVICE
 
-    processor = AutoProcessor.from_pretrained(model_name)
-    model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
+    processor = AutoProcessor.from_pretrained(model_name, use_fast=True)
+    model = AutoModelForImageTextToText.from_pretrained(model_name).to(device)
     model.eval()
 
     _BLIP_PROCESSOR = processor
@@ -120,7 +120,7 @@ def get_siglip_embedding_model(settings: Settings | None = None) -> Tuple[AutoPr
 
 def get_blip_caption_model(
     settings: Settings | None = None,
-) -> Tuple[AutoProcessor, AutoModelForSeq2SeqLM, TorchDevice]:
+) -> Tuple[AutoProcessor, PreTrainedModel, TorchDevice]:
     """Return the shared BLIP processor, model, and device for captioning."""
 
     cfg = (settings or load_settings()).models.caption
@@ -131,4 +131,3 @@ __all__ = [
     "get_siglip_embedding_model",
     "get_blip_caption_model",
 ]
-

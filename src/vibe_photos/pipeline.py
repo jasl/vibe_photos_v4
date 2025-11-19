@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Sequence
 
 from torch import Tensor
 from utils.logging import get_logger
-from vibe_photos.classifier import build_scene_classifier, classify_image_embeddings
+from vibe_photos.classifier import SceneClassifierWithAttributes, build_scene_classifier
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import open_primary_db, open_projection_db
 from vibe_photos.hasher import CONTENT_HASH_ALGO, PHASH_ALGO, compute_content_hash, compute_perceptual_hash, hamming_distance_phash
@@ -85,6 +85,7 @@ class PreprocessingPipeline:
         self._settings = settings or load_settings()
         self._logger = get_logger(__name__, extra={"component": "preprocess"})
         self._cache_root: Optional[Path] = None
+        self._journal: Optional[RunJournalRecord] = None
 
     def run(self, roots: Sequence[Path], primary_db_path: Path, projection_db_path: Path) -> None:
         """Run the preprocessing pipeline for the given album roots.
@@ -111,6 +112,7 @@ class PreprocessingPipeline:
         )
 
         journal = load_run_journal(cache_root)
+        self._journal = journal
         if journal is not None:
             self._logger.info(
                 "pipeline_resume",
@@ -125,10 +127,17 @@ class PreprocessingPipeline:
             save_run_journal(cache_root, RunJournalRecord(stage="phash_and_duplicates", cursor_image_id=None, updated_at=time.time()))
 
             self._run_embeddings_and_captions(primary_conn, projection_conn)
-            save_run_journal(cache_root, RunJournalRecord(stage="embeddings_and_captions", cursor_image_id=None, updated_at=time.time()))
-
             self._run_scene_classification(primary_conn, projection_conn)
-            save_run_journal(cache_root, RunJournalRecord(stage="scene_classification", cursor_image_id=None, updated_at=time.time()))
+
+        # Best-effort: remove run journal after a successful full run to avoid
+        # stale cursors influencing future runs.
+        try:
+            journal_path = cache_root / "run_journal.json"
+            if journal_path.exists():
+                journal_path.unlink()
+        except OSError:
+            # Non-fatal; the next run will simply see an existing journal.
+            pass
 
         self._logger.info("pipeline_complete", extra={})
 
@@ -345,23 +354,23 @@ class PreprocessingPipeline:
         self._logger.info("scene_classification_start", extra={})
 
         cache_root = self._cache_root
-        projection_cursor = projection_conn.cursor()
         primary_cursor = primary_conn.cursor()
 
-        classifier, classifier_name, classifier_version = build_scene_classifier(self._settings)
+        classifier: SceneClassifierWithAttributes = build_scene_classifier(self._settings)
+        classifier_version = classifier.classifier_version
 
         embedding_model_name = self._settings.models.embedding.resolved_model_name()
 
         # Map image_id -> existing classifier_version to detect stale rows.
-        projection_cursor.execute("SELECT image_id, classifier_version FROM image_scene")
-        existing_versions = {row["image_id"]: row["classifier_version"] for row in projection_cursor.fetchall()}
+        primary_cursor.execute("SELECT image_id, classifier_version FROM image_scene")
+        existing_versions = {row["image_id"]: row["classifier_version"] for row in primary_cursor.fetchall()}
 
         # Determine which embeddings are available for the configured model.
-        projection_cursor.execute(
+        primary_cursor.execute(
             "SELECT image_id, embedding_path FROM image_embedding WHERE model_name = ?",
             (embedding_model_name,),
         )
-        embedding_rows = projection_cursor.fetchall()
+        embedding_rows = primary_cursor.fetchall()
         embedding_path_by_id = {row["image_id"]: row["embedding_path"] for row in embedding_rows}
 
         # Only classify active images with an embedding and missing or stale classifier_version.
@@ -378,11 +387,15 @@ class PreprocessingPipeline:
             if existing_versions[image_id] != classifier_version:
                 target_ids.append(image_id)
 
+        # Apply journal-based cursor if we are resuming this stage.
+        if self._journal is not None and self._journal.stage == "scene_classification" and self._journal.cursor_image_id:
+            cursor_id = self._journal.cursor_image_id
+            target_ids = [image_id for image_id in target_ids if image_id > cursor_id]
+
         if not target_ids:
             self._logger.info("scene_classification_noop", extra={})
             return
 
-        from pathlib import Path as _Path
         import numpy as np
         import torch
 
@@ -424,17 +437,12 @@ class PreprocessingPipeline:
             if not embeddings:
                 continue
 
-            attributes_list = classify_image_embeddings(
-                classifier=classifier,
-                embeddings=embeddings,
-                classifier_name=classifier_name,
-                classifier_version=classifier_version,
-            )
+            attributes_list = classifier.classify_batch(embeddings)
 
             now = time.time()
             for image_id, attributes in zip(valid_ids, attributes_list):
                 # Persist to SQLite projection DB.
-                projection_cursor.execute(
+                primary_cursor.execute(
                     """
                     INSERT INTO image_scene (
                         image_id,
@@ -492,7 +500,13 @@ class PreprocessingPipeline:
                 cache_path.write_text(json.dumps(detection_payload), encoding="utf-8")
                 updated_rows += 1
 
-        projection_conn.commit()
+            # Update run journal after each batch for resumable execution.
+            save_run_journal(
+                cache_root,
+                RunJournalRecord(stage="scene_classification", cursor_image_id=batch_ids[-1], updated_at=time.time()),
+            )
+
+        primary_conn.commit()
         self._logger.info("scene_classification_complete", extra={"updated_rows": updated_rows})
 
     def _run_embeddings_and_captions(self, primary_conn, projection_conn) -> None:
@@ -505,7 +519,6 @@ class PreprocessingPipeline:
 
         cache_root = self._cache_root
         primary_cursor = primary_conn.cursor()
-        projection_cursor = projection_conn.cursor()
 
         embedding_cfg = self._settings.models.embedding
         caption_cfg = self._settings.models.caption
@@ -525,20 +538,25 @@ class PreprocessingPipeline:
             self._logger.info("embeddings_and_captions_noop", extra={})
             return
 
-        process_ids = list(paths_by_id.keys())
+        process_ids = sorted(paths_by_id.keys())
 
         if self._settings.pipeline.skip_duplicates_for_heavy_models:
-            projection_cursor.execute("SELECT duplicate_image_id FROM image_near_duplicate")
-            duplicate_rows = projection_cursor.fetchall()
+            primary_cursor.execute("SELECT duplicate_image_id FROM image_near_duplicate")
+            duplicate_rows = primary_cursor.fetchall()
             duplicate_ids = {row["duplicate_image_id"] for row in duplicate_rows}
             process_ids = [image_id for image_id in process_ids if image_id not in duplicate_ids]
 
-        # Exclude images that already have embeddings/captions for the configured models.
-        projection_cursor.execute("SELECT image_id FROM image_embedding WHERE model_name = ?", (embedding_model_name,))
-        existing_embedding_ids = {row["image_id"] for row in projection_cursor.fetchall()}
+        # Apply journal-based cursor if we are resuming this stage.
+        if self._journal is not None and self._journal.stage == "embeddings_and_captions" and self._journal.cursor_image_id:
+            cursor_id = self._journal.cursor_image_id
+            process_ids = [image_id for image_id in process_ids if image_id > cursor_id]
 
-        projection_cursor.execute("SELECT image_id FROM image_caption WHERE model_name = ?", (caption_model_name,))
-        existing_caption_ids = {row["image_id"] for row in projection_cursor.fetchall()}
+        # Exclude images that already have embeddings/captions for the configured models.
+        primary_cursor.execute("SELECT image_id FROM image_embedding WHERE model_name = ?", (embedding_model_name,))
+        existing_embedding_ids = {row["image_id"] for row in primary_cursor.fetchall()}
+
+        primary_cursor.execute("SELECT image_id FROM image_caption WHERE model_name = ?", (caption_model_name,))
+        existing_caption_ids = {row["image_id"] for row in primary_cursor.fetchall()}
 
         embedding_targets = [image_id for image_id in process_ids if image_id not in existing_embedding_ids]
         caption_targets = [image_id for image_id in process_ids if image_id not in existing_caption_ids]
@@ -596,7 +614,7 @@ class PreprocessingPipeline:
                 emb_path = embeddings_dir / rel_path
                 np.save(emb_path, vec)
 
-                projection_cursor.execute(
+                primary_cursor.execute(
                     """
                     INSERT INTO image_embedding (
                         image_id,
@@ -624,6 +642,13 @@ class PreprocessingPipeline:
                     ),
                 )
                 total_embeddings += 1
+
+            # Update run journal after each embedding batch.
+            if batch_ids:
+                save_run_journal(
+                    cache_root,
+                    RunJournalRecord(stage="embeddings_and_captions", cursor_image_id=batch_ids[-1], updated_at=time.time()),
+                )
 
         # Captions
         caption_batch_size = max(1, caption_cfg.batch_size)
@@ -657,7 +682,7 @@ class PreprocessingPipeline:
             inputs = inputs.to(blip_device)
 
             with torch.no_grad():
-                generated_ids = blip_model.generate(**inputs, max_length=64)
+                generated_ids = blip_model.generate(**inputs, padding="max_length")
 
             for idx, image_id in enumerate(valid_ids):
                 token_ids = generated_ids[idx]
@@ -674,7 +699,7 @@ class PreprocessingPipeline:
                 }
                 caption_path.write_text(json.dumps(payload), encoding="utf-8")
 
-                projection_cursor.execute(
+                primary_cursor.execute(
                     """
                     INSERT INTO image_caption (
                         image_id,
@@ -700,7 +725,7 @@ class PreprocessingPipeline:
                 )
                 total_captions += 1
 
-        projection_conn.commit()
+        primary_conn.commit()
         self._logger.info(
             "embeddings_and_captions_complete",
             extra={"embeddings_created": total_embeddings, "captions_created": total_captions},
@@ -718,7 +743,14 @@ class PreprocessingPipeline:
             """
             SELECT image_id, primary_path
             FROM images
-            WHERE status = 'active' AND (phash IS NULL OR phash_algo IS NULL OR phash_algo != ?)
+            WHERE status = 'active'
+              AND (
+                phash IS NULL
+                OR phash_algo IS NULL
+                OR phash_algo != ?
+                OR width IS NULL
+                OR height IS NULL
+              )
             """,
             (PHASH_ALGO,),
         )
@@ -732,6 +764,7 @@ class PreprocessingPipeline:
                 from PIL import Image
 
                 image = Image.open(path_str)
+                width, height = image.size
             except Exception as exc:
                 self._logger.error("phash_image_open_error", extra={"image_id": image_id, "path": path_str, "error": str(exc)})
                 cursor.execute(
@@ -761,10 +794,10 @@ class PreprocessingPipeline:
             cursor.execute(
                 """
                 UPDATE images
-                SET phash = ?, phash_algo = ?, phash_updated_at = ?, status = ?, error_message = NULL, updated_at = ?
+                SET width = ?, height = ?, phash = ?, phash_algo = ?, phash_updated_at = ?, status = ?, error_message = NULL, updated_at = ?
                 WHERE image_id = ?
                 """,
-                (phash_hex, PHASH_ALGO, now, "active", now, image_id),
+                (int(width), int(height), phash_hex, PHASH_ALGO, now, "active", now, image_id),
             )
             phash_updated += 1
 
@@ -783,7 +816,7 @@ class PreprocessingPipeline:
         rows = cursor.fetchall()
 
         BUCKET_PREFIX_HEX_LEN = 4  # 16 high bits
-        HAMMING_THRESHOLD = 5
+        HAMMING_THRESHOLD = 12
 
         buckets: Dict[str, List[Dict[str, str]]] = {}
         for row in rows:
@@ -812,7 +845,7 @@ class PreprocessingPipeline:
                         used.add(candidate_id)
                 used.add(anchor_id)
 
-        proj_cursor = projection_conn.cursor()
+        proj_cursor = primary_conn.cursor()
         proj_cursor.execute("DELETE FROM image_near_duplicate")
         for anchor_id, duplicate_id, distance in near_pairs:
             proj_cursor.execute(
@@ -822,7 +855,7 @@ class PreprocessingPipeline:
                 """,
                 (anchor_id, duplicate_id, distance, now),
             )
-        projection_conn.commit()
+        primary_conn.commit()
 
         self._logger.info(
             "phash_and_duplicates_complete",

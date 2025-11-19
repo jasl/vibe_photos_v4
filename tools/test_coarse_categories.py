@@ -79,8 +79,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--threshold",
         type=float,
         default=0.01,
-        help="Minimum margin between top-1 and top-2 coarse categories required to select a non-'other' category "
-        "(default: %(default)s).",
+        help=(
+            "Minimum margin between top-1 and top-2 coarse category probabilities required to select a non-'other' "
+            "category (default: %(default)s)."
+        ),
+    )
+    parser.add_argument(
+        "--score-min",
+        type=float,
+        default=0.15,
+        help=(
+            "Minimum top-1 coarse category probability required to select a non-'other' category "
+            "(default: %(default)s)."
+        ),
     )
     return parser.parse_args(list(argv) if argv is not None else None)
 
@@ -89,6 +100,7 @@ def classify_images(
     image_paths: Sequence[Path],
     model_name: str,
     threshold: float,
+    score_min: float,
 ) -> None:
     """Run coarse category classification on a sequence of images and print results."""
 
@@ -100,7 +112,7 @@ def classify_images(
     print(f"[setup] Using device: {device}")
     print(f"[setup] Loading SigLIP model and processor: {model_name} (this may take a while)...")
 
-    processor = AutoProcessor.from_pretrained(model_name)
+    processor = AutoProcessor.from_pretrained(model_name, use_fast=True)
     model = AutoModel.from_pretrained(model_name).to(device)
     model.eval()
 
@@ -111,6 +123,7 @@ def classify_images(
         siglip_processor=processor,
         categories=DEFAULT_COARSE_CATEGORIES,
         threshold=threshold,
+        score_min=score_min,
         device=device,
     )
 
@@ -172,7 +185,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     image_paths = list(iter_image_paths(images_dir))
-    classify_images(image_paths=image_paths, model_name=model_name, threshold=args.threshold)
+    classify_images(
+        image_paths=image_paths,
+        model_name=model_name,
+        threshold=args.threshold,
+        score_min=args.score_min,
+    )
     return 0
 
 

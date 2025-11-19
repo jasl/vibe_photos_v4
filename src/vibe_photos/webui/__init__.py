@@ -68,10 +68,9 @@ def images() -> Any:
     where_sql = " AND ".join(filters) if filters else "1=1"
 
     primary_path = _get_primary_db_path()
-    projection_path = _get_projection_db_path()
 
-    with open_primary_db(primary_path) as primary_conn, open_projection_db(projection_path) as projection_conn:
-        cursor = projection_conn.cursor()
+    with open_primary_db(primary_path) as primary_conn:
+        cursor = primary_conn.cursor()
 
         count_sql = f"""
             SELECT COUNT(*)
@@ -130,15 +129,13 @@ def image_detail(image_id: str) -> Any:
     """Detail page for a single image, keyed by logical image identifier."""
 
     primary_path = _get_primary_db_path()
-    projection_path = _get_projection_db_path()
 
-    with open_primary_db(primary_path) as primary_conn, open_projection_db(projection_path) as projection_conn:
+    with open_primary_db(primary_path) as primary_conn:
         primary_cursor = primary_conn.cursor()
-        projection_cursor = projection_conn.cursor()
 
         primary_cursor.execute(
             """
-            SELECT image_id, primary_path, size_bytes, mtime, width, height, status
+            SELECT image_id, primary_path, size_bytes, mtime, width, height, status, phash, phash_algo
             FROM images
             WHERE image_id = ?
             """,
@@ -148,7 +145,7 @@ def image_detail(image_id: str) -> Any:
         if image_row is None:
             abort(404)
 
-        projection_cursor.execute(
+        primary_cursor.execute(
             """
             SELECT scene_type,
                    scene_confidence,
@@ -163,9 +160,9 @@ def image_detail(image_id: str) -> Any:
             """,
             (image_id,),
         )
-        scene_row = projection_cursor.fetchone()
+        scene_row = primary_cursor.fetchone()
 
-        projection_cursor.execute(
+        primary_cursor.execute(
             """
             SELECT caption, model_name
             FROM image_caption
@@ -173,7 +170,7 @@ def image_detail(image_id: str) -> Any:
             """,
             (image_id,),
         )
-        caption_row = projection_cursor.fetchone()
+        caption_row = primary_cursor.fetchone()
 
     primary_path_str = image_row["primary_path"]
     logical_name = Path(primary_path_str).name
@@ -209,6 +206,8 @@ def image_detail(image_id: str) -> Any:
         scene=scene_info,
         caption=caption_text,
         caption_model=caption_model,
+        phash=image_row["phash"],
+        phash_algo=image_row["phash_algo"],
     )
 
 

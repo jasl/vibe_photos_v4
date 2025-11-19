@@ -41,10 +41,6 @@ PRIMARY_DB_SCHEMA_STATEMENTS: tuple[str, ...] = (
     """
     CREATE INDEX IF NOT EXISTS idx_images_status ON images(status);
     """,
-)
-
-
-PROJECTION_DB_SCHEMA_STATEMENTS: tuple[str, ...] = (
     """
     CREATE TABLE IF NOT EXISTS image_scene (
       image_id           TEXT PRIMARY KEY,
@@ -116,6 +112,9 @@ PROJECTION_DB_SCHEMA_STATEMENTS: tuple[str, ...] = (
 )
 
 
+PROJECTION_DB_SCHEMA_STATEMENTS: tuple[str, ...] = PRIMARY_DB_SCHEMA_STATEMENTS
+
+
 def _ensure_parent_directory(path: Path) -> None:
     """Ensure that the parent directory of a database path exists."""
 
@@ -170,4 +169,3 @@ def open_projection_db(path: Path) -> sqlite3.Connection:
 
 
 __all__ = ["open_primary_db", "open_projection_db"]
-

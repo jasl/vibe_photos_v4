@@ -14,8 +14,6 @@ from vibe_photos.pipeline import PreprocessingPipeline
 
 LOGGER = get_logger(__name__)
 
-app = typer.Typer(help="Run the Vibe Photos M1 preprocessing pipeline.")
-
 
 def _apply_cli_overrides(settings: Settings, batch_size: Optional[int], device: Optional[str]) -> Settings:
     """Apply CLI overrides for batch size and device to the settings."""
@@ -31,8 +29,7 @@ def _apply_cli_overrides(settings: Settings, batch_size: Optional[int], device: 
     return settings
 
 
-@app.command("run")
-def run(
+def main(
     root: list[Path] = typer.Option(
         ...,
         "--root",
@@ -72,15 +69,8 @@ def run(
     pipeline.run(roots=root, primary_db_path=db, projection_db_path=cache_db)
 
 
-def main() -> None:
-    """Entrypoint used when invoking the module as a script."""
-
-    app()
-
-
 if __name__ == "__main__":
-    main()
+    typer.run(main)
 
 
-__all__ = ["app", "main"]
-
+__all__ = ["main"]

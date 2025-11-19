@@ -43,7 +43,7 @@ class SigLIPBLIPDetector:
         self.device = device
 
         print(f"Loading SigLIP model: {siglip_model}")
-        self.siglip_processor = AutoProcessor.from_pretrained(siglip_model)
+        self.siglip_processor = AutoProcessor.from_pretrained(siglip_model, use_fast=True)
         self.siglip_model = AutoModel.from_pretrained(siglip_model).to(device)
 
         print(f"Loading BLIP model: {blip_model}")
