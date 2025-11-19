@@ -111,6 +111,7 @@ class PipelineConfig:
 
     run_detection: bool = False
     skip_duplicates_for_heavy_models: bool = True
+    phash_hamming_threshold: int = 12
 
 
 @dataclass
@@ -200,6 +201,8 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         pipeline_cfg.run_detection = pipeline_raw["run_detection"]
     if isinstance(pipeline_raw.get("skip_duplicates_for_heavy_models"), bool):
         pipeline_cfg.skip_duplicates_for_heavy_models = pipeline_raw["skip_duplicates_for_heavy_models"]
+    if isinstance(pipeline_raw.get("phash_hamming_threshold"), int):
+        pipeline_cfg.phash_hamming_threshold = pipeline_raw["phash_hamming_threshold"]
 
     return settings
 
@@ -230,4 +233,3 @@ __all__ = [
     "get_embedding_model_name",
     "get_caption_model_name",
 ]
-

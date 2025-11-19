@@ -3,44 +3,148 @@
 {% block content %}
   <p><a href="{{ url_for('images') }}">&larr; Back to list</a></p>
 
-  <h2>Image {{ image_id }}</h2>
-  <p><strong>Name:</strong> {{ logical_name }}</p>
-  <p><strong>Status:</strong> {{ status }}</p>
-  <p>
-    <img src="{{ url_for('image_thumbnail', image_id=image_id) }}" alt="image" />
-  </p>
+  <div class="detail-layout">
+    <div class="detail-image-panel">
+      <div class="detail-image-wrapper">
+        <img src="{{ url_for('image_thumbnail', image_id=image_id) }}" alt="image" />
+        {% if regions and regions|length > 0 %}
+          {% for region in regions %}
+            <div
+              class="region-box {% if loop.index0 == 0 %}region-box-primary{% endif %}"
+              style="
+                left: {{ (region.x_min * 100) }}%;
+                top: {{ (region.y_min * 100) }}%;
+                width: {{ ((region.x_max - region.x_min) * 100) }}%;
+                height: {{ ((region.y_max - region.y_min) * 100) }}%;
+              "
+            >
+              <span class="region-label">
+                {{ region.refined_label or region.detector_label }}
+              </span>
+            </div>
+          {% endfor %}
+        {% endif %}
+      </div>
+    </div>
 
-  <h3>Metadata</h3>
-  <ul>
-    <li>Size: {{ size_bytes }} bytes</li>
-    <li>Modified time (mtime): {{ mtime }}</li>
-    <li>Width × Height: {{ width }} × {{ height }}</li>
-  </ul>
+    <div class="detail-meta-panel">
+      <div class="detail-section">
+        <h3>Image {{ image_id }}</h3>
+        <p><strong>Name:</strong> {{ logical_name }}</p>
+        <p><strong>Status:</strong> {{ status }}</p>
+      </div>
 
-  <h3>Hashes</h3>
-  <ul>
-    <li>Content hash (image_id): {{ image_id }}</li>
-    <li>Perceptual hash: {% if phash %}{{ phash }} ({{ phash_algo or "unknown" }}){% else %}N/A{% endif %}</li>
-  </ul>
+      <div class="detail-section">
+        <h3>Metadata</h3>
+        <ul>
+          <li>Size: {{ size_bytes }} bytes</li>
+          <li>Modified time (mtime): {{ mtime }}</li>
+          <li>Width × Height: {{ width }} × {{ height }}</li>
+        </ul>
+      </div>
 
-  {% if scene %}
-    <h3>Scene</h3>
-    <ul>
-      <li>Type: {{ scene.scene_type }}</li>
-      <li>Confidence: {{ scene.scene_confidence }}</li>
-      <li>Has text: {{ scene.has_text }}</li>
-      <li>Has person: {{ scene.has_person }}</li>
-      <li>Is screenshot: {{ scene.is_screenshot }}</li>
-      <li>Is document: {{ scene.is_document }}</li>
-      <li>Classifier: {{ scene.classifier_name }} ({{ scene.classifier_version }})</li>
-    </ul>
-  {% endif %}
+      <div class="detail-section">
+        <h3>Hashes</h3>
+        <ul>
+          <li>Content hash (image_id): <code>{{ image_id }}</code></li>
+          <li>
+            Perceptual hash:
+            {% if phash %}
+              <code>{{ phash }}</code> ({{ phash_algo or "unknown" }})
+            {% else %}
+              N/A
+            {% endif %}
+          </li>
+        </ul>
+      </div>
 
-  {% if caption %}
-    <h3>Caption</h3>
-    <p>{{ caption }}</p>
-    {% if caption_model %}
-      <p><small>Model: {{ caption_model }}</small></p>
-    {% endif %}
-  {% endif %}
+      {% if scene %}
+        <div class="detail-section">
+          <h3>Scene</h3>
+          <ul>
+            <li>Type: <span class="pill">{{ scene.scene_type }}</span></li>
+            <li>Confidence: {{ "%.3f"|format(scene.scene_confidence or 0.0) }}</li>
+            <li>Has text: {{ scene.has_text }}</li>
+            <li>Has person: {{ scene.has_person }}</li>
+            <li>Is screenshot: {{ scene.is_screenshot }}</li>
+            <li>Is document: {{ scene.is_document }}</li>
+            <li>Classifier: {{ scene.classifier_name }} ({{ scene.classifier_version }})</li>
+          </ul>
+        </div>
+      {% endif %}
+
+      {% if caption %}
+        <div class="detail-section">
+          <h3>Caption</h3>
+          <p>{{ caption }}</p>
+          {% if caption_model %}
+            <p><small>Model: {{ caption_model }}</small></p>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if near_duplicates and near_duplicates|length > 0 %}
+        <div class="detail-section">
+          <h3>Near-duplicate photos ({{ near_duplicates|length }})</h3>
+          <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));">
+            {% for dup in near_duplicates %}
+              <div class="card">
+                <a href="{{ url_for('image_detail', image_id=dup.image_id) }}">
+                  <img src="{{ url_for('image_thumbnail', image_id=dup.image_id) }}" alt="near duplicate" />
+                </a>
+                <div style="margin-top: 0.25rem; font-size: 0.8rem;">
+                  <div title="{{ dup.image_id }}">{{ dup.image_id[:12] }}…</div>
+                  <div>distance: {{ dup.phash_distance }}</div>
+                  <div>status: {{ dup.status }}</div>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+
+      {% if regions and regions|length > 0 %}
+        <div class="detail-section">
+          <h3>Detected regions ({{ regions|length }})</h3>
+          <table class="regions-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>BBox (x_min, y_min, x_max, y_max)</th>
+                <th>Detector</th>
+                <th>SigLIP refined</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for region in regions %}
+                <tr>
+                  <td>{{ region.index }}</td>
+                  <td>
+                    {{ "%.2f"|format(region.x_min) }},
+                    {{ "%.2f"|format(region.y_min) }},
+                    {{ "%.2f"|format(region.x_max) }},
+                    {{ "%.2f"|format(region.y_max) }}
+                  </td>
+                  <td>
+                    <span class="pill">{{ region.detector_label }}</span>
+                    <br />
+                    score: {{ "%.3f"|format(region.detector_score) }}
+                  </td>
+                  <td>
+                    {% if region.refined_label %}
+                      <span class="pill">{{ region.refined_label }}</span>
+                      <br />
+                      score: {{ "%.3f"|format(region.refined_score or 0.0) }}
+                    {% else %}
+                      <span class="pill">N/A</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </div>
+  </div>
 {% endblock %}

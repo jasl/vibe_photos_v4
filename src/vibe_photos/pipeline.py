@@ -14,15 +14,7 @@ from torch import Tensor
 from utils.logging import get_logger
 from vibe_photos.classifier import SceneClassifierWithAttributes, build_scene_classifier
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import (
-    Image,
-    ImageCaption,
-    ImageEmbedding,
-    ImageNearDuplicate,
-    ImageScene,
-    open_primary_session,
-    open_projection_session,
-)
+from vibe_photos.db import Image, ImageCaption, ImageEmbedding, ImageNearDuplicate, ImageRegion, ImageScene, open_primary_session, open_projection_session
 from vibe_photos.hasher import (
     CONTENT_HASH_ALGO,
     PHASH_ALGO,
@@ -144,6 +136,9 @@ class PreprocessingPipeline:
 
             self._run_embeddings_and_captions(primary_session, projection_session)
             self._run_scene_classification(primary_session, projection_session)
+
+            if self._settings.pipeline.run_detection and self._settings.models.detection.enabled:
+                self._run_region_detection_and_reranking(primary_session)
 
         # Best-effort: remove run journal after a successful full run to avoid
         # stale cursors influencing future runs.
@@ -308,6 +303,236 @@ class PreprocessingPipeline:
 
         primary_session.commit()
         self._logger.info("scan_and_hash_complete", extra={"file_count": len(files)})
+
+    def _run_region_detection_and_reranking(self, primary_session) -> None:
+        """Run optional object-level detection and prepare region metadata."""
+
+        if self._cache_root is None:
+            raise RuntimeError("cache_root is not initialized")
+
+        self._logger.info(
+            "region_detection_start",
+            extra={
+                "detection_backend": self._settings.models.detection.backend,
+                "detection_model": self._settings.models.detection.model_name,
+            },
+        )
+
+        from vibe_photos.ml.detection import OwlVitDetector, build_owlvit_detector
+        from vibe_photos.ml.models import get_siglip_embedding_model
+
+        cache_root = self._cache_root
+        regions_dir = cache_root / "regions"
+        regions_dir.mkdir(parents=True, exist_ok=True)
+
+        detection_cfg = self._settings.models.detection
+
+        if detection_cfg.backend != "owlvit":
+            self._logger.info(
+                "region_detection_backend_unsupported",
+                extra={"backend": detection_cfg.backend},
+            )
+            return
+
+        try:
+            detector: OwlVitDetector = build_owlvit_detector(settings=self._settings)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._logger.error(
+                "region_detector_init_error",
+                extra={"backend": detection_cfg.backend, "model_name": detection_cfg.model_name, "error": str(exc)},
+            )
+            return
+
+        siglip_processor, siglip_model, siglip_device = get_siglip_embedding_model(settings=self._settings)
+
+        # Candidate labels for SigLIP re-ranking (can be aligned with label dictionary in future milestones).
+        candidate_labels = [
+            "phone",
+            "smartphone",
+            "iPhone",
+            "Android phone",
+            "computer",
+            "laptop",
+            "MacBook",
+            "tablet",
+            "iPad",
+            "headphones",
+            "AirPods",
+            "camera",
+            "food",
+            "pizza",
+            "burger",
+            "sushi",
+            "noodles",
+            "dessert",
+            "cake",
+            "document",
+            "book",
+            "notes",
+            "person",
+            "people",
+            "landscape",
+            "architecture",
+            "building",
+            "animal",
+            "pet",
+        ]
+
+        import numpy as np
+        from PIL import Image as _Image
+
+        active_rows = primary_session.execute(
+            select(Image.image_id, Image.primary_path).where(Image.status == "active").order_by(Image.image_id)
+        )
+        paths_by_id: Dict[str, str] = {row.image_id: row.primary_path for row in active_rows}
+
+        if not paths_by_id:
+            self._logger.info("region_detection_noop", extra={})
+            return
+
+        process_ids = sorted(paths_by_id.keys())
+
+        if self._settings.pipeline.skip_duplicates_for_heavy_models:
+            duplicate_rows = primary_session.execute(select(ImageNearDuplicate.duplicate_image_id))
+            duplicate_ids = {row.duplicate_image_id for row in duplicate_rows}
+            process_ids = [image_id for image_id in process_ids if image_id not in duplicate_ids]
+
+        # Pre-compute text embeddings for candidate labels once.
+        import torch
+
+        text_inputs = siglip_processor(text=candidate_labels, padding=True, return_tensors="pt")
+        text_inputs = text_inputs.to(siglip_device)
+        with torch.no_grad():
+            text_emb = siglip_model.get_text_features(**text_inputs)
+        text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
+
+        updated_rows = 0
+        now = time.time()
+
+        for image_id in process_ids:
+            path_str = paths_by_id[image_id]
+            try:
+                image = _Image.open(path_str).convert("RGB")
+            except Exception as exc:
+                self._logger.error(
+                    "region_detection_image_open_error",
+                    extra={"image_id": image_id, "path": path_str, "error": str(exc)},
+                )
+                continue
+
+            try:
+                detections = detector.detect(image=image, prompts=candidate_labels)
+            except Exception as exc:  # pragma: no cover - defensive
+                self._logger.error(
+                    "region_detection_backend_error",
+                    extra={"image_id": image_id, "path": path_str, "error": str(exc)},
+                )
+                continue
+
+            # Remove any existing regions for this image_id to keep results consistent with the current model.
+            primary_session.execute(
+                delete(ImageRegion).where(ImageRegion.image_id == image_id)
+            )
+
+            width, height = image.size
+
+            # Prepare SigLIP inputs for region crops.
+            region_images: List["_Image.Image"] = []
+            region_indices: List[int] = []
+
+            for index, det in enumerate(detections):
+                x_min_px = int(max(0, min(width, round(det.bbox.x_min * width))))
+                y_min_px = int(max(0, min(height, round(det.bbox.y_min * height))))
+                x_max_px = int(max(0, min(width, round(det.bbox.x_max * width))))
+                y_max_px = int(max(0, min(height, round(det.bbox.y_max * height))))
+
+                if x_max_px <= x_min_px or y_max_px <= y_min_px:
+                    continue
+
+                crop = image.crop((x_min_px, y_min_px, x_max_px, y_max_px))
+                region_images.append(crop)
+                region_indices.append(index)
+
+            refined_labels: Dict[int, str] = {}
+            refined_scores: Dict[int, float] = {}
+
+            if region_images:
+                region_inputs = siglip_processor(images=region_images, return_tensors="pt")
+                region_inputs = region_inputs.to(siglip_device)
+
+                with torch.no_grad():
+                    region_emb = siglip_model.get_image_features(**region_inputs)
+
+                region_emb = region_emb / region_emb.norm(dim=-1, keepdim=True)
+                logits = region_emb @ text_emb.T
+                probs = torch.softmax(logits, dim=-1)
+                probs_cpu = probs.detach().cpu().numpy()
+
+                for idx, region_index in enumerate(region_indices):
+                    row = probs_cpu[idx]
+                    best_pos = int(row.argmax())
+                    best_label = candidate_labels[best_pos]
+                    best_score = float(row[best_pos])
+                    refined_labels[region_index] = best_label
+                    refined_scores[region_index] = best_score
+
+            # Persist regions to SQLite and cache JSON.
+            region_payloads = []
+
+            for index, det in enumerate(detections):
+                refined_label = refined_labels.get(index)
+                refined_score = refined_scores.get(index)
+
+                primary_session.add(
+                    ImageRegion(
+                        image_id=image_id,
+                        region_index=index,
+                        x_min=float(det.bbox.x_min),
+                        y_min=float(det.bbox.y_min),
+                        x_max=float(det.bbox.x_max),
+                        y_max=float(det.bbox.y_max),
+                        detector_label=det.label,
+                        detector_score=float(det.score),
+                        refined_label=refined_label,
+                        refined_score=refined_score,
+                        backend=det.backend,
+                        model_name=det.model_name,
+                        updated_at=now,
+                    )
+                )
+
+                region_payloads.append(
+                    {
+                        "bbox": {
+                            "x_min": float(det.bbox.x_min),
+                            "y_min": float(det.bbox.y_min),
+                            "x_max": float(det.bbox.x_max),
+                            "y_max": float(det.bbox.y_max),
+                        },
+                        "detector_label": det.label,
+                        "detector_score": float(det.score),
+                        "refined_label": refined_label,
+                        "refined_score": refined_score,
+                    }
+                )
+
+            primary_session.commit()
+            updated_rows += len(region_payloads)
+
+            payload = {
+                "image_id": image_id,
+                "backend": detection_cfg.backend,
+                "model_name": detection_cfg.model_name,
+                "updated_at": now,
+                "detections": region_payloads,
+            }
+            cache_path = regions_dir / f"{image_id}.json"
+            cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        self._logger.info(
+            "region_detection_complete",
+            extra={"regions_created": updated_rows},
+        )
 
     def _run_scene_classification(self, primary_session, _projection_session) -> None:
         """Run lightweight scene classification based on cached embeddings."""
@@ -618,7 +843,7 @@ class PreprocessingPipeline:
             inputs = inputs.to(blip_device)
 
             with torch.no_grad():
-                generated_ids = blip_model.generate(**inputs, padding="max_length")
+                generated_ids = blip_model.generate(**inputs)
 
             for idx, image_id in enumerate(valid_ids):
                 token_ids = generated_ids[idx]
@@ -694,9 +919,9 @@ class PreprocessingPipeline:
             image_id = row.image_id
             path_str = row.primary_path
             try:
-                from PIL import Image
+                from PIL import Image as _ImagePhash
 
-                image = Image.open(path_str)
+                image = _ImagePhash.open(path_str)
                 width, height = image.size
             except Exception as exc:
                 self._logger.error("phash_image_open_error", extra={"image_id": image_id, "path": path_str, "error": str(exc)})
@@ -738,40 +963,52 @@ class PreprocessingPipeline:
         self._logger.info("phash_update_complete", extra={"updated_count": phash_updated})
 
         rows = primary_session.execute(
-            select(Image.image_id, Image.phash).where(
+            select(Image.image_id, Image.phash, Image.mtime).where(
                 and_(Image.status == "active", Image.phash.is_not(None), Image.phash_algo == PHASH_ALGO)
             )
         )
 
-        BUCKET_PREFIX_HEX_LEN = 4  # 16 high bits
-        HAMMING_THRESHOLD = 12
+        threshold = self._settings.pipeline.phash_hamming_threshold
+        if threshold <= 0:
+            threshold = 12
 
-        buckets: Dict[str, List[Dict[str, str]]] = {}
+        # Collect pHash-bearing images with mtime for anchor selection.
+        items: List[Dict[str, object]] = []
         for row in rows:
-            phash_hex = row.phash
-            if not phash_hex or len(phash_hex) < BUCKET_PREFIX_HEX_LEN:
+            if not row.phash:
                 continue
-            prefix = phash_hex[:BUCKET_PREFIX_HEX_LEN]
-            buckets.setdefault(prefix, []).append({"image_id": row.image_id, "phash": phash_hex})
+            try:
+                ph_int = int(row.phash, 16)
+            except (TypeError, ValueError):
+                continue
+            items.append({"image_id": row.image_id, "phash_int": ph_int, "mtime": float(row.mtime or 0.0)})
 
-        near_pairs: List[tuple[str, str, int]] = []
-        for prefix, items in buckets.items():
-            items_sorted = sorted(items, key=lambda item: item["image_id"])
+        if not items:
+            near_pairs: List[tuple[str, str, int]] = []
+        else:
+            # Newest-first order for anchor selection.
+            items.sort(key=lambda item: item["mtime"], reverse=True)
+
+            ids: List[str] = [str(item["image_id"]) for item in items]
+            ph_ints: List[int] = [int(item["phash_int"]) for item in items]
+
+            near_pairs = []
             used: set[str] = set()
-            for i, anchor in enumerate(items_sorted):
-                anchor_id = anchor["image_id"]
+            n = len(ids)
+            for i in range(n):
+                anchor_id = ids[i]
                 if anchor_id in used:
                     continue
-                anchor_phash = anchor["phash"]
-                for candidate in items_sorted[i + 1 :]:
-                    candidate_id = candidate["image_id"]
+                anchor_int = ph_ints[i]
+                used.add(anchor_id)
+                for j in range(i + 1, n):
+                    candidate_id = ids[j]
                     if candidate_id in used:
                         continue
-                    distance = hamming_distance_phash(anchor_phash, candidate["phash"])
-                    if distance <= HAMMING_THRESHOLD:
+                    distance = int((anchor_int ^ ph_ints[j]).bit_count())
+                    if distance <= threshold:
                         near_pairs.append((anchor_id, candidate_id, distance))
                         used.add(candidate_id)
-                used.add(anchor_id)
 
         primary_session.execute(delete(ImageNearDuplicate))
         for anchor_id, duplicate_id, distance in near_pairs:
@@ -787,7 +1024,7 @@ class PreprocessingPipeline:
 
         self._logger.info(
             "phash_and_duplicates_complete",
-            extra={"phash_updated": phash_updated, "near_duplicate_pairs": len(near_pairs)},
+            extra={"phash_updated": phash_updated, "near_duplicate_pairs": len(near_pairs), "threshold": threshold},
         )
 
 

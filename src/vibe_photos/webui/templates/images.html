@@ -23,6 +23,18 @@
         Document:
         <input type="checkbox" name="is_document" value="1" {% if is_document in ["1", "true", "yes"] %}checked{% endif %} />
       </label>
+      <label>
+        Has near duplicates:
+        <input type="checkbox" name="has_duplicates" value="1" {% if has_duplicates in ["1", "true", "yes"] %}checked{% endif %} />
+      </label>
+      <label>
+        Hide duplicate images:
+        <input type="checkbox" name="hide_duplicates" value="1" {% if hide_duplicates in ["1", "true", "yes"] %}checked{% endif %} />
+      </label>
+      <label>
+        Object (refined label):
+        <input type="text" name="region_label" value="{{ region_label or '' }}" />
+      </label>
       <button type="submit">Apply</button>
     </form>
   </div>
@@ -33,13 +45,22 @@
         <a href="{{ url_for('image_detail', image_id=image.image_id) }}">
           <img src="{{ url_for('image_thumbnail', image_id=image.image_id) }}" alt="thumbnail" />
         </a>
-        <div>{{ image.image_id }}</div>
-        <div>{{ image.scene_type }}</div>
-        <div>
-          {% if image.has_person %}👤{% endif %}
-          {% if image.has_text %}🔤{% endif %}
-          {% if image.is_screenshot %}🖥{% endif %}
-          {% if image.is_document %}📄{% endif %}
+        <div style="margin-top: 0.25rem; font-size: 0.8rem; color: #555;">
+          <div title="{{ image.image_id }}">{{ image.image_id[:12] }}…</div>
+          <div>
+            {% if image.scene_type %}
+              <span class="pill">{{ image.scene_type }}</span>
+            {% endif %}
+            {% if image.is_duplicate %}
+              <span class="pill" style="background:#ffe5e5; color:#a33; margin-left:0.25rem;">DUP</span>
+            {% endif %}
+          </div>
+          <div style="margin-top: 0.15rem;">
+            {% if image.has_person %}👤{% endif %}
+            {% if image.has_text %}🔤{% endif %}
+            {% if image.is_screenshot %}🖥{% endif %}
+            {% if image.is_document %}📄{% endif %}
+          </div>
         </div>
       </div>
     {% endfor %}
@@ -52,12 +73,11 @@
     </p>
     <p>
       {% if page > 1 %}
-        <a href="{{ url_for('images', page=page-1, page_size=page_size, scene_type=scene_type, has_text=has_text, has_person=has_person, is_screenshot=is_screenshot, is_document=is_document) }}">Previous</a>
+        <a href="{{ url_for('images', page=page-1, page_size=page_size, scene_type=scene_type, has_text=has_text, has_person=has_person, is_screenshot=is_screenshot, is_document=is_document, has_duplicates=has_duplicates, hide_duplicates=hide_duplicates, region_label=region_label) }}">Previous</a>
       {% endif %}
       {% if page * page_size < total %}
-        <a href="{{ url_for('images', page=page+1, page_size=page_size, scene_type=scene_type, has_text=has_text, has_person=has_person, is_screenshot=is_screenshot, is_document=is_document) }}">Next</a>
+        <a href="{{ url_for('images', page=page+1, page_size=page_size, scene_type=scene_type, has_text=has_text, has_person=has_person, is_screenshot=is_screenshot, is_document=is_document, has_duplicates=has_duplicates, hide_duplicates=hide_duplicates, region_label=region_label) }}">Next</a>
       {% endif %}
     </p>
   </div>
 {% endblock %}
-

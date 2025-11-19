@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from flask import Flask, abort, redirect, render_template, request, send_file, url_for
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 
 from utils.logging import get_logger
-from vibe_photos.db import Image, ImageCaption, ImageScene, open_primary_session
+from vibe_photos.db import Image, ImageCaption, ImageNearDuplicate, ImageRegion, ImageScene, open_primary_session
 
 
 LOGGER = get_logger(__name__)
@@ -37,6 +37,11 @@ def images() -> Any:
     has_person = request.args.get("has_person")
     is_screenshot = request.args.get("is_screenshot")
     is_document = request.args.get("is_document")
+    has_duplicates = request.args.get("has_duplicates")
+    hide_duplicates = request.args.get("hide_duplicates")
+    if not request.args:
+        hide_duplicates = "1"
+    region_label = request.args.get("region_label") or ""
 
     page = max(1, int(request.args.get("page", "1")))
     page_size = max(1, min(64, int(request.args.get("page_size", "24"))))
@@ -62,41 +67,79 @@ def images() -> Any:
     primary_path = _get_primary_db_path()
 
     with open_primary_session(primary_path) as session:
-        base_query = (
-            select(ImageScene.image_id)
-            .join(Image, Image.image_id == ImageScene.image_id)
-            .where(and_(*filters))
-        )
+        base_query = select(Image.image_id).where(Image.status == "active")
+        if filters:
+            base_query = base_query.join(ImageScene, ImageScene.image_id == Image.image_id, isouter=True).where(
+                and_(*filters)
+            )
+        if region_label:
+            base_query = (
+                base_query.join(ImageRegion, ImageRegion.image_id == Image.image_id).where(
+                    ImageRegion.refined_label == region_label
+                )
+            )
+        if hide_duplicates and hide_duplicates.lower() in {"1", "true", "yes"}:
+            dup_subq = select(ImageNearDuplicate.duplicate_image_id)
+            base_query = base_query.where(~Image.image_id.in_(dup_subq))
+        if has_duplicates and has_duplicates.lower() in {"1", "true", "yes"}:
+            base_query = (
+                base_query.join(
+                    ImageNearDuplicate,
+                    or_(
+                        ImageNearDuplicate.anchor_image_id == Image.image_id,
+                        ImageNearDuplicate.duplicate_image_id == Image.image_id,
+                    ),
+                ).distinct(ImageScene.image_id)
+            )
         total_stmt = select(func.count()).select_from(base_query.subquery())
         total = int(session.execute(total_stmt).scalar_one())
 
-        query_stmt = (
-            select(
-                ImageScene.image_id,
-                ImageScene.scene_type,
-                ImageScene.has_text,
-                ImageScene.has_person,
-                ImageScene.is_screenshot,
-                ImageScene.is_document,
+        query_stmt = select(
+            Image.image_id,
+            ImageScene.scene_type,
+            ImageScene.has_text,
+            ImageScene.has_person,
+            ImageScene.is_screenshot,
+            ImageScene.is_document,
+        ).join(ImageScene, ImageScene.image_id == Image.image_id, isouter=True).where(Image.status == "active")
+        if filters:
+            query_stmt = query_stmt.where(and_(*filters))
+        if region_label:
+            query_stmt = query_stmt.join(ImageRegion, ImageRegion.image_id == Image.image_id).where(
+                ImageRegion.refined_label == region_label
             )
-            .join(Image, Image.image_id == ImageScene.image_id)
-            .where(and_(*filters))
-            .order_by(ImageScene.image_id)
-            .limit(page_size)
-            .offset(offset)
-        )
-        rows = session.execute(query_stmt).all()
+            query_stmt = query_stmt.distinct(Image.image_id)
+        if hide_duplicates and hide_duplicates.lower() in {"1", "true", "yes"}:
+            dup_subq = select(ImageNearDuplicate.duplicate_image_id)
+            query_stmt = query_stmt.where(~Image.image_id.in_(dup_subq))
+        if has_duplicates and has_duplicates.lower() in {"1", "true", "yes"}:
+            query_stmt = query_stmt.join(
+                ImageNearDuplicate,
+                or_(
+                    ImageNearDuplicate.anchor_image_id == Image.image_id,
+                    ImageNearDuplicate.duplicate_image_id == Image.image_id,
+                ),
+            ).distinct(Image.image_id)
+        query_stmt = query_stmt.order_by(Image.image_id).limit(page_size).offset(offset)
+        rows = session.execute(query_stmt).mappings().all()
+
+        dup_ids = {
+            row.duplicate_image_id
+            for row in session.execute(select(ImageNearDuplicate.duplicate_image_id))
+        }
 
     items: List[Dict[str, Any]] = []
     for row in rows:
+        image_id = row["image_id"]
         items.append(
             {
-                "image_id": row["image_id"],
+                "image_id": image_id,
                 "scene_type": row["scene_type"],
                 "has_text": bool(row["has_text"]),
                 "has_person": bool(row["has_person"]),
                 "is_screenshot": bool(row["is_screenshot"]),
                 "is_document": bool(row["is_document"]),
+                "is_duplicate": image_id in dup_ids,
             }
         )
 
@@ -111,6 +154,9 @@ def images() -> Any:
         has_person=has_person or "",
         is_screenshot=is_screenshot or "",
         is_document=is_document or "",
+        has_duplicates=has_duplicates or "",
+        hide_duplicates=hide_duplicates or "",
+        region_label=region_label,
     )
 
 
@@ -132,6 +178,14 @@ def image_detail(image_id: str) -> Any:
                 select(ImageCaption.caption, ImageCaption.model_name).where(ImageCaption.image_id == image_id).order_by(ImageCaption.model_name)
             )
         ).first()
+
+        region_rows = (
+            session.execute(
+                select(ImageRegion).where(ImageRegion.image_id == image_id).order_by(ImageRegion.region_index)
+            )
+            .scalars()
+            .all()
+        )
 
     primary_path_str = image_row.primary_path
     logical_name = Path(primary_path_str).name
@@ -155,6 +209,76 @@ def image_detail(image_id: str) -> Any:
         caption_text = caption_row.caption
         caption_model = caption_row.model_name
 
+    # Near-duplicate images (both as anchor and as duplicate).
+    near_duplicates: List[Dict[str, Any]] = []
+    with open_primary_session(primary_path) as session:
+        anchor_rows = (
+            session.execute(
+                select(ImageNearDuplicate).where(ImageNearDuplicate.anchor_image_id == image_id)
+            )
+            .scalars()
+            .all()
+        )
+        duplicate_rows = (
+            session.execute(
+                select(ImageNearDuplicate).where(ImageNearDuplicate.duplicate_image_id == image_id)
+            )
+            .scalars()
+            .all()
+        )
+
+        related_ids: Dict[str, Dict[str, Any]] = {}
+
+        for row in anchor_rows:
+            other_id = row.duplicate_image_id
+            related_ids[other_id] = {
+                "image_id": other_id,
+                "role": "anchor",
+                "phash_distance": row.phash_distance,
+                "created_at": row.created_at,
+            }
+
+        for row in duplicate_rows:
+            other_id = row.anchor_image_id
+            existing = related_ids.get(other_id)
+            # Keep the smallest distance if multiple entries exist.
+            if existing is not None and existing.get("phash_distance", 1e9) <= row.phash_distance:
+                continue
+            related_ids[other_id] = {
+                "image_id": other_id,
+                "role": "duplicate",
+                "phash_distance": row.phash_distance,
+                "created_at": row.created_at,
+            }
+
+        for other_id, meta in related_ids.items():
+            other_image = session.get(Image, other_id)
+            if other_image is None:
+                continue
+            meta["status"] = other_image.status
+            meta["primary_path"] = other_image.primary_path
+            near_duplicates.append(meta)
+
+    near_duplicates.sort(key=lambda item: (item.get("phash_distance", 0), item["image_id"]))
+
+    regions: List[Dict[str, Any]] = []
+    for region in region_rows:
+        regions.append(
+            {
+                "index": region.region_index,
+                "x_min": region.x_min,
+                "y_min": region.y_min,
+                "x_max": region.x_max,
+                "y_max": region.y_max,
+                "detector_label": region.detector_label,
+                "detector_score": region.detector_score,
+                "refined_label": region.refined_label,
+                "refined_score": region.refined_score,
+                "backend": region.backend,
+                "model_name": region.model_name,
+            }
+        )
+
     return render_template(
         "image_detail.html",
         image_id=image_id,
@@ -167,6 +291,8 @@ def image_detail(image_id: str) -> Any:
         scene=scene_info,
         caption=caption_text,
         caption_model=caption_model,
+        near_duplicates=near_duplicates,
+        regions=regions,
         phash=image_row.phash,
         phash_algo=image_row.phash_algo,
     )

@@ -1,0 +1,36 @@
+# Example configuration for model choices and preprocessing pipeline.
+# Copy this file to `config/settings.yaml` and adjust paths and values
+# for your local environment. The `./init_project.sh` script will also
+# create a baseline `settings.yaml` if it does not exist.
+
+models:
+  embedding:
+    backend: "siglip"
+    model_name: "google/siglip2-base-patch16-224"
+    device: "auto"           # "cuda", "mps", or "cpu"
+    batch_size: 16
+
+  caption:
+    backend: "blip"
+    model_name: "Salesforce/blip-image-captioning-base"
+    device: "auto"
+    batch_size: 4
+
+  detection:
+    enabled: true            # M1: detection optional
+    backend: "owlvit"        # or "grounding-dino" in future milestones
+    model_name: "google/owlvit-base-patch32"
+    device: "auto"
+    max_regions_per_image: 10
+    score_threshold: 0.25
+
+  ocr:
+    enabled: false           # M1 MUST work with OCR disabled
+
+pipeline:
+  # Whether to run detection step in M1.
+  run_detection: true
+  # Whether to skip heavy models for near-duplicates.
+  skip_duplicates_for_heavy_models: true
+  # Hamming distance threshold for near-duplicate grouping (default 12).
+  phash_hamming_threshold: 16

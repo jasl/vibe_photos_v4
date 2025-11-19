@@ -298,7 +298,7 @@ def build_siglip_coarse_classifier(
             inputs = inputs.to(device)
 
         with torch.no_grad():
-            text_embeddings = siglip_model.get_text_features(**inputs)
+            text_embeddings = siglip_model.get_text_features(**inputs).detach().cpu()
 
         return text_embeddings
 

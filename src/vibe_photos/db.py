@@ -116,6 +116,36 @@ class ImageNearDuplicate(Base):
     __table_args__ = (Index("idx_image_near_duplicate_duplicate", "duplicate_image_id"),)
 
 
+class ImageRegion(Base):
+    """Object-level detection regions for an image."""
+
+    __tablename__ = "image_region"
+
+    image_id: Mapped[str] = mapped_column(String, primary_key=True)
+    region_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    x_min: Mapped[float] = mapped_column(Float, nullable=False)  # normalized [0, 1]
+    y_min: Mapped[float] = mapped_column(Float, nullable=False)
+    x_max: Mapped[float] = mapped_column(Float, nullable=False)
+    y_max: Mapped[float] = mapped_column(Float, nullable=False)
+
+    detector_label: Mapped[str] = mapped_column(String, nullable=False)
+    detector_score: Mapped[float] = mapped_column(Float, nullable=False)
+
+    refined_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    refined_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    backend: Mapped[str] = mapped_column(String, nullable=False)
+    model_name: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("idx_image_region_image_id", "image_id"),
+        Index("idx_image_region_detector_label", "detector_label"),
+        Index("idx_image_region_refined_label", "refined_label"),
+    )
+
+
 _ENGINE_CACHE: Dict[Path, Engine] = {}
 
 
@@ -163,6 +193,7 @@ def reset_projection_tables(session: Session) -> None:
     session.execute(delete(ImageEmbedding))
     session.execute(delete(ImageCaption))
     session.execute(delete(ImageNearDuplicate))
+    session.execute(delete(ImageRegion))
     session.commit()
 
 
@@ -172,6 +203,7 @@ __all__ = [
     "ImageCaption",
     "ImageEmbedding",
     "ImageNearDuplicate",
+    "ImageRegion",
     "ImageScene",
     "open_primary_session",
     "open_projection_session",
