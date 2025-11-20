@@ -197,8 +197,8 @@ CREATE INDEX IF NOT EXISTS idx_image_near_duplicate_duplicate
 ```
 
 By convention:
-- `anchor_image_id` identifies the canonical representative of a near-duplicate group (for example, the first image in sorted `image_id` order).
-- `duplicate_image_id` is another image assigned to that group where the Hamming distance between `phash` values is within the configured threshold (for M1, `<= 12`).
+- `anchor_image_id` identifies the canonical representative of a near-duplicate group (current implementation picks the newer `mtime`, ties by `image_id`).
+- `duplicate_image_id` is another image assigned to that group where the Hamming distance between `phash` values is within the configured threshold (current default `<= 16`; override via `pipeline.phash_hamming_threshold`).
 
 ## 5. Pipeline Design
 All model and pipeline parameters (model IDs, devices, batch sizes, duplicate handling, detection toggles) are read from `config/settings.yaml` via `vibe_photos.config.load_settings()`. The CLI MAY provide overrides for common options (for example `--batch-size`, `--device`), and these take precedence over config values when supplied.
@@ -208,10 +208,11 @@ All model and pipeline parameters (model IDs, devices, batch sizes, duplicate ha
 - M1 expects the following fields (see also `config/settings.example.yaml`):
   - `models.embedding`: SigLIP embedding model configuration (backend, `model_name` or `preset`, `device`, `batch_size`).
   - `models.caption`: BLIP captioning model configuration (backend, `model_name` or `preset`, `device`, `batch_size`).
-  - `models.detection`: optional detection model; for M1, `enabled` SHOULD remain `false`.
+  - `models.detection`: optional detection model; the current repository defaults to OWL-ViT enabled (`enabled: true`) with `pipeline.run_detection: true`. Set both to `false` for CPU-only runs or when you want to skip detection.
   - `models.ocr`: OCR configuration; for M1, `enabled` MUST remain `false` so preprocessing works without OCR.
-  - `pipeline.run_detection`: whether to run detection in the preprocessing pipeline; default is `false` in M1.
+  - `pipeline.run_detection`: whether to run detection in the preprocessing pipeline; default is `true` in this branch.
   - `pipeline.skip_duplicates_for_heavy_models`: when `true`, SigLIP embeddings and BLIP captions are computed only for canonical representatives of duplicate/near-duplicate groups.
+  - `pipeline.phash_hamming_threshold`: pHash near-duplicate threshold; this branch uses `16` by default (instead of the original `12`), with gating logic keyed off `duplicate_image_id` rows.
 - A minimal M1 configuration (after copying `settings.example.yaml` to `settings.yaml`) might look like:
 
 ```yaml
@@ -228,9 +229,18 @@ models:
     device: auto
     batch_size: 4
 
+  detection:
+    enabled: true
+    backend: owlvit
+    model_name: google/owlvit-base-patch32
+    device: auto
+    max_regions_per_image: 5
+    score_threshold: 0.2
+
 pipeline:
-  run_detection: false
+  run_detection: true
   skip_duplicates_for_heavy_models: true
+  phash_hamming_threshold: 16
 ```
 
 ### 5.0 CLI Parameters
@@ -322,25 +332,19 @@ pipeline:
     - Set a bit to 1 if `coeff > median`, else 0, producing a 64-bit value.
     - Store as a 16-character hexadecimal string (`phash`), with `phash_algo = "phash64-v2"`.
   - Write back `phash`, `phash_algo`, and `phash_updated_at` in the `images` table.
-- Implementation guidance:
-  - Prefer reusing decoded images from the scene classification stage to avoid duplicate I/O:
-    - Batch load images once.
-    - Run SigLIP scene classification.
-    - Reuse the in-memory images to compute `phash` in the same pass.
-  - Keep the phash algorithm encapsulated (for example in a `visual_hash` helper) so that later algorithm upgrades can be versioned via `phash_algo`.
-  - To keep near-duplicate grouping efficient for tens of thousands of images, bucket images by the high bits of `phash` (for example the top 16 bits) and only compute full Hamming distances within buckets.
+- Implementation (current code path):
+  - Uses the above DCT-based pHash algorithm and sets `phash_algo = "phash64-v2"`.
+  - Near-duplicate grouping runs incrementally against “dirty” images (new or content-changed) and compares each dirty image against all active pHashes without bucketing. Items are sorted by `mtime` descending; anchors are chosen by newer `mtime`, tied by `image_id`. When the table is empty, the first run compares all pairs. This keeps heavy-model gating deterministic for a fixed set of mtimes but can change anchors if mtimes change.
+  - Heavy models skip any `duplicate_image_id` found in `image_near_duplicate`; the `anchor_image_id` is treated as the canonical representative for embeddings/captions when `skip_duplicates_for_heavy_models` is `true`.
 - Incremental behavior:
   - When `image_id` (content hash) changes, treat the asset as a new image and recompute `phash`.
   - When only `primary_path` changes but `image_id` remains stable, do not recompute `phash`.
   - When the configured algorithm version changes (for example from `"phash64-v2"` to `"phash64-v3"`), select rows where `phash_algo != current_algo` and recompute.
 - Near-duplicate grouping:
-  - Define near-duplicates using the Hamming distance between 64-bit `phash` values: two active images are considered near-duplicates when `distance(phash_a, phash_b) <= 12`.
-  - Periodically (for example as a separate stage after phash computation), build near-duplicate groups by:
-    - Selecting all active images with non-null `phash`.
-    - Sorting them deterministically by `image_id`.
-    - Iterating in order and treating each unassigned image as an `anchor_image_id`; for each anchor, assign as `duplicate_image_id` any remaining unassigned images within the Hamming distance threshold, ensuring each image participates in at most one group.
-  - Persist the resulting relationships into the `image_near_duplicate` table in `cache/index.db`, truncating and rebuilding the table on each full near-duplicate pass.
-  - For the target scale of ~30,000 photos, a single-threaded near-duplicate grouping pass using prefix buckets SHOULD complete within a few minutes on a modern CPU; future milestones may introduce more advanced indexing if needed.
+  - Define near-duplicates using the Hamming distance between 64-bit `phash` values: two active images are considered near-duplicates when `distance(phash_a, phash_b) <= 16` (repository default; override via `pipeline.phash_hamming_threshold`).
+  - The current implementation rebuilds pairs for dirty images by comparing against all active pHashes (no prefix buckets). Anchors are selected by newer `mtime` (tie-break on `image_id`); pairs are written to both `cache/index.db` and `data/index.db` and are incremental unless the table is empty.
+  - Heavy-model gating relies on `duplicate_image_id` membership; change detection clears prior pairs for dirty IDs before recomputing.
+  - Bucketing by high pHash bits remains a future optimization if scale/perf requires it.
 
 ### 5.6 Error Handling
 - Corrupt/unreadable images do not halt the run; record `status="error"` and `error_message`.
@@ -412,12 +416,13 @@ project_root/
 - `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db --cache-db cache/index.db --batch-size 16 --device cpu|cuda`:
   - Populates `images` with active assets, content hashes (`image_id`), and perceptual hashes (`phash`) for all decodable images.
   - Populates `image_scene` for active images and writes corresponding cache files under `cache/detections/`; records errors without stopping.
-  - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 12`) and persists them into `image_near_duplicate` in `cache/index.db`.
-  - Computes SigLIP embeddings and BLIP captions for canonical images and persists them under `cache/embeddings/` and `cache/captions/`, with optional projections into `image_embedding` and `image_caption`.
+  - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 16` by default) and persists them into `image_near_duplicate` in both cache and primary databases.
+  - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 16` by default) and persists them into `image_near_duplicate` in both `cache/index.db` and `data/index.db`; anchors are chosen by `mtime` and tie-broken by `image_id`.
+  - Computes SigLIP embeddings and BLIP captions for canonical images and persists them under `cache/embeddings/` and `cache/captions/`, with projections into `image_embedding` and `image_caption`.
 - Preprocessing respects `config/settings.yaml` defaults for model IDs, devices, batch sizes, and pipeline flags, with CLI arguments overriding config values when supplied.
 - Re-running skips unchanged images; updates new/modified assets; flags missing paths appropriately.
 - Interrupted runs can resume from recorded checkpoints/batch cursors without reprocessing completed work.
-- Flask UI (`FLASK_APP=vibe_photos.webui uv run flask run`) loads list and detail pages with working filters and pagination, serving thumbnails from `cache/images/thumbnails/` when available.
+- Flask UI (`FLASK_APP=vibe_photos.webui uv run flask run`) loads list and detail pages with working filters and pagination, serving thumbnails from `cache/images/thumbnails/` when available. By default, detection is enabled; disable it via configuration for CPU-only environments.
 
 ### Performance & Stability
 - Models load once; batches reuse loaded weights.
