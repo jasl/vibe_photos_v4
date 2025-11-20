@@ -24,6 +24,15 @@ Environment Setup
   - `TRANSFORMERS_CACHE=./models/transformers`
   - `PADDLEOCR_HOME=./models/paddleocr`
 
+Pre-downloading Models
+----------------------
+
+Fetch the configured Hugging Face checkpoints ahead of running the pipeline to avoid first-request downloads:
+
+- `uv run python -m vibe_photos.dev.download_models`
+  - Pass `--include-detection` to download the optional OWL-ViT weights even when `models.detection.enabled` is false.
+  - Pass `--skip-detection` to omit detection downloads when they are not needed.
+
 GPU Acceleration (CUDA)
 -----------------------
 
