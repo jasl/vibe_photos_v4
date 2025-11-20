@@ -11,8 +11,10 @@ from flask import Flask, abort, redirect, render_template, request, send_file, u
 from sqlalchemy import and_, func, or_, select
 
 from utils.logging import get_logger
+from vibe_photos.artifact_store import ArtifactSpec
 from vibe_photos.config import load_settings
-from vibe_photos.db import Image, ImageCaption, ImageNearDuplicate, ImageRegion, ImageScene, open_primary_session
+from vibe_photos.db import ArtifactRecord, Image, ImageCaption, ImageNearDuplicate, ImageRegion, ImageScene
+from vibe_photos.db import open_primary_session, open_projection_session
 
 
 LOGGER = get_logger(__name__)
@@ -26,6 +28,10 @@ _CACHE_ROOT = _PROJECT_ROOT / "cache"
 
 def _get_primary_db_path() -> Path:
     return _DATA_ROOT / "index.db"
+
+
+def _get_projection_db_path() -> Path:
+    return _DATA_ROOT / "projection.db"
 
 
 @app.route("/")
@@ -354,7 +360,19 @@ def image_detail(image_id: str) -> Any:
 def image_thumbnail(image_id: str) -> Any:
     """Serve an image thumbnail or original content by logical identifier."""
 
+    variant = request.args.get("variant") or "large"
+    settings = load_settings()
+    if variant == "small":
+        thumb_spec = ArtifactSpec(
+            artifact_type="thumbnail_small", model_name="pil", params={"size": min(256, settings.pipeline.thumbnail_size)}
+        )
+    else:
+        thumb_spec = ArtifactSpec(
+            artifact_type="thumbnail_large", model_name="pil", params={"size": max(1024, settings.pipeline.thumbnail_size)}
+        )
+
     primary_path = _get_primary_db_path()
+    projection_path = _get_projection_db_path()
 
     with open_primary_session(primary_path) as session:
         row = session.execute(
@@ -366,9 +384,27 @@ def image_thumbnail(image_id: str) -> Any:
         path_str = row.primary_path
         phash_hex = row.phash
 
-    thumb_path = _CACHE_ROOT / "images" / "thumbnails" / f"{image_id}.jpg"
+    thumb_path: Path | None = None
+    with open_projection_session(projection_path) as projection_session:
+        artifact_row = projection_session.execute(
+            select(ArtifactRecord.storage_path).where(
+                ArtifactRecord.image_id == image_id,
+                ArtifactRecord.artifact_type == thumb_spec.artifact_type,
+                ArtifactRecord.version_key == thumb_spec.version_key,
+                ArtifactRecord.status == "complete",
+            )
+        ).scalar_one_or_none()
+        if artifact_row is not None:
+            candidate = Path(artifact_row)
+            if not candidate.is_absolute():
+                candidate = _PROJECT_ROOT / candidate
+            thumb_path = candidate if candidate.exists() else None
 
-    if thumb_path.exists():
+    if thumb_path is None:
+        legacy_cache_path = _CACHE_ROOT / "images" / "thumbnails" / f"{image_id}.jpg"
+        thumb_path = legacy_cache_path if legacy_cache_path.exists() else None
+
+    if thumb_path is not None:
         try:
             return send_file(thumb_path)
         except FileNotFoundError as exc:
