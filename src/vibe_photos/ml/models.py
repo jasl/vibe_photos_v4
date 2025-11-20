@@ -10,7 +10,7 @@ from typing import Tuple
 
 import torch
 from torch import device as TorchDevice
-from transformers import AutoModel, AutoModelForImageTextToText, AutoProcessor, PreTrainedModel
+from transformers import AutoModel, AutoModelForSeq2SeqLM, AutoProcessor, PreTrainedModel
 
 from vibe_photos.config import EmbeddingModelConfig, CaptionModelConfig, Settings, load_settings
 
@@ -96,7 +96,7 @@ def _load_blip_caption(config: CaptionModelConfig) -> Tuple[AutoProcessor, PreTr
         return _BLIP_PROCESSOR, _BLIP_MODEL, _BLIP_DEVICE
 
     processor = AutoProcessor.from_pretrained(model_name, use_fast=True)
-    model = AutoModelForImageTextToText.from_pretrained(model_name).to(device)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
     model.eval()
 
     _BLIP_PROCESSOR = processor
