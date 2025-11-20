@@ -1,26 +1,27 @@
-# Example configuration for model choices and preprocessing pipeline.
-# Copy this file to `config/settings.yaml` and adjust paths and values
-# for your local environment. The `./init_project.sh` script will also
-# create a baseline `settings.yaml` if it does not exist.
+# Performance configuration targeting ~96GB GPU memory.
+# For a conservative baseline, see `config/settings.example.yaml`.
+# Adjust paths and values for your local environment. The
+# `./init_project.sh` script will also create a baseline `settings.yaml`
+# if it does not exist.
 
 models:
   embedding:
     backend: "siglip"
     model_name: "google/siglip2-base-patch16-224"
-    device: "auto"           # "cuda", "mps", or "cpu"
-    batch_size: 8            # smaller batch to cap memory per worker
+    device: "auto"
+    batch_size: 16
 
   caption:
     backend: "blip"
     model_name: "Salesforce/blip-image-captioning-base"
     device: "auto"
-    batch_size: 2
+    batch_size: 4
 
   detection:
-    enabled: true            # M1: detection optional
+    enabled: true
     backend: "owlvit"        # or "grounding-dino" in future milestones
     model_name: "google/owlvit-base-patch32"
-    device: "auto"
+    device: "cuda"
     max_regions_per_image: 5
     score_threshold: 0.20
     # Class-agnostic non-max suppression for overlapping boxes.
@@ -151,3 +152,13 @@ pipeline:
   # How to store EXIF datetime in the database: "raw" uses the original camera string;
   # "iso" normalizes to an ISO-8601-like "YYYY-MM-DDTHH:MM:SS" format when parsing succeeds.
   exif_datetime_format: "iso"
+
+queues:
+  broker_url: "redis://localhost:6379/0"
+  result_backend: "redis://localhost:6379/1"
+  preprocess_queue: "pre_process"
+  main_queue: "process"
+  post_process_queue: "post_process"
+  default_concurrency: 4     # leverage 96GB GPU with per-process model copies
+  post_process_concurrency: 2
+  backfill_batch_size: 256
