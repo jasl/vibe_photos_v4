@@ -97,6 +97,7 @@ class DetectionModelConfig:
     caption_primary_box_margin_x: float = 0.2
     caption_primary_box_margin_y: float = 0.1
     caption_primary_keywords: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    caption_primary_use_label_groups: bool = True
     secondary_min_priority: float = 0.03
     secondary_min_relative_to_primary: float = 0.3
 
@@ -124,6 +125,30 @@ def _normalize_siglip_label(label: str) -> str:
         text = singular
 
     return text
+
+
+def _derive_caption_keywords_from_label_groups(label_groups: Dict[str, List[str]]) -> Dict[str, Dict[str, Any]]:
+    """Build caption fallback keywords from SigLIP label groups.
+
+    Each label becomes its own keyword-driven entry so captions can fall back to the
+    most specific token that SigLIP already knows about.
+    """
+
+    derived: Dict[str, Dict[str, Any]] = {}
+    seen_labels: set[str] = set()
+
+    for labels in label_groups.values():
+        for label in labels:
+            text = str(label).strip()
+            if not text:
+                continue
+            normalized = text.lower()
+            if normalized in seen_labels:
+                continue
+            seen_labels.add(normalized)
+            derived[text] = {"label": text, "keywords": [normalized]}
+
+    return derived
 
 
 @dataclass
@@ -408,6 +433,8 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         detection_cfg.caption_primary_box_margin_x = float(detection_raw["caption_primary_box_margin_x"])
     if isinstance(detection_raw.get("caption_primary_box_margin_y"), (int, float)):
         detection_cfg.caption_primary_box_margin_y = float(detection_raw["caption_primary_box_margin_y"])
+    if isinstance(detection_raw.get("caption_primary_use_label_groups"), bool):
+        detection_cfg.caption_primary_use_label_groups = detection_raw["caption_primary_use_label_groups"]
 
     caption_keywords_raw = _as_dict(detection_raw.get("caption_primary_keywords"))
     if caption_keywords_raw:
@@ -446,6 +473,11 @@ def load_settings(settings_path: Path | None = None) -> Settings:
                 parsed_label_groups[str(group_name)] = [str(label) for label in labels]
         if parsed_label_groups:
             siglip_labels_cfg.label_groups = parsed_label_groups
+
+    if detection_cfg.caption_primary_use_label_groups and siglip_labels_cfg.label_groups:
+        derived_caption_keywords = _derive_caption_keywords_from_label_groups(siglip_labels_cfg.label_groups)
+        merged_caption_keywords = {**derived_caption_keywords, **detection_cfg.caption_primary_keywords}
+        detection_cfg.caption_primary_keywords = merged_caption_keywords
 
     pipeline_raw = _as_dict(raw.get("pipeline"))
     pipeline_cfg = settings.pipeline

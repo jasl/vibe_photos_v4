@@ -34,22 +34,7 @@ models:
     caption_primary_min_priority: 0.02
     caption_primary_box_margin_x: 0.2
     caption_primary_box_margin_y: 0.1
-    caption_primary_keywords:
-      drink:
-        label: "drink"
-        keywords:
-          - "drink"
-          - "beverage"
-          - "glass of"
-          - "cocktail"
-          - "juice"
-          - "smoothie"
-          - "coffee"
-          - "tea"
-          - "beer"
-          - "wine"
-          - "soda"
-          - "soft drink"
+    caption_primary_use_label_groups: true    # derive fallback keywords from models.siglip_labels.label_groups
     # Filter out low-priority secondary regions after sorting.
     secondary_min_priority: 0.03
     secondary_min_relative_to_primary: 0.3
