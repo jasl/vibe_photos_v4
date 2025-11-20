@@ -57,3 +57,16 @@ Add new ADR entries here as decisions are made or revised.
   - Expensive model inference can be reused across milestones as long as model and pipeline versions remain compatible.
   - Schema migrations become simpler: drop and rebuild DBs from caches when appropriate.
   - Incremental processing logic can rely on cache metadata (hashes, timestamps, versions) to determine which photos need work.
+
+## ADR-007 — Updated Milestones: M2 as Perception Quality, M3 as Search & Tools on PostgreSQL/pgvector
+
+- **Context:** Early Phase Final documents described M2 as “Search & Tools on SQLite” and M3 as “Database & Deployment Upgrade”. In practice, M1 has already delivered a substantial preprocessing pipeline plus a basic debug UI, while real‑world usage surfaced that recognition quality (labels, detection, SigLIP prompts) is the main bottleneck before building full search tooling.
+- **Decision:** Reframe the milestones as:
+  1. M1 — Preprocessing & Feature Extraction (implemented in this repository).
+  2. M2 — Perception Quality & Labeling: focus on improving SigLIP label dictionaries/grouping, detection + SigLIP/BLIP integration, and evaluation tooling on top of the existing SQLite + cache stack.
+  3. M3 — Search & Tools (PostgreSQL + pgvector + docker-compose): implement production search/tools on top of PostgreSQL + pgvector and containerize the stack for PC/NAS deployment.
+  4. M4 — Learning & Personalization: keep few‑shot learning and feedback loops as the final stage.
+- **Consequences:**
+  - M2 work is centered on improving recognition quality (reducing manual `siglip_labels` maintenance and noisy object labels) while reusing the existing M1 pipeline and SQLite projections.
+  - Search APIs, UIs, and PostgreSQL/pgvector migration are concentrated in M3, aligning infrastructure work with a clear, user‑visible “Search & Tools” milestone.
+  - Documentation and task trackers (AI_TASK_TRACKER, Phase Final docs) treat the new milestone definitions as the source of truth going forward.

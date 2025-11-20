@@ -125,4 +125,4 @@ Kubernetes is **explicitly out of scope** for Phase Final; if needed later, mani
   - M1 uses a simple Flask‑based debug UI to inspect preprocessing results and similar‑image groups locally.
   - Later milestones converge on FastAPI + Streamlit as the main API/UI stack for end users.
 
-Refer to `AI_DECISION_RECORD.md` (once created) for chronological decision logs and deviations from this document.
+Refer to `decisions/AI_DECISION_RECORD.md` for chronological decision logs and deviations from this document.

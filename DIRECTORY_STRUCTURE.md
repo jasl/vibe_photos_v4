@@ -31,7 +31,7 @@ cache/
 ├── captions/           # BLIP caption outputs (.json)
 ├── ocr/                # OCR text blocks (.json)
 ├── embeddings/         # Vector cache exports (SQLite dumps today, pgvector exports later)
-├── ingestion_queue/    # Filesystem-backed task queue segments for the long-lived worker
+├── ingestion_queue/    # Legacy filesystem-backed task queue segments (current M1 uses Celery + Redis instead)
 └── hashes/             # Perceptual hash lookups
 ```
 

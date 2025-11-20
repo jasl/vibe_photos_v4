@@ -2,7 +2,8 @@
 
 This document specifies the concrete model choices for M1
 (Preprocessing and Feature Extraction), consistent with the Phase Final
-requirements and solution design.
+requirements and solution design, and reflects the current implementation in
+this repository.
 
 M1 MUST implement:
 
@@ -22,12 +23,16 @@ rest of the pipeline.
 - Zero-shot classification for coarse categories (electronics, food, document, etc.).
 - Re-ranking detection regions.
 
-**Default model (M1)**
+**Default model (M1, implemented)**
 
 - `google/siglip2-base-patch16-224`
 
-This matches the blueprints and current prototypes
-(`tools/test_coarse_categories.py`, Phase Final POCs, and schema defaults).
+This matches the blueprints and current implementation:
+
+- Configuration defaults in `config/settings.yaml` / `config/settings.example.yaml`.
+- Singleton loaders in `src/vibe_photos/ml/models.py`.
+- The `SiglipBlipDetector` helper in `src/vibe_photos/ml/siglip_blip.py`.
+- The coarse-category smoke test in `tools/test_coarse_categories.py`.
 
 **High-quality option (later milestones)**
 
@@ -62,7 +67,9 @@ This matches the blueprints and current prototypes
   ```
 
 The model name MUST be configurable via `settings.yaml` under
-`models.embedding.model_name`.
+`models.embedding.model_name`; callers SHOULD prefer the typed helpers in
+`src/vibe_photos/config.py` and `src/vibe_photos/ml/models.py` instead of
+constructing models manually.
 
 ## 2. Captioning (BLIP)
 
@@ -73,7 +80,7 @@ The model name MUST be configurable via `settings.yaml` under
   - Quick visual understanding in the UI.
   - Full-text search over captions.
 
-**Default model (M1)**
+**Default model (M1, implemented)**
 
 - `Salesforce/blip-image-captioning-base`
 
@@ -82,6 +89,10 @@ The model name MUST be configurable via `settings.yaml` under
 - `Salesforce/blip-image-captioning-large` (GPU strongly recommended).
 
 **Implementation notes**
+
+M1 already wires BLIP via a shared loader; Coding AIs should reuse the existing
+helpers and treat the snippet below as conceptual guidance, not a separate
+implementation.
 
 - Use the official BLIP captioning model via Transformers:
 
@@ -99,8 +110,9 @@ The model name MUST be configurable via `settings.yaml` under
 
 - Keep captions short (≤ 50 tokens) and neutral in tone.
 
-- Store caption text in SQLite in M1 under a dedicated table or column,
-  and mirror it into JSON caches under `cache/` for rebuilds.
+- Store caption text in SQLite in M1 using the `ImageCaption` ORM
+  (`src/vibe_photos/db.py`) and mirror it into JSON caches under `cache/captions/`
+  for rebuilds (see `_run_embeddings_and_captions` in `src/vibe_photos/pipeline.py`).
 
 ## 3. Open-Vocabulary Detection (Optional in M1)
 
@@ -109,18 +121,24 @@ The model name MUST be configurable via `settings.yaml` under
 - Detect "things" (phone, laptop, pizza, document, MacBook Pro 14, etc.).
 - Provide bounding boxes and initial labels for later re-ranking with SigLIP.
 
-**M1 baseline detector**
+**M1 baseline detector (implemented, optional)**
 
-For M1, detection is **optional**. If implemented, use **OWL-ViT** as
-a CPU-friendly starting point:
+For M1, detection is **optional** but already integrated behind configuration
+flags. The current implementation uses **OWL-ViT** as a pragmatic starting
+point:
 
 - Backend: `owlvit`
 - Model: `google/owlvit-base-patch32`
 
+Detection is controlled by:
+
+- `models.detection.enabled` and related fields in `config/settings.yaml`.
+- `pipeline.run_detection` in `config/settings.yaml`.
+
 Later milestones may introduce **Grounding DINO** (for example
-`GroundingDINO_SwinT_OGC`) as the default when a GPU is available.
-The detector MUST be pluggable via configuration so swapping backends
-does not change the rest of the pipeline.
+`GroundingDINO_SwinT_OGC`) as the default when a GPU is available. The
+detector MUST be pluggable via configuration so swapping backends does not
+change the rest of the pipeline.
 
 **Interface (for Coding AI)**
 
@@ -146,8 +164,9 @@ Where `Detection` includes:
 
 Detections should be stored under:
 
-- JSON cache file per photo (for rebuilds).
-- Optional `photo_regions` table in SQLite.
+- JSON cache file per photo under `cache/regions/` (for rebuilds).
+- The `image_region` table in SQLite via the ORM models in
+  `src/vibe_photos/db.py`.
 
 ## 4. OCR (Out of Scope for M1)
 
@@ -163,11 +182,14 @@ record.
 M1 only needs to ensure that image embeddings are stored with model
 metadata so they can be reused later for few-shot learning.
 
-Few-shot logic itself is a later milestone (M4). The embedding schema
-must include:
+Few-shot logic itself is a later milestone (M4). The embedding schema in this
+repository already includes:
 
-- Model name (for example `siglip2-base-patch16-224`).
-- Model family or backend (`siglip`).
-- Versioned configuration (for example `v1`, `v2`) so changes in
-  preprocessing or normalization can be tracked.
+- `ImageEmbedding.model_name` and `ImageEmbedding.model_backend` (see
+  `src/vibe_photos/db.py`).
+- A `cache_format_version` field in `cache/manifest.json` that captures
+  significant preprocessing or normalization changes across runs.
 
+Future milestones MAY extend this with explicit version tags (for example
+`siglip2-base-patch16-224-v1`) once real-world migrations are better
+understood.

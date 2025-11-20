@@ -17,6 +17,7 @@ This file captures key insights from previous iterations and the updated Phase F
 - Start simple:
   - First validate usefulness with **SQLite + SigLIP/BLIP** on a small subset of photos.
   - Only after confirming value, adopt heavier models and PostgreSQL + pgvector.
+- Favor a single, well‑factored preprocessing pipeline (as in M1) over parallel PoCs; reuse the same codepath from CLIs, queues, and UIs to keep behavior consistent.
 - Avoid over‑engineering:
   - Direct, well‑tested implementations beat complex abstractions that are hard to debug.
   - Keep services in a single `docker-compose` stack for Phase Final; defer multi‑cluster or multi‑tenant concerns.
@@ -25,6 +26,7 @@ This file captures key insights from previous iterations and the updated Phase F
   - Design the perception pipeline to be pluggable so models can evolve without rewriting the rest of the system.
 - Cache aggressively:
   - Thumbnails, detections, captions, embeddings, and (future) OCR results should be cached under `cache/` and reused across runs.
+  - Treat caches as durable artifacts and databases as projections; updating schemas should prefer rebuilds from cache (using a manifest version) over ad‑hoc migration scripts when feasible.
 
 ## 3. Process Improvements
 

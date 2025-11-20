@@ -11,12 +11,14 @@ This guide turns the requirements and solution design into a staged implementati
      - Computes fingerprints (hashes, perceptual hashes) and near‑duplicate groups.
      - Runs the initial perception models (SigLIP/BLIP and, where feasible, detection).
    - Store all results in caches and a SQLite database for reuse.
-2. **M2 — Search & Tools (SQLite + Local Services)**
-   - Build CLI and minimal UI on top of the SQLite database from M1.
-   - Provide search, filtering, and basic annotation operations without containers.
-3. **M3 — Database & Deployment Upgrade (PostgreSQL + pgvector + docker-compose)**
-   - Move from SQLite to PostgreSQL/pgvector.
-   - Containerize the stack with `docker-compose`.
+2. **M2 — Perception Quality & Labeling**
+   - Improve recognition quality and label hygiene on top of M1:
+     - Iterate on SigLIP label sets and grouping to reduce manual maintenance and improve coverage.
+     - Refine detection + SigLIP/BLIP thresholds, blacklists, and remapping to reduce noisy object/product labels.
+     - Establish small but realistic evaluation sets and metrics for coarse categories and object‑level recognition.
+3. **M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)**
+   - Move from SQLite to PostgreSQL/pgvector and build search/tools on top of the improved perception stack.
+   - Containerize the stack with `docker-compose` (API, workers, DB, Redis, UI).
    - Introduce Redis and background worker stack.
 4. **M4 — Learning & Personalization**
    - Implement few‑shot learning, corrections loop, and batch annotation workflows.
@@ -51,7 +53,7 @@ Supporting directories (see `DIRECTORY_STRUCTURE.md`):
 
 ### 3.1 M1 — Preprocessing & Feature Extraction (Local, No Containers)
 
-Goal: Build a robust, efficient pipeline that can process tens of thousands of photos and cache all reusable results.
+Goal: Build a robust, efficient pipeline that can process tens of thousands of photos and cache all reusable results. This repository already implements that pipeline; new work should treat it as the baseline for later milestones.
 
 - Tooling:
   - Use Python 3.12 with `uv` for environment management.
@@ -85,9 +87,9 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - Content hash using a 64-bit xxHash (`xxhash64-v1`) over the raw file bytes, stored as a 16-character hexadecimal `image_id`.
     - Perceptual hash (`phash64-v2`) using a fixed 64-bit DCT-based pHash (32×32 grayscale → 8×8 low-frequency block → median threshold) for near-duplicate detection, following `blueprints/m1/m1_development_plan.md`.
   - Identify near-duplicate groups:
-    - Treat two active images as near-duplicates when the Hamming distance between their 64-bit `phash` values is less than or equal to 5.
+    - Treat two active images as near-duplicates when the Hamming distance between their 64-bit `phash` values is less than or equal to a configurable threshold (see `Settings.pipeline.phash_hamming_threshold`, default 12 in this codebase).
     - Record near-duplicate relationships in `image_near_duplicate` (for SQLite) or the equivalent table in PostgreSQL/pgvector, designating an anchor/canonical image and linking duplicates to it.
-    - Use high-order `phash` bits (for example, the top 16 bits) as buckets and only compute full Hamming distances within buckets to keep grouping efficient at 30k+ photos, as described in the M1 blueprint.
+    - Optionally use high-order `phash` bits (for example, the top 16 bits) as buckets and only compute full Hamming distances within buckets to keep grouping efficient at 30k+ photos; experiments in M1 showed that a simple all-pairs scan is acceptable at current library sizes but bucketing remains a future optimization.
     - Optionally skip heavy model inference for images deemed “near identical” while linking them to a canonical representative; in M1 this behavior is controlled by the `pipeline.skip_duplicates_for_heavy_models` flag in `config/settings.yaml`.
 - Model inference:
   - Load models once per process and reuse them across images to avoid reload overhead.
@@ -98,7 +100,7 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - Grounding DINO / OWL‑ViT detection and SigLIP re‑ranking.
   - Store all outputs in the SQLite DB and JSON caches under `cache/`.
 - Concurrency & robustness:
-  - Use a simple queue and worker model (e.g. multiprocessing / threading) appropriate for local runs.
+  - Provide both a single-process CLI (`vibe_photos.dev.process`) and an optional Celery-based worker model (`vibe_photos.task_queue` + `vibe_photos.dev.enqueue_celery`) appropriate for local runs.
   - Support resumable processing:
     - Skip images that already have valid cached results.
     - Record progress and failures for later inspection.
@@ -110,7 +112,7 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - Show a detail page per photo with all extracted preprocessing information (metadata, hashes, EXIF/GPS, model outputs) without exposing absolute filesystem paths or `file://` URIs.
     - List all similar/near‑duplicate photos linked to that photo.
 
-#### 3.1.1 M1 Preparation Status (Current)
+#### 3.1.1 M1 Implementation Status (Current)
 
 Several pieces of the M1 stack are already in place and can be reused directly:
 
@@ -125,8 +127,14 @@ Several pieces of the M1 stack are already in place and can be reused directly:
   - `src/vibe_photos/ml/models.py` exposes singleton loaders for SigLIP embeddings and BLIP captioning, including automatic device selection (`auto` → CUDA/MPS/CPU).
 - Developer tools:
   - `tools/test_coarse_categories.py` smoke‑tests SigLIP‑based coarse categories using the global configuration by default, with a `--model-name` override for ad‑hoc experiments.
+- Core implementation:
+  - `src/vibe_photos/hasher.py`, `src/vibe_photos/scanner.py`, and `src/vibe_photos/pipeline.py` implement content/perceptual hashing, filesystem scanning, and the high-level `PreprocessingPipeline` orchestration (including cache manifest and run journal).
+  - `src/vibe_photos/preprocessing.py` and `src/vibe_photos/artifact_store.py` define shared preprocessing steps and an artifact manager used by both Celery workers and the single-image helper.
+  - `src/vibe_photos/dev/process.py` exposes the recommended single-process CLI for running the full M1 pipeline (`uv run python -m vibe_photos.dev.process ...`).
+  - `src/vibe_photos/task_queue.py` and `src/vibe_photos/dev/enqueue_celery.py` wire Celery + Redis queues for preprocessing, main-stage, and enhancement tasks on top of the same preprocessing primitives.
+  - `src/vibe_photos/webui/` implements the Flask-based debug UI used to inspect canonical photos, near-duplicate groups, and preprocessing outputs.
 
-Together, these components mean that M1 implementation can focus on the preprocessing and storage pipeline, rather than low‑level model/wiring concerns.
+Together, these components mean that new work can focus on search, APIs, and deployment rather than re-implementing the M1 preprocessing and storage pipeline.
 
 #### 3.1.2 Recommended Next Steps for M1 Implementation
 
@@ -315,35 +323,32 @@ Priority steps:
 - When unsure about details not covered by docs, make a reasonable assumption and document it.
 ```
 
-### 3.2 M2 — Search & Tools (SQLite + Local Services)
+### 3.2 M2 — Perception Quality & Labeling
 
-Goal: Expose the preprocessed data through search APIs and simple tools, still without containers.
+Goal: Improve recognition quality and label hygiene on top of the existing M1 pipeline, before investing in full search tooling.
 
-- API and CLI:
-  - Implement FastAPI endpoints backed by SQLite for:
-    - Searching by text and filters.
-    - Querying photo details and metadata.
-  - Provide CLI commands for:
-    - Running preprocessing on demand.
-    - Executing searches and exporting results.
-- Minimal UI:
-  - Build a small Streamlit UI:
-    - Search bar, filters (time, category, collections).
-    - Grid of thumbnails with captions and key labels.
-    - Detail view showing extracted metadata.
-- Evaluation:
-  - Run on real subsets of user photos to validate:
-    - Preprocessing correctness (timestamps, GPS, deduplication).
-    - Search usefulness for electronics, food, documents, and screenshots.
-  - For M1 exit, run a small manual evaluation on ~100–200 diverse photos (electronics, food, documents, screenshots, people, landscapes):
-    - Hand‑label expected coarse categories and 1–3 key objects per photo.
-    - Verify that:
-      - Coarse category accuracy reaches at least ~85% on this sample.
-      - Key objects are discoverable via search (either via labels or captions).
+- Label dictionaries and grouping:
+  - Iterate on `settings.models.siglip_labels` to:
+    - Reduce manual maintenance cost for common creator scenarios (electronics, food, documents, screenshots, products).
+    - Improve coverage and grouping for both coarse categories and product‑level hints.
+  - Introduce a label blacklist/remapping layer (building on the M1 “Future improvements” section) to suppress low‑information labels and map noisy outputs to more useful categories.
+- Detection + SigLIP/BLIP tuning:
+  - Refine OWL‑ViT + SigLIP integration:
+    - Thresholds for per‑region labels (`siglip_min_prob`, `siglip_min_margin`).
+    - Priority heuristics for primary regions and secondary region pruning.
+  - Evaluate how well detection + BLIP captions jointly capture “things” users care about (devices, food, documents, screenshots) and adjust prompts/configuration accordingly.
+- Evaluation and tooling:
+  - Define a small but representative evaluation set (≈1k photos) with:
+    - Coarse category labels.
+    - Key object/product annotations for a handful of target classes.
+  - Add lightweight tools (CLI or notebooks) that:
+    - Inspect per‑label distributions and confusion cases.
+    - Dump per‑image label/caption summaries for manual review.
+  - Capture findings and configuration changes in `blueprints/phase_final/knowledge/lessons_learned.md` and `docs/MODELS.md`.
 
-### 3.3 M3 — Database & Deployment Upgrade (PostgreSQL + pgvector + docker-compose)
+### 3.3 M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)
 
-Goal: Move to the final database and deployment architecture.
+Goal: Move to the final database and deployment architecture and expose production search/tools on top of Postgres + pgvector.
 
 - Database:
   - Define PostgreSQL + pgvector schema based on `../specs/database_schema.sql` (adapted to PostgreSQL syntax).

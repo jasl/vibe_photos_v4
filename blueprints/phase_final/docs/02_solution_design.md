@@ -218,12 +218,13 @@ To reduce risk, implementation can proceed in stages while keeping the Phase Fin
    - High‑throughput preprocessing (normalization, thumbnails, EXIF/GPS, hashes, perceptual hashes).
    - Initial perception models (SigLIP/BLIP and, where feasible, detection).
    - Versioned caches under `cache/` and a lightweight SQLite DB.
-2. **M2 — Search & Tools** — Local services on top of SQLite:
-   - FastAPI endpoints for search and inspection.
-   - CLI commands and a minimal UI for browsing and debugging.
-3. **M3 — Database & Deployment Upgrade** — PostgreSQL + pgvector with `docker-compose`:
-   - Migrate from SQLite to PostgreSQL/pgvector.
-   - Containerized API, workers, DB, Redis, and UI.
+2. **M2 — Perception Quality & Labeling** — Improve recognition quality on top of M1:
+   - Reduce manual maintenance of SigLIP label dictionaries and grouping (for example `settings.models.siglip_labels`) while improving coverage for creator‑relevant categories (electronics, food, documents, screenshots, products).
+   - Tighten detection + SigLIP/BLIP integration (thresholds, label remapping/blacklists) to make object/product recognition more precise and less noisy.
+   - Run focused evaluations on labeled subsets to understand failure modes and feed results back into configuration and model choices.
+3. **M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)** — Production search and tools:
+   - Migrate from SQLite to PostgreSQL/pgvector and expose search/inspection APIs and tools on top of the improved perception outputs.
+   - Containerize the stack with `docker-compose` (API, workers, DB, Redis, UI) for PC/NAS deployment.
 4. **M4 — Learning & Personalization** — Few‑shot and corrections loop:
    - Teach the system about niche products via few‑shot examples.
    - Leverage feedback to improve ranking and suggestions.

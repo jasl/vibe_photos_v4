@@ -4,9 +4,9 @@ This file tracks high-level implementation tasks and their status for the Phase 
 
 ## Milestones
 
-- [ ] M1 — Preprocessing & Feature Extraction (Local, No Containers)
-- [ ] M2 — Search & Tools (SQLite + Local Services)
-- [ ] M3 — Database & Deployment Upgrade (PostgreSQL + pgvector + docker-compose)
+- [x] M1 — Preprocessing & Feature Extraction (Local, No Containers)
+- [ ] M2 — Perception Quality & Labeling
+- [ ] M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)
 - [ ] M4 — Learning & Personalization
 
 ## Current Tasks (Outline)
@@ -42,24 +42,25 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - EXIF and GPS metadata are parsed during preprocessing and surfaced in the debug UI, but the on-disk metadata format is minimal and may evolve as later milestones add richer EXIF/sidecar handling.
 - The preprocessing pipeline is resumable via a JSON run journal in `cache/run_journal.json`; it now skips completed stages and resumes batch cursors. Celery (`vibe_photos.task_queue`) is available for durable preprocessing/main/enhancement workers, while the single-process loop remains the default local entrypoint.
 - The projection database (`cache/index.db`) is populated alongside cache artifacts; cache validity is gated by the manifest version rather than by a separate rebuild path.
- - Caption-aware primary-region fallback in the detection stage assumes that BLIP captions have already been computed and written to `image_caption` for any image that runs detection. Future incremental “detection-only” entry points must either preserve this ordering (captions first) or gracefully disable/adjust caption-based fallbacks to avoid surprising gaps in primary regions.
+- Caption-aware primary-region fallback in the detection stage assumes that BLIP captions have already been computed and written to `image_caption` for any image that runs detection. Future incremental “detection-only” entry points must either preserve this ordering (captions first) or gracefully disable/adjust caption-based fallbacks to avoid surprising gaps in primary regions.
 
 #### Future technical improvements (beyond M1)
 
 - Optimize pHash-based near-duplicate grouping to reduce worst-case O(N²) behavior (for example via bucketing or approximate nearest-neighbor strategies) once library scale and performance bottlenecks are better understood.
 - Introduce a configurable label blacklist / remapping layer for region and image-level labels so low-information or noisy nouns (for example `butter`, `water`) can be suppressed or mapped to coarser categories during SigLIP refinement and caption-based fallbacks. The blacklist should live in configuration (alongside SigLIP label groups) and be applied as a post-processing step, without changing underlying model logits or shared label dictionaries.
 
-### M2 — Search & Tools
+### M2 — Perception Quality & Labeling
 
-- [ ] Implement FastAPI endpoints backed by SQLite for search and inspection.
-- [ ] Implement CLI commands for preprocessing, search, and exports.
-- [ ] Build a minimal Streamlit UI for search and result browsing.
+- [ ] Improve SigLIP label dictionaries and grouping to reduce manual maintenance of `settings.models.siglip_labels` and cover common creator scenarios (electronics, food, documents, screenshots).
+- [ ] Tighten detection + SigLIP re-ranking thresholds and add label blacklist/remapping to suppress low-information or noisy nouns in region and image-level labels.
+- [ ] Run targeted evaluations on a labeled subset (≈1k photos) to measure coarse category accuracy, object/product recall, and failure patterns; capture findings in `blueprints/phase_final/knowledge/lessons_learned.md`.
+- [ ] Add lightweight tools (CLI or notebooks) to inspect per-label distributions and confusion cases, wired against the existing SQLite + cache stack.
 
-### M3 — PostgreSQL + pgvector + docker-compose
+### M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)
 
-- [ ] Design PostgreSQL schema and migrations.
-- [ ] Implement data migration from SQLite (where feasible).
-- [ ] Define `docker-compose` stack (API, workers, DB, Redis, UI).
+- [ ] Design PostgreSQL schema and migrations based on the M1/M2 SQLite projections and Phase Final specs.
+- [ ] Implement search and inspection APIs backed by PostgreSQL + pgvector (hybrid text + vector + filters).
+- [ ] Define a `docker-compose` stack (API, workers, DB, Redis, UI) suitable for PC/NAS deployment and wire the existing preprocessing pipeline into this stack.
 
 ### M4 — Learning & Personalization
 
