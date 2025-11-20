@@ -68,6 +68,10 @@ Key options:
 - `--image-path`: process a single image into the projection cache using shared preprocessing steps.
 - `--image-id`: optional explicit `image_id` when `--image-path` is used; defaults to the content hash.
 
+`cache/index.db` is a cache of *pre_process* outputs (embeddings, captions, detections, scenes) and is safe to discard; `process` stages read
+from this cache and may copy into the primary DB when required.
+Serve/UI/API must read from `data/index.db` only; use the sync helper (below) to copy projection tables from cache into primary when needed.
+
 What a single-process run does in M1:
 
 - Scans the specified roots and registers images in `images` with stable content
@@ -80,12 +84,12 @@ What a single-process run does in M1:
   - Embedding vectors under `cache/embeddings/<image_id>.npy`.
   - Embedding metadata under `cache/embeddings/<image_id>.json`.
   - Caption payloads under `cache/captions/<image_id>.json`.
-  - Corresponding projection rows in `image_embedding` and `image_caption`.
+  - Corresponding projection rows in `image_embedding` and `image_caption` (stored in `cache/index.db`; downstream steps may copy to `data/index.db` if needed).
 - Computes lightweight scene classification attributes and stores them in
-  `image_scene` (with any auxiliary JSON cached under `cache/detections/`).
+  `image_scene` (with auxiliary JSON cached under `cache/detections/` and rows written to `cache/index.db`).
 - Optionally runs OWL-ViT based region detection (when enabled in settings) and
   writes region metadata under `cache/regions/<image_id>.json` and
-  `image_region`.
+  `image_region` in `cache/index.db`.
 - Writes a cache manifest (`cache/manifest.json`) that records the cache format
   version plus the effective model/backends used for embeddings, captions, and
   detection so caches can be trusted across runs.
@@ -118,10 +122,9 @@ To use Celery queues:
    - For finer control, run separate workers per queue and tune concurrency via
      Celery options or the values in `settings.queues`.
 3. Enqueue batches from a filesystem scan with:
-   - `uv run python -m vibe_photos.dev.enqueue_celery <root1> [<root2> ...] [--enqueue-process] [--enqueue-post-process]`
-   - The helper inserts missing `images` rows into the primary database, then
-     enqueues `pre_process` tasks, and optionally `process` and `post_process`
-     work based on the flags.
+   - `uv run python -m vibe_photos.dev.enqueue_celery <root1> [<root2> ...] [--task pre_process|process|post_process]`
+   - Defaults to `--task process`; process will auto-run pre_process when cache artifacts are missing.
+   - The helper inserts missing `images` rows into the primary database, then enqueues the chosen task for each image.
 4. For ad-hoc enqueueing in Python, use:
    - `pre_process.delay(<image_id>)`
    - `process.delay(<image_id>)`
@@ -175,18 +178,25 @@ The cache layer is versioned via a manifest file:
   - `cache_format_version`.
   - Effective model names and backends for embeddings, captions, and detection.
   - Key pipeline settings such as thumbnail size, quality, and pHash threshold.
+  - Settings that only affect throughput (for example batch sizes) are intentionally
+    omitted so they do not spuriously invalidate caches.
 
 Going forward:
 
-- When `cache_format_version` changes, older cache directories may be treated as
-  untrusted. In those cases, re-running the preprocessing pipeline is the
-  recommended way to regenerate compatible cache data and projection tables.
+- When the manifest contents change (for example model swap or cache format bump),
+  the pipeline clears cache artifacts and `cache/index.db` before writing a fresh
+  manifest, forcing regeneration on the next run.
+- When `cache_format_version` changes, older cache directories are treated as
+  untrusted. Re-run the preprocessing pipeline to regenerate compatible cache data
+  and projection tables.
 
 Notes and Limitations
 ---------------------
 
-- The primary database at `data/index.db` is the source of truth for images and
-  model outputs. The projection database at `cache/index.db` is rebuildable from
-  cache and is safe to discard.
+- `cache/index.db` is the cache DB for pre_process outputs and can be safely
+  discarded; cached model outputs should be considered authoritative there, and
+  `process` stages copy needed subsets into `data/index.db` for API/UI use.
+- Use `uv run python -m vibe_photos.dev.clear_cache --stage <...>` to invalidate
+  specific cache stages (or `--full-reset` to clear all caches and cache/index.db).
 - All paths in this document are relative to the project root; commands should
   be executed from the repository root with the virtual environment activated.

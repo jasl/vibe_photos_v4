@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import torch
+from numpy.typing import NDArray
 from PIL import Image
 from torch import Tensor
 
@@ -109,6 +110,19 @@ class SiglipBlipDetector:
             confidence=confidence,
         )
 
+    def embed_image(self, image: Image.Image) -> NDArray[np.float32]:
+        """Return a normalized SigLIP embedding for a single image."""
+
+        image_inputs = self._siglip_processor(images=image, return_tensors="pt")
+        image_inputs = image_inputs.to(self._siglip_device)
+
+        with torch.no_grad():
+            image_emb: Tensor = self._siglip_model.get_image_features(**image_inputs)
+
+        emb = image_emb[0]
+        emb = emb / emb.norm(dim=-1, keepdim=True)
+        return emb.detach().cpu().numpy().astype(np.float32)
+
     def _classify_with_siglip(self, image: Image.Image, labels: List[str]) -> Dict[str, float]:
         """Compute zero-shot classification scores via SigLIP."""
 
@@ -147,4 +161,3 @@ class SiglipBlipDetector:
 
 
 __all__ = ["SiglipBlipDetector", "SiglipBlipDetectionResult"]
-

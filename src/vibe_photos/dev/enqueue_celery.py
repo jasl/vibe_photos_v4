@@ -131,27 +131,23 @@ def _ingest_files(session, files: Sequence[FileInfo]) -> list[str]:
     return processed
 
 
-def _enqueue_targets(
-    image_ids: Sequence[str],
-    enqueue_process: bool,
-    enqueue_post_process: bool,
-) -> None:
+def _enqueue_targets(image_ids: Sequence[str], task: str) -> None:
     total_images = len(image_ids)
     progress_interval = max(1, total_images // 20) if total_images else 0
 
-    queued_pre_process = queued_process = queued_post_process = 0
+    queued = 0
 
     for index, image_id in enumerate(image_ids, start=1):
-        pre_process.delay(image_id)
-        queued_pre_process += 1
-
-        if enqueue_process:
+        if task == "pre_process":
+            pre_process.delay(image_id)
+        elif task == "process":
             process.delay(image_id)
-            queued_process += 1
-
-        if enqueue_post_process:
+        elif task == "post_process":
             post_process.delay(image_id)
-            queued_post_process += 1
+        else:  # pragma: no cover - defensive
+            LOGGER.error("celery_enqueue_unknown_task", extra={"task": task})
+            break
+        queued += 1
 
         if progress_interval and (index % progress_interval == 0 or index == total_images):
             percent = round(index * 100.0 / max(total_images, 1), 1)
@@ -164,35 +160,32 @@ def _enqueue_targets(
                     "processed": index,
                     "total": total_images,
                     "percent": percent,
-                    "queued_pre_process": queued_pre_process,
-                    "queued_process": queued_process,
-                    "queued_post_process": queued_post_process,
+                    "task": task,
+                    "queued": queued,
                 },
             )
 
     LOGGER.info(
         "celery_enqueue_complete",
-        extra={
-            "queued_pre_process": queued_pre_process,
-            "queued_process": queued_process,
-            "queued_post_process": queued_post_process,
-        },
+        extra={"task": task, "queued": queued},
     )
 
 
 def main(
     roots: List[Path] = typer.Argument(..., help="One or more directories to scan for images."),
     db: Path = typer.Option(Path("data/index.db"), help="Path to the primary SQLite database."),
-    enqueue_process: bool = typer.Option(
-        False,
-        help="Also enqueue process-stage classification/indexing tasks after pre_process.",
-    ),
-    enqueue_post_process: bool = typer.Option(
-        False,
-        help="Also enqueue post_process-stage tasks (OCR/cloud models) after pre_process.",
+    task: str = typer.Option(
+        "process",
+        "--task",
+        "-t",
+        help="Task to enqueue: pre_process, process, or post_process. Defaults to process.",
     ),
 ) -> None:
     """Scan directories, persist images, and enqueue Celery tasks."""
+
+    task = task.lower().strip()
+    if task not in {"pre_process", "process", "post_process"}:
+        raise typer.BadParameter("task must be one of: pre_process, process, post_process")
 
     settings: Settings = load_settings()
     LOGGER.info(
@@ -200,8 +193,7 @@ def main(
         extra={
             "roots": [str(root) for root in roots],
             "db": str(db),
-            "enqueue_process": enqueue_process,
-            "enqueue_post_process": enqueue_post_process,
+            "task": task,
             "queues": {
                 "pre_process": settings.queues.preprocess_queue,
                 "process": settings.queues.main_queue,
@@ -218,7 +210,7 @@ def main(
     with open_primary_session(db) as session:
         image_ids = _ingest_files(session, files)
 
-    _enqueue_targets(image_ids, enqueue_process, enqueue_post_process)
+    _enqueue_targets(image_ids, task)
 
 
 if __name__ == "__main__":

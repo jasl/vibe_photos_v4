@@ -11,7 +11,7 @@ from PIL import Image
 from vibe_photos.artifact_store import ArtifactManager, ArtifactResult, ArtifactSpec, hash_file
 from vibe_photos.config import Settings
 from vibe_photos.db import ArtifactRecord
-from vibe_photos.hasher import compute_content_hash, compute_perceptual_hash
+from vibe_photos.hasher import CONTENT_HASH_ALGO, compute_content_hash, compute_perceptual_hash
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.thumbnailing import save_thumbnail
 
@@ -80,16 +80,20 @@ def build_phash_artifact(image: Image.Image, output_dir: Path) -> ArtifactResult
 def build_embedding_artifact(
     detector: SiglipBlipDetector,
     image: Image.Image,
-    labels: Iterable[str],
     output_dir: Path,
 ) -> ArtifactResult:
-    """Run SigLIP classification and persist scores to ``embedding.json``."""
+    """Run SigLIP once and persist the raw embedding + metadata."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    scores = detector._classify_with_siglip(image=image, labels=list(labels))
-    out_path = output_dir / "embedding.json"
-    out_path.write_text(json.dumps(scores), encoding="utf-8")
-    return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path), payload_path=out_path)
+    vec = detector.embed_image(image=image)
+    emb_path = output_dir / "embedding.npy"
+    meta_path = output_dir / "embedding_meta.json"
+    import numpy as np
+
+    np.save(emb_path, vec)
+    meta = {"embedding_dim": int(vec.shape[-1]), "dtype": "float32"}
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+    return ArtifactResult(storage_path=emb_path, checksum=hash_file(emb_path), payload_path=meta_path)
 
 
 def build_caption_artifact(detector: SiglipBlipDetector, image: Image.Image, output_dir: Path) -> ArtifactResult:
@@ -158,7 +162,7 @@ def ensure_preprocessing_artifacts(
         builder=lambda out_dir: build_exif_artifact(image, out_dir, datetime_format=settings.pipeline.exif_datetime_format),
     )
 
-    hash_spec = ArtifactSpec(artifact_type="content_hash", model_name="sha256", params={})
+    hash_spec = ArtifactSpec(artifact_type="content_hash", model_name=CONTENT_HASH_ALGO, params={})
     content_hash_artifact = manager.ensure_artifact(
         image_id=image_id, spec=hash_spec, builder=lambda out_dir: build_content_hash_artifact(image_path, out_dir)
     )
@@ -178,9 +182,7 @@ def ensure_preprocessing_artifacts(
     embedding = manager.ensure_artifact(
         image_id=image_id,
         spec=embed_spec,
-        builder=lambda out_dir: build_embedding_artifact(
-            detector, image, settings.models.siglip_labels.candidate_labels, out_dir
-        ),
+        builder=lambda out_dir: build_embedding_artifact(detector, image, out_dir),
         dependencies=[content_hash_artifact.id],
     )
 

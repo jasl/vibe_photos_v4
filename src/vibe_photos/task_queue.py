@@ -33,7 +33,7 @@ def _default_primary_db() -> Path:
 
 
 def _default_projection_db() -> Path:
-    return Path("data/projection.db")
+    return Path("cache/index.db")
 
 
 def _init_celery() -> Celery:
@@ -182,6 +182,12 @@ def process(image_id: str) -> str:
     settings = _load_settings()
     projection_path = _default_projection_db()
     artifact_root = _artifact_root()
+
+    # Ensure cache exists; if missing, run preprocess first.
+    cache_ok = projection_path.exists()
+    emb_file = projection_path.parent / "embeddings" / f"{image_id}.npy"
+    if not cache_ok or not emb_file.exists():
+        pre_process(image_id)
 
     with open_projection_session(projection_path) as session:
         manager = ArtifactManager(session=session, root=artifact_root)
