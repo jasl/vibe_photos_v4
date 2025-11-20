@@ -17,14 +17,47 @@ models:
     batch_size: 4
 
   detection:
-    enabled: false           # M1: detection optional
+    enabled: true            # M1: detection optional
     backend: "owlvit"        # or "grounding-dino" in future milestones
     model_name: "google/owlvit-base-patch32"
     device: "auto"
     max_regions_per_image: 10
-    score_threshold: 0.25
+    score_threshold: 0.20
+    # Class-agnostic non-max suppression for overlapping boxes.
+    nms_iou_threshold: 0.8
+    # Primary region priority weights (area + distance to center).
+    primary_area_gamma: 0.3
+    primary_center_penalty: 0.6
+    # Caption-based primary region fallback.
+    caption_primary_enabled: true
+    caption_primary_min_priority: 0.02
+    caption_primary_box_margin_x: 0.2
+    caption_primary_box_margin_y: 0.1
+    caption_primary_keywords:
+      drink:
+        label: "drink"
+        keywords:
+          - "drink"
+          - "beverage"
+          - "glass of"
+          - "cocktail"
+          - "juice"
+          - "smoothie"
+          - "coffee"
+          - "tea"
+          - "beer"
+          - "wine"
+          - "soda"
+          - "soft drink"
+    # Filter out low-priority secondary regions after sorting.
+    secondary_min_priority: 0.03
+    secondary_min_relative_to_primary: 0.3
     # SigLIP-based region re-ranking thresholds for per-region labels.
-    # See ``config/settings.yaml`` for more detailed comments.
+    # ``siglip_min_prob`` is the minimum probability required for the
+    # top-1 label within its semantic group. ``siglip_min_margin`` is
+    # the required gap between the best and second-best label within
+    # that group. Regions that do not meet both thresholds keep only
+    # the original detector label (no refined label is written).
     siglip_min_prob: 0.15
     siglip_min_margin: 0.05
 
@@ -50,8 +83,23 @@ models:
         - "burger"
         - "sushi"
         - "noodles"
+        - "bread"
         - "dessert"
         - "cake"
+        - "drink"
+        - "butter"
+        - "cheese"
+        - "sauce"
+        - "soup"
+        - "beverage"
+        - "glass of drink"
+        - "cocktail"
+        - "juice"
+        - "coffee"
+        - "tea"
+        - "beer"
+        - "wine"
+        - "soft drink"
       electronics:
         - "phone"
         - "smartphone"
@@ -90,6 +138,15 @@ models:
 
 pipeline:
   # Whether to run detection step in M1.
-  run_detection: false
+  run_detection: true
   # Whether to skip heavy models for near-duplicates.
   skip_duplicates_for_heavy_models: true
+  # Hamming distance threshold for near-duplicate grouping (default 12).
+  phash_hamming_threshold: 12
+  # Target thumbnail size (max width/height in pixels) for web previews.
+  thumbnail_size: 512
+  # JPEG quality (1–100) for thumbnails.
+  thumbnail_quality: 85
+  # How to store EXIF datetime in the database: "raw" uses the original camera string;
+  # "iso" normalizes to an ISO-8601-like "YYYY-MM-DDTHH:MM:SS" format when parsing succeeds.
+  exif_datetime_format: "iso"
