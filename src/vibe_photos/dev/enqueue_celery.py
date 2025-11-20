@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Iterable, List, Sequence
+from typing import List, Sequence
 
 import typer
 from sqlalchemy import select
@@ -35,14 +35,19 @@ def _existing_path_map(session) -> dict[str, str]:
     return mapping
 
 
-def _ingest_files(session, files: Iterable[FileInfo]) -> list[str]:
+def _ingest_files(session, files: Sequence[FileInfo]) -> list[str]:
     """Upsert :class:`Image` rows for scanned files and return their IDs."""
+
+    total_files = len(files)
+    LOGGER.info("celery_ingest_files_discovered", extra={"file_count": total_files})
+
+    progress_interval = max(1, total_files // 20) if total_files else 0
 
     path_to_image_id = _existing_path_map(session)
     processed: list[str] = []
     now = time.time()
 
-    for file_info in files:
+    for index, file_info in enumerate(files, start=1):
         path = file_info.path.resolve()
         path_str = str(path)
         image_id = compute_content_hash(path)
@@ -112,6 +117,16 @@ def _ingest_files(session, files: Iterable[FileInfo]) -> list[str]:
         path_to_image_id[path_str] = image_id
         processed.append(image_id)
 
+        if progress_interval and (index % progress_interval == 0 or index == total_files):
+            percent = round(index * 100.0 / max(total_files, 1), 1)
+            LOGGER.info(
+                "celery_ingest_progress %s/%s (%.1f%%)",
+                index,
+                total_files,
+                percent,
+                extra={"processed": index, "total": total_files, "percent": percent},
+            )
+
     session.commit()
     return processed
 
@@ -121,8 +136,12 @@ def _enqueue_targets(
     enqueue_process: bool,
     enqueue_post_process: bool,
 ) -> None:
+    total_images = len(image_ids)
+    progress_interval = max(1, total_images // 20) if total_images else 0
+
     queued_pre_process = queued_process = queued_post_process = 0
-    for image_id in image_ids:
+
+    for index, image_id in enumerate(image_ids, start=1):
         pre_process.delay(image_id)
         queued_pre_process += 1
 
@@ -133,6 +152,23 @@ def _enqueue_targets(
         if enqueue_post_process:
             post_process.delay(image_id)
             queued_post_process += 1
+
+        if progress_interval and (index % progress_interval == 0 or index == total_images):
+            percent = round(index * 100.0 / max(total_images, 1), 1)
+            LOGGER.info(
+                "celery_enqueue_progress %s/%s (%.1f%%)",
+                index,
+                total_images,
+                percent,
+                extra={
+                    "processed": index,
+                    "total": total_images,
+                    "percent": percent,
+                    "queued_pre_process": queued_pre_process,
+                    "queued_process": queued_process,
+                    "queued_post_process": queued_post_process,
+                },
+            )
 
     LOGGER.info(
         "celery_enqueue_complete",
