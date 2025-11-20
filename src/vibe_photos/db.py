@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Dict
 
-from sqlalchemy import Boolean, Float, Index, Integer, String, Text, create_engine, delete
+from sqlalchemy import Boolean, Float, Index, Integer, String, Text, create_engine, delete, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -252,7 +252,26 @@ def _get_engine(path: Path) -> Engine:
             return engine
 
         _ensure_parent_directory(resolved)
-        engine = create_engine(f"sqlite:///{resolved}", future=True)
+        engine = create_engine(
+            f"sqlite:///{resolved}",
+            future=True,
+            # Allow readers/writers to wait for a busy database instead of failing fast.
+            connect_args={"timeout": 30.0},
+        )
+
+        @event.listens_for(engine, "connect")
+        def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # type: ignore[override]
+            """Configure SQLite for better concurrent access."""
+
+            cursor = dbapi_connection.cursor()
+            try:
+                # WAL mode lets readers proceed while a writer has a transaction open.
+                cursor.execute("PRAGMA journal_mode=WAL")
+                # Additional safeguard on the SQLite side; in milliseconds.
+                cursor.execute("PRAGMA busy_timeout = 30000")
+            finally:
+                cursor.close()
+
         Base.metadata.create_all(engine)
         _ENGINE_CACHE[resolved] = engine
         return engine
