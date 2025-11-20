@@ -1,0 +1,192 @@
+"""Scan directories and enqueue Celery tasks for discovered images."""
+
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+from typing import Iterable, List, Sequence
+
+import typer
+from sqlalchemy import select
+
+from utils.logging import get_logger
+from vibe_photos.config import Settings, load_settings
+from vibe_photos.db import Image, open_primary_session
+from vibe_photos.hasher import CONTENT_HASH_ALGO, compute_content_hash
+from vibe_photos.scanner import FileInfo, scan_roots
+from vibe_photos.task_queue import process_image, run_enhancement, run_main_stage
+
+
+LOGGER = get_logger(__name__, extra={"component": "enqueue_celery"})
+
+
+def _existing_path_map(session) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    rows = session.execute(select(Image.image_id, Image.all_paths)).mappings()
+    for row in rows:
+        raw_paths = row["all_paths"]
+        try:
+            paths = json.loads(raw_paths) if raw_paths else []
+        except json.JSONDecodeError:
+            paths = []
+        for stored_path in paths:
+            mapping[str(stored_path)] = row["image_id"]
+    return mapping
+
+
+def _ingest_files(session, files: Iterable[FileInfo]) -> list[str]:
+    """Upsert :class:`Image` rows for scanned files and return their IDs."""
+
+    path_to_image_id = _existing_path_map(session)
+    processed: list[str] = []
+    now = time.time()
+
+    for file_info in files:
+        path = file_info.path.resolve()
+        path_str = str(path)
+        image_id = compute_content_hash(path)
+        old_image_id = path_to_image_id.get(path_str)
+
+        if old_image_id is not None and old_image_id != image_id:
+            old_image = session.get(Image, old_image_id)
+            if old_image is not None:
+                try:
+                    old_paths = json.loads(old_image.all_paths) if old_image.all_paths else []
+                except json.JSONDecodeError:
+                    old_paths = []
+                old_paths = [p for p in old_paths if p != path_str]
+                old_image.all_paths = json.dumps(old_paths)
+                if old_image.primary_path == path_str:
+                    old_image.primary_path = old_paths[0] if old_paths else ""
+                if not old_paths:
+                    old_image.status = "deleted"
+                old_image.updated_at = now
+                session.add(old_image)
+
+            path_to_image_id.pop(path_str, None)
+
+        existing = session.get(Image, image_id)
+
+        if existing is not None:
+            try:
+                paths = json.loads(existing.all_paths) if existing.all_paths else []
+            except json.JSONDecodeError:
+                paths = []
+
+            if path_str not in paths:
+                paths.append(path_str)
+
+            existing.primary_path = existing.primary_path or path_str
+            existing.all_paths = json.dumps(paths)
+            existing.size_bytes = file_info.size_bytes
+            existing.mtime = file_info.mtime
+            existing.hash_algo = CONTENT_HASH_ALGO
+            existing.status = "active" if existing.status == "deleted" else existing.status
+            existing.updated_at = now
+            session.add(existing)
+        else:
+            session.add(
+                Image(
+                    image_id=image_id,
+                    primary_path=path_str,
+                    all_paths=json.dumps([path_str]),
+                    size_bytes=file_info.size_bytes,
+                    mtime=file_info.mtime,
+                    width=None,
+                    height=None,
+                    exif_datetime=None,
+                    camera_model=None,
+                    hash_algo=CONTENT_HASH_ALGO,
+                    phash=None,
+                    phash_algo=None,
+                    phash_updated_at=None,
+                    created_at=now,
+                    updated_at=now,
+                    status="active",
+                    error_message=None,
+                    schema_version=1,
+                )
+            )
+
+        path_to_image_id[path_str] = image_id
+        processed.append(image_id)
+
+    session.commit()
+    return processed
+
+
+def _enqueue_targets(
+    image_ids: Sequence[str],
+    enqueue_main: bool,
+    enqueue_enhancement: bool,
+) -> None:
+    queued_preprocess = queued_main = queued_enhancement = 0
+    for image_id in image_ids:
+        process_image.delay(image_id)
+        queued_preprocess += 1
+
+        if enqueue_main:
+            run_main_stage.delay(image_id)
+            queued_main += 1
+
+        if enqueue_enhancement:
+            run_enhancement.delay(image_id)
+            queued_enhancement += 1
+
+    LOGGER.info(
+        "celery_enqueue_complete",
+        extra={
+            "queued_preprocess": queued_preprocess,
+            "queued_main": queued_main,
+            "queued_enhancement": queued_enhancement,
+        },
+    )
+
+
+def main(
+    roots: List[Path] = typer.Argument(..., help="One or more directories to scan for images."),
+    db: Path = typer.Option(Path("data/index.db"), help="Path to the primary SQLite database."),
+    enqueue_main: bool = typer.Option(
+        False,
+        help="Also enqueue main-stage classification/indexing tasks after preprocessing.",
+    ),
+    enqueue_enhancement: bool = typer.Option(
+        False,
+        help="Also enqueue enhancement tasks (OCR/cloud models) after preprocessing.",
+    ),
+) -> None:
+    """Scan directories, persist images, and enqueue Celery tasks."""
+
+    settings: Settings = load_settings()
+    LOGGER.info(
+        "celery_enqueue_start",
+        extra={
+            "roots": [str(root) for root in roots],
+            "db": str(db),
+            "enqueue_main": enqueue_main,
+            "enqueue_enhancement": enqueue_enhancement,
+            "queues": {
+                "preprocess": settings.queues.preprocess_queue,
+                "main": settings.queues.main_queue,
+                "enhancement": settings.queues.enhancement_queue,
+            },
+        },
+    )
+
+    files: list[FileInfo] = list(scan_roots(roots))
+    if not files:
+        LOGGER.warning("celery_enqueue_no_files", extra={"roots": [str(root) for root in roots]})
+        return
+
+    with open_primary_session(db) as session:
+        image_ids = _ingest_files(session, files)
+
+    _enqueue_targets(image_ids, enqueue_main, enqueue_enhancement)
+
+
+if __name__ == "__main__":
+    typer.run(main)
+
+
+__all__ = ["main"]

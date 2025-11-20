@@ -170,6 +170,37 @@ This queue + worker flow is optional. The main preprocessing CLI remains
 single-process for simplicity; use the queue only when you specifically want to
 parallelize SigLIP/BLIP runs over an existing library.
 
+Redis/Celery Task Queues (Preprocess/Main/Enhancement)
+------------------------------------------------------
+
+A Celery application (`vibe_photos.task_queue`) is available when you need
+durable queues, explicit routing, or backfill orchestration. It defines three
+queues:
+
+- ``preprocess`` for cacheable artifacts (thumbnails, EXIF, hashes, embeddings,
+  detections, captions).
+- ``main`` for cache-first classification, clustering, and search-index jobs
+  that only read from cached artifacts.
+- ``enhancement`` for optional OCR/cloud-model passes with stricter
+  concurrency.
+
+Key usage notes:
+
+- Configure broker/backend and queue names via ``config/settings.yaml`` under
+  ``queues`` and ``enhancement``.
+- Start workers with ``celery -A vibe_photos.task_queue worker -Q preprocess``
+  (or substitute ``main`` / ``enhancement``); concurrency defaults are derived
+  from the same settings block.
+- Enqueue batches from a filesystem scan with ``uv run python -m
+  vibe_photos.dev.enqueue_celery <root1> [<root2> ...]``. The helper inserts
+  missing ``images`` rows, then enqueues preprocessing tasks, and can also
+  enqueue main-stage and enhancement work via flags.
+- Enqueue work with ``process_image.delay(<image_id>)`` or
+  ``run_main_stage.delay(<image_id>)``. Tasks are idempotent because artifact
+  keys combine model names and parameter hashes.
+- Enhancement tasks reuse cached embeddings and write versioned manifests so
+  they can be enabled per-tenant without blocking the main flow.
+
 Cache Versioning
 ----------------
 

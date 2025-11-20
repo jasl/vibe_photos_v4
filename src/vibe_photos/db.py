@@ -174,6 +174,83 @@ class PreprocessTask(Base):
     )
 
 
+class ArtifactRecord(Base):
+    """Versioned artifact metadata persisted to durable storage."""
+
+    __tablename__ = "artifact"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    image_id: Mapped[str] = mapped_column(String, nullable=False)
+    artifact_type: Mapped[str] = mapped_column(String, nullable=False)
+    version_key: Mapped[str] = mapped_column(String, nullable=False)
+    params_hash: Mapped[str] = mapped_column(String, nullable=False)
+    checksum: Mapped[str] = mapped_column(String, nullable=False)
+    storage_path: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="complete")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    __table_args__ = (
+        Index("idx_artifact_identity", "image_id", "artifact_type", "version_key", unique=True),
+        Index("idx_artifact_type", "artifact_type"),
+    )
+
+
+class ArtifactDependency(Base):
+    """Lineage mapping between artifacts to support cache reuse."""
+
+    __tablename__ = "artifact_dependency"
+
+    artifact_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    depends_on_artifact_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    __table_args__ = (
+        Index("idx_artifact_dependency_parent", "depends_on_artifact_id"),
+    )
+
+
+class MainStageResult(Base):
+    """Versioned classification and clustering outputs bound to artifacts."""
+
+    __tablename__ = "main_stage_result"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    image_id: Mapped[str] = mapped_column(String, nullable=False)
+    result_type: Mapped[str] = mapped_column(String, nullable=False)
+    version_key: Mapped[str] = mapped_column(String, nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    source_artifact_ids: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    __table_args__ = (
+        Index("idx_main_stage_image", "image_id"),
+        Index("idx_main_stage_type", "result_type"),
+    )
+
+
+class EnhancementOutput(Base):
+    """Resource-heavy annotations stored separately from main pipeline outputs."""
+
+    __tablename__ = "enhancement_output"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    image_id: Mapped[str] = mapped_column(String, nullable=False)
+    enhancement_type: Mapped[str] = mapped_column(String, nullable=False)
+    version_key: Mapped[str] = mapped_column(String, nullable=False)
+    storage_path: Mapped[str] = mapped_column(String, nullable=False)
+    checksum: Mapped[str] = mapped_column(String, nullable=False)
+    source_artifact_ids: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    __table_args__ = (
+        Index("idx_enhancement_image", "image_id"),
+        Index("idx_enhancement_type", "enhancement_type"),
+    )
+
+
 _ENGINE_CACHE: Dict[Path, Engine] = {}
 
 
@@ -233,6 +310,10 @@ __all__ = [
     "ImageNearDuplicate",
     "ImageRegion",
     "ImageScene",
+    "ArtifactDependency",
+    "ArtifactRecord",
+    "MainStageResult",
+    "EnhancementOutput",
     "PreprocessTask",
     "open_primary_session",
     "open_projection_session",

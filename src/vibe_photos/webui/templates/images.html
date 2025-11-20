@@ -43,7 +43,7 @@
     {% for image in images %}
       <div class="card">
         <a href="{{ url_for('image_detail', image_id=image.image_id) }}">
-          <img src="{{ url_for('image_thumbnail', image_id=image.image_id) }}" alt="thumbnail" />
+          <img src="{{ url_for('image_thumbnail', image_id=image.image_id, variant='small') }}" alt="thumbnail" />
         </a>
         <div style="margin-top: 0.25rem; font-size: 0.8rem; color: #555;">
           <div title="{{ image.image_id }}">{{ image.image_id[:12] }}…</div>

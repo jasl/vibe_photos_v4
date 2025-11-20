@@ -275,11 +275,49 @@ class PipelineConfig:
 
 
 @dataclass
+class QueueConfig:
+    """Celery worker and queue configuration."""
+
+    broker_url: str = "redis://localhost:6379/0"
+    result_backend: str = "redis://localhost:6379/1"
+    preprocess_queue: str = "preprocess"
+    main_queue: str = "main"
+    enhancement_queue: str = "enhancement"
+    default_concurrency: int = 4
+    enhancement_concurrency: int = 1
+    backfill_batch_size: int = 128
+
+
+@dataclass
+class MainProcessingConfig:
+    """Configurable thresholds for cache-first classification and clustering."""
+
+    classification_threshold: float = 0.35
+    caption_confidence_threshold: float = 0.2
+    region_min_score: float = 0.25
+    cluster_phash_distance: int = 8
+    search_index_shard_size: int = 5000
+
+
+@dataclass
+class EnhancementConfig:
+    """Optional resource-heavy analyses such as OCR or cloud models."""
+
+    enable_ocr: bool = False
+    enable_cloud_models: bool = False
+    queue_name: str = "enhancement"
+    max_concurrency: int = 1
+
+
+@dataclass
 class Settings:
     """Top-level application settings."""
 
     models: ModelsConfig = field(default_factory=ModelsConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    queues: QueueConfig = field(default_factory=QueueConfig)
+    main_processing: MainProcessingConfig = field(default_factory=MainProcessingConfig)
+    enhancement: EnhancementConfig = field(default_factory=EnhancementConfig)
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -423,6 +461,51 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     if isinstance(pipeline_raw.get("exif_datetime_format"), str):
         pipeline_cfg.exif_datetime_format = pipeline_raw["exif_datetime_format"]
 
+    queue_raw = _as_dict(raw.get("queues"))
+    queue_cfg = settings.queues
+    if isinstance(queue_raw.get("broker_url"), str):
+        queue_cfg.broker_url = queue_raw["broker_url"]
+    if isinstance(queue_raw.get("result_backend"), str):
+        queue_cfg.result_backend = queue_raw["result_backend"]
+    if isinstance(queue_raw.get("preprocess_queue"), str):
+        queue_cfg.preprocess_queue = queue_raw["preprocess_queue"]
+    if isinstance(queue_raw.get("main_queue"), str):
+        queue_cfg.main_queue = queue_raw["main_queue"]
+    if isinstance(queue_raw.get("enhancement_queue"), str):
+        queue_cfg.enhancement_queue = queue_raw["enhancement_queue"]
+    if isinstance(queue_raw.get("default_concurrency"), int):
+        queue_cfg.default_concurrency = queue_raw["default_concurrency"]
+    if isinstance(queue_raw.get("enhancement_concurrency"), int):
+        queue_cfg.enhancement_concurrency = queue_raw["enhancement_concurrency"]
+    if isinstance(queue_raw.get("backfill_batch_size"), int):
+        queue_cfg.backfill_batch_size = queue_raw["backfill_batch_size"]
+
+    main_stage_raw = _as_dict(raw.get("main_processing"))
+    main_stage_cfg = settings.main_processing
+    if isinstance(main_stage_raw.get("classification_threshold"), (int, float)):
+        main_stage_cfg.classification_threshold = float(main_stage_raw["classification_threshold"])
+    if isinstance(main_stage_raw.get("caption_confidence_threshold"), (int, float)):
+        main_stage_cfg.caption_confidence_threshold = float(
+            main_stage_raw["caption_confidence_threshold"]
+        )
+    if isinstance(main_stage_raw.get("region_min_score"), (int, float)):
+        main_stage_cfg.region_min_score = float(main_stage_raw["region_min_score"])
+    if isinstance(main_stage_raw.get("cluster_phash_distance"), int):
+        main_stage_cfg.cluster_phash_distance = main_stage_raw["cluster_phash_distance"]
+    if isinstance(main_stage_raw.get("search_index_shard_size"), int):
+        main_stage_cfg.search_index_shard_size = main_stage_raw["search_index_shard_size"]
+
+    enhancement_raw = _as_dict(raw.get("enhancement"))
+    enhancement_cfg = settings.enhancement
+    if isinstance(enhancement_raw.get("enable_ocr"), bool):
+        enhancement_cfg.enable_ocr = enhancement_raw["enable_ocr"]
+    if isinstance(enhancement_raw.get("enable_cloud_models"), bool):
+        enhancement_cfg.enable_cloud_models = enhancement_raw["enable_cloud_models"]
+    if isinstance(enhancement_raw.get("queue_name"), str):
+        enhancement_cfg.queue_name = enhancement_raw["queue_name"]
+    if isinstance(enhancement_raw.get("max_concurrency"), int):
+        enhancement_cfg.max_concurrency = enhancement_raw["max_concurrency"]
+
     return settings
 
 
@@ -448,6 +531,9 @@ __all__ = [
     "OcrConfig",
     "ModelsConfig",
     "PipelineConfig",
+    "QueueConfig",
+    "MainProcessingConfig",
+    "EnhancementConfig",
     "Settings",
     "load_settings",
     "get_embedding_model_name",
