@@ -10,6 +10,7 @@ from PIL import Image
 
 from vibe_photos.artifact_store import ArtifactManager, ArtifactResult, ArtifactSpec, hash_file
 from vibe_photos.config import Settings
+from vibe_photos.db import ArtifactRecord
 from vibe_photos.hasher import compute_content_hash, compute_perceptual_hash
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.thumbnailing import save_thumbnail
@@ -66,11 +67,11 @@ def build_content_hash_artifact(image_path: Path, output_dir: Path) -> ArtifactR
     return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path))
 
 
-def build_phash_artifact(image_path: Path, output_dir: Path) -> ArtifactResult:
-    """Compute and persist the perceptual hash for an image file."""
+def build_phash_artifact(image: Image.Image, output_dir: Path) -> ArtifactResult:
+    """Compute and persist the perceptual hash for an image."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    value = compute_perceptual_hash(image_path)
+    value = compute_perceptual_hash(image)
     out_path = output_dir / "perceptual_hash.txt"
     out_path.write_text(value, encoding="utf-8")
     return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path))
@@ -85,7 +86,7 @@ def build_embedding_artifact(
     """Run SigLIP classification and persist scores to ``embedding.json``."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    scores = detector._classify_with_siglip(image=image, labels=labels)
+    scores = detector._classify_with_siglip(image=image, labels=list(labels))
     out_path = output_dir / "embedding.json"
     out_path.write_text(json.dumps(scores), encoding="utf-8")
     return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path), payload_path=out_path)
@@ -109,7 +110,7 @@ def ensure_preprocessing_artifacts(
     settings: Settings,
     manager: ArtifactManager,
     detector: SiglipBlipDetector,
-) -> dict[str, ArtifactResult | ArtifactSpec]:
+) -> dict[str, ArtifactSpec | ArtifactRecord]:
     """Ensure all preprocessing artifacts exist for a single image and return key artifacts/specs."""
 
     thumb_large = ArtifactSpec(
@@ -166,7 +167,7 @@ def ensure_preprocessing_artifacts(
     phash_artifact = manager.ensure_artifact(
         image_id=image_id,
         spec=phash_spec,
-        builder=lambda out_dir: build_phash_artifact(image_path, out_dir),
+        builder=lambda out_dir: build_phash_artifact(image, out_dir),
     )
 
     embed_spec = ArtifactSpec(
@@ -209,4 +210,3 @@ def ensure_preprocessing_artifacts(
         "caption_spec": caption_spec,
         "caption_artifact": caption_artifact,
     }
-

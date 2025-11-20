@@ -6,7 +6,7 @@ import json
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, cast
 
 from celery import Celery
 from PIL import Image
@@ -15,7 +15,7 @@ from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactManager, ArtifactResult, ArtifactSpec, hash_file
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import Image as ImageRow
-from vibe_photos.db import EnhancementOutput, MainStageResult, open_primary_session, open_projection_session
+from vibe_photos.db import ArtifactRecord, EnhancementOutput, MainStageResult, open_primary_session, open_projection_session
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.preprocessing import ensure_preprocessing_artifacts
 
@@ -91,8 +91,8 @@ def process_image(image_id: str) -> str:
             detector=detector,
         )
 
-        content_artifact = artifacts["content_hash_artifact"]
-        phash_artifact = artifacts["phash_artifact"]
+        content_artifact = cast(ArtifactRecord, artifacts["content_hash_artifact"])
+        phash_artifact = cast(ArtifactRecord, artifacts["phash_artifact"])
         thumb_large = artifacts["thumb_large_spec"]
         thumb_small = artifacts["thumb_small_spec"]
         exif_spec = artifacts["exif_spec"]
@@ -281,4 +281,3 @@ def run_enhancement(image_id: str) -> str:
 
 
 __all__ = ["celery_app", "process_image", "run_main_stage", "run_enhancement"]
-
