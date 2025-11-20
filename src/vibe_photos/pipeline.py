@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence
 
-from sqlalchemy import and_, delete, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from torch import Tensor
 from utils.logging import get_logger
@@ -355,7 +355,10 @@ class PreprocessingPipeline:
 
         self._logger.info("scan_and_hash_start", extra={})
         files: List[FileInfo] = list(scan_roots(roots))
-        self._logger.info("scan_and_hash_files_discovered", extra={"file_count": len(files)})
+        total_files = len(files)
+        self._logger.info("scan_and_hash_files_discovered", extra={"file_count": total_files})
+
+        progress_interval = max(1, total_files // 20) if total_files else 0
 
         path_to_image_id: Dict[str, str] = {}
         existing_rows = primary_session.execute(select(Image.image_id, Image.all_paths)).mappings()
@@ -369,6 +372,7 @@ class PreprocessingPipeline:
                 path_to_image_id[str(stored_path)] = row["image_id"]
 
         now = time.time()
+        processed_files = 0
 
         for file_info in files:
             path = file_info.path.resolve()
@@ -456,6 +460,19 @@ class PreprocessingPipeline:
 
             path_to_image_id[path_str] = new_image_id
 
+            processed_files += 1
+            if progress_interval and (
+                processed_files % progress_interval == 0 or processed_files == total_files
+            ):
+                percent = round(processed_files * 100.0 / max(total_files, 1), 1)
+                self._logger.info(
+                    "scan_and_hash_progress %s/%s (%.1f%%)",
+                    processed_files,
+                    total_files,
+                    percent,
+                    extra={"processed": processed_files, "total": total_files, "percent": percent},
+                )
+
         primary_session.commit()
 
         now = time.time()
@@ -500,7 +517,7 @@ class PreprocessingPipeline:
             primary_session.add(image)
 
         primary_session.commit()
-        self._logger.info("scan_and_hash_complete", extra={"file_count": len(files)})
+        self._logger.info("scan_and_hash_complete", extra={"file_count": total_files})
 
     def _run_thumbnails(self, primary_session) -> None:
         """Generate web-friendly thumbnails for active images under cache/images/thumbnails/."""
@@ -518,8 +535,15 @@ class PreprocessingPipeline:
             select(Image.image_id, Image.primary_path).where(Image.status == "active")
         )
 
+        total_thumbnails = primary_session.execute(
+            select(func.count()).where(Image.status == "active")
+        ).scalar_one()
+
         created = 0
         skipped = 0
+        processed = 0
+
+        progress_interval = max(1, int(total_thumbnails) // 20) if total_thumbnails else 0
 
         try:
             from PIL import Image as _ImageThumb
@@ -562,6 +586,25 @@ class PreprocessingPipeline:
                 except OSError:
                     pass
                 continue
+
+            processed += 1
+            if progress_interval and (
+                processed % progress_interval == 0 or processed == int(total_thumbnails)
+            ):
+                percent = round(processed * 100.0 / max(int(total_thumbnails), 1), 1)
+                self._logger.info(
+                    "thumbnails_progress %s/%s (%.1f%%)",
+                    processed,
+                    int(total_thumbnails),
+                    percent,
+                    extra={
+                        "processed": processed,
+                        "total": int(total_thumbnails),
+                        "created": created,
+                        "skipped_existing": skipped,
+                        "percent": percent,
+                    },
+                )
 
         self._logger.info(
             "thumbnails_complete",
@@ -691,6 +734,10 @@ class PreprocessingPipeline:
 
         updated_rows = 0
         now = time.time()
+
+        total_images = len(process_ids)
+        progress_interval = max(1, total_images // 20) if total_images else 0
+        processed_images = 0
 
         for image_id in process_ids:
             path_str = paths_by_id[image_id]
@@ -922,6 +969,23 @@ class PreprocessingPipeline:
             cache_path = regions_dir / f"{image_id}.json"
             cache_path.write_text(json.dumps(payload), encoding="utf-8")
 
+            processed_images += 1
+            if progress_interval and (
+                processed_images % progress_interval == 0 or processed_images == total_images
+            ):
+                percent = round(processed_images * 100.0 / max(total_images, 1), 1)
+                self._logger.info(
+                    "region_detection_progress %s/%s (%.1f%%)",
+                    processed_images,
+                    total_images,
+                    percent,
+                    extra={
+                        "processed": processed_images,
+                        "total": total_images,
+                        "percent": percent,
+                    },
+                )
+
         self._logger.info(
             "region_detection_complete",
             extra={"regions_created": updated_rows},
@@ -990,8 +1054,10 @@ class PreprocessingPipeline:
 
         batch_size = max(1, self._settings.models.embedding.batch_size)
         updated_rows = 0
+        total_targets = len(target_ids)
+        progress_interval = max(1, total_targets // 20) if total_targets else 0
 
-        for batch_start in range(0, len(target_ids), batch_size):
+        for batch_start in range(0, total_targets, batch_size):
             batch_ids = target_ids[batch_start : batch_start + batch_size]
             embeddings: List[Tensor] = []
             valid_ids: List[str] = []
@@ -1020,61 +1086,76 @@ class PreprocessingPipeline:
                 embeddings.append(tensor)
                 valid_ids.append(image_id)
 
-            if not embeddings:
-                continue
+            if embeddings:
+                attributes_list = classifier.classify_batch(embeddings)
 
-            attributes_list = classifier.classify_batch(embeddings)
+                now = time.time()
+                for image_id, attributes in zip(valid_ids, attributes_list):
+                    stmt = sqlite_insert(ImageScene).values(
+                        image_id=image_id,
+                        scene_type=attributes.scene_type,
+                        scene_confidence=attributes.scene_confidence,
+                        has_text=bool(attributes.has_text),
+                        has_person=bool(attributes.has_person),
+                        is_screenshot=bool(attributes.is_screenshot),
+                        is_document=bool(attributes.is_document),
+                        classifier_name=attributes.classifier_name,
+                        classifier_version=attributes.classifier_version,
+                        updated_at=now,
+                    )
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=[ImageScene.image_id],
+                        set_={
+                            "scene_type": stmt.excluded.scene_type,
+                            "scene_confidence": stmt.excluded.scene_confidence,
+                            "has_text": stmt.excluded.has_text,
+                            "has_person": stmt.excluded.has_person,
+                            "is_screenshot": stmt.excluded.is_screenshot,
+                            "is_document": stmt.excluded.is_document,
+                            "classifier_name": stmt.excluded.classifier_name,
+                            "classifier_version": stmt.excluded.classifier_version,
+                            "updated_at": stmt.excluded.updated_at,
+                        },
+                    )
+                    primary_session.execute(stmt)
 
-            now = time.time()
-            for image_id, attributes in zip(valid_ids, attributes_list):
-                stmt = sqlite_insert(ImageScene).values(
-                    image_id=image_id,
-                    scene_type=attributes.scene_type,
-                    scene_confidence=attributes.scene_confidence,
-                    has_text=bool(attributes.has_text),
-                    has_person=bool(attributes.has_person),
-                    is_screenshot=bool(attributes.is_screenshot),
-                    is_document=bool(attributes.is_document),
-                    classifier_name=attributes.classifier_name,
-                    classifier_version=attributes.classifier_version,
-                    updated_at=now,
-                )
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=[ImageScene.image_id],
-                    set_={
-                        "scene_type": stmt.excluded.scene_type,
-                        "scene_confidence": stmt.excluded.scene_confidence,
-                        "has_text": stmt.excluded.has_text,
-                        "has_person": stmt.excluded.has_person,
-                        "is_screenshot": stmt.excluded.is_screenshot,
-                        "is_document": stmt.excluded.is_document,
-                        "classifier_name": stmt.excluded.classifier_name,
-                        "classifier_version": stmt.excluded.classifier_version,
-                        "updated_at": stmt.excluded.updated_at,
-                    },
-                )
-                primary_session.execute(stmt)
-
-                detection_payload = {
-                    "image_id": image_id,
-                    "scene_type": attributes.scene_type,
-                    "scene_confidence": attributes.scene_confidence,
-                    "has_text": attributes.has_text,
-                    "has_person": attributes.has_person,
-                    "is_screenshot": attributes.is_screenshot,
-                    "is_document": attributes.is_document,
-                    "classifier_name": attributes.classifier_name,
-                    "classifier_version": attributes.classifier_version,
-                    "updated_at": now,
-                }
-                cache_path = detections_dir / f"{image_id}.json"
-                cache_path.write_text(json.dumps(detection_payload), encoding="utf-8")
-                updated_rows += 1
+                    detection_payload = {
+                        "image_id": image_id,
+                        "scene_type": attributes.scene_type,
+                        "scene_confidence": attributes.scene_confidence,
+                        "has_text": attributes.has_text,
+                        "has_person": attributes.has_person,
+                        "is_screenshot": attributes.is_screenshot,
+                        "is_document": attributes.is_document,
+                        "classifier_name": attributes.classifier_name,
+                        "classifier_version": attributes.classifier_version,
+                        "updated_at": now,
+                    }
+                    cache_path = detections_dir / f"{image_id}.json"
+                    cache_path.write_text(json.dumps(detection_payload), encoding="utf-8")
+                    updated_rows += 1
 
             save_run_journal(
                 cache_root,
                 RunJournalRecord(stage="scene_classification", cursor_image_id=batch_ids[-1], updated_at=time.time()),
             )
+
+            if progress_interval:
+                processed = min(batch_start + len(batch_ids), total_targets)
+                if processed % progress_interval == 0 or processed == total_targets:
+                    percent = round(processed * 100.0 / max(total_targets, 1), 1)
+                    self._logger.info(
+                        "scene_classification_progress %s/%s (%.1f%%)",
+                        processed,
+                        total_targets,
+                        percent,
+                        extra={
+                            "processed": processed,
+                            "total": total_targets,
+                            "updated_rows": updated_rows,
+                            "percent": percent,
+                        },
+                    )
 
         primary_session.commit()
         self._logger.info("scene_classification_complete", extra={"updated_rows": updated_rows})
@@ -1136,6 +1217,9 @@ class PreprocessingPipeline:
         embedding_targets = [image_id for image_id in process_ids if image_id not in existing_embedding_ids]
         caption_targets = [image_id for image_id in process_ids if image_id not in existing_caption_ids]
 
+        embedding_total = len(embedding_targets)
+        caption_total = len(caption_targets)
+
         embeddings_dir = cache_root / "embeddings"
         captions_dir = cache_root / "captions"
         embeddings_dir.mkdir(parents=True, exist_ok=True)
@@ -1148,8 +1232,9 @@ class PreprocessingPipeline:
 
         embedding_batch_size = max(1, embedding_cfg.batch_size)
         total_embeddings = 0
+        embedding_progress_interval = max(1, embedding_total // 20) if embedding_total else 0
 
-        for batch_start in range(0, len(embedding_targets), embedding_batch_size):
+        for batch_start in range(0, embedding_total, embedding_batch_size):
             batch_ids = embedding_targets[batch_start : batch_start + embedding_batch_size]
             images: List["Image.Image"] = []
             valid_ids: List[str] = []
@@ -1170,54 +1255,52 @@ class PreprocessingPipeline:
                 images.append(img)
                 valid_ids.append(image_id)
 
-            if not images:
-                continue
+            if images:
+                inputs = siglip_processor(images=images, return_tensors="pt")
+                inputs = inputs.to(siglip_device)
 
-            inputs = siglip_processor(images=images, return_tensors="pt")
-            inputs = inputs.to(siglip_device)
+                with torch.no_grad():
+                    features = siglip_model.get_image_features(**inputs)
 
-            with torch.no_grad():
-                features = siglip_model.get_image_features(**inputs)
+                for idx, image_id in enumerate(valid_ids):
+                    emb = features[idx]
+                    emb = emb / emb.norm(dim=-1, keepdim=True)
+                    vec = emb.detach().cpu().numpy().astype(np.float32)
 
-            for idx, image_id in enumerate(valid_ids):
-                emb = features[idx]
-                emb = emb / emb.norm(dim=-1, keepdim=True)
-                vec = emb.detach().cpu().numpy().astype(np.float32)
+                    rel_path = f"{image_id}.npy"
+                    emb_path = embeddings_dir / rel_path
+                    np.save(emb_path, vec)
 
-                rel_path = f"{image_id}.npy"
-                emb_path = embeddings_dir / rel_path
-                np.save(emb_path, vec)
+                    meta_payload = {
+                        "image_id": image_id,
+                        "model_name": embedding_model_name,
+                        "model_backend": embedding_cfg.backend,
+                        "embedding_dim": int(vec.shape[-1]),
+                        "updated_at": now,
+                        "cache_format_version": CACHE_FORMAT_VERSION,
+                    }
+                    meta_path = embeddings_dir / f"{image_id}.json"
+                    meta_path.write_text(json.dumps(meta_payload), encoding="utf-8")
 
-                meta_payload = {
-                    "image_id": image_id,
-                    "model_name": embedding_model_name,
-                    "model_backend": embedding_cfg.backend,
-                    "embedding_dim": int(vec.shape[-1]),
-                    "updated_at": now,
-                    "cache_format_version": CACHE_FORMAT_VERSION,
-                }
-                meta_path = embeddings_dir / f"{image_id}.json"
-                meta_path.write_text(json.dumps(meta_payload), encoding="utf-8")
-
-                stmt = sqlite_insert(ImageEmbedding).values(
-                    image_id=image_id,
-                    model_name=embedding_model_name,
-                    embedding_path=rel_path,
-                    embedding_dim=int(vec.shape[-1]),
-                    model_backend=embedding_cfg.backend,
-                    updated_at=now,
-                )
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=[ImageEmbedding.image_id, ImageEmbedding.model_name],
-                    set_={
-                        "embedding_path": stmt.excluded.embedding_path,
-                        "embedding_dim": stmt.excluded.embedding_dim,
-                        "model_backend": stmt.excluded.model_backend,
-                        "updated_at": stmt.excluded.updated_at,
-                    },
-                )
-                primary_session.execute(stmt)
-                total_embeddings += 1
+                    stmt = sqlite_insert(ImageEmbedding).values(
+                        image_id=image_id,
+                        model_name=embedding_model_name,
+                        embedding_path=rel_path,
+                        embedding_dim=int(vec.shape[-1]),
+                        model_backend=embedding_cfg.backend,
+                        updated_at=now,
+                    )
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=[ImageEmbedding.image_id, ImageEmbedding.model_name],
+                        set_={
+                            "embedding_path": stmt.excluded.embedding_path,
+                            "embedding_dim": stmt.excluded.embedding_dim,
+                            "model_backend": stmt.excluded.model_backend,
+                            "updated_at": stmt.excluded.updated_at,
+                        },
+                    )
+                    primary_session.execute(stmt)
+                    total_embeddings += 1
 
             primary_session.commit()
             if batch_ids:
@@ -1226,12 +1309,33 @@ class PreprocessingPipeline:
                     RunJournalRecord(stage="embeddings_and_captions", cursor_image_id=batch_ids[-1], updated_at=time.time()),
                 )
 
+            if embedding_progress_interval:
+                processed_embeddings = min(batch_start + len(batch_ids), embedding_total)
+                if processed_embeddings % embedding_progress_interval == 0 or processed_embeddings == embedding_total:
+                    percent = round(
+                        processed_embeddings * 100.0 / max(embedding_total, 1),
+                        1,
+                    )
+                    self._logger.info(
+                        "embeddings_progress %s/%s (%.1f%%)",
+                        processed_embeddings,
+                        embedding_total,
+                        percent,
+                        extra={
+                            "processed": processed_embeddings,
+                            "total": embedding_total,
+                            "created": total_embeddings,
+                            "percent": percent,
+                        },
+                    )
+
         caption_batch_size = max(1, caption_cfg.batch_size)
         total_captions = 0
+        caption_progress_interval = max(1, caption_total // 20) if caption_total else 0
 
         from PIL import Image as _ImageCaption
 
-        for batch_start in range(0, len(caption_targets), caption_batch_size):
+        for batch_start in range(0, caption_total, caption_batch_size):
             batch_ids = caption_targets[batch_start : batch_start + caption_batch_size]
             images: List["_ImageCaption.Image"] = []
             valid_ids: List[str] = []
@@ -1250,48 +1354,46 @@ class PreprocessingPipeline:
                 images.append(img)
                 valid_ids.append(image_id)
 
-            if not images:
-                continue
+            if images:
+                inputs = blip_processor(images=images, return_tensors="pt")
+                inputs = inputs.to(blip_device)
 
-            inputs = blip_processor(images=images, return_tensors="pt")
-            inputs = inputs.to(blip_device)
+                with torch.no_grad():
+                    generated_ids = blip_model.generate(**inputs)
 
-            with torch.no_grad():
-                generated_ids = blip_model.generate(**inputs)
+                for idx, image_id in enumerate(valid_ids):
+                    token_ids = generated_ids[idx]
+                    caption_text = blip_processor.decode(token_ids, skip_special_tokens=True)
 
-            for idx, image_id in enumerate(valid_ids):
-                token_ids = generated_ids[idx]
-                caption_text = blip_processor.decode(token_ids, skip_special_tokens=True)
+                    rel_path = f"{image_id}.json"
+                    caption_path = captions_dir / rel_path
+                    payload = {
+                        "image_id": image_id,
+                        "caption": caption_text,
+                        "model_name": caption_model_name,
+                        "model_backend": caption_cfg.backend,
+                        "updated_at": now,
+                        "cache_format_version": CACHE_FORMAT_VERSION,
+                    }
+                    caption_path.write_text(json.dumps(payload), encoding="utf-8")
 
-                rel_path = f"{image_id}.json"
-                caption_path = captions_dir / rel_path
-                payload = {
-                    "image_id": image_id,
-                    "caption": caption_text,
-                    "model_name": caption_model_name,
-                    "model_backend": caption_cfg.backend,
-                    "updated_at": now,
-                    "cache_format_version": CACHE_FORMAT_VERSION,
-                }
-                caption_path.write_text(json.dumps(payload), encoding="utf-8")
-
-                stmt = sqlite_insert(ImageCaption).values(
-                    image_id=image_id,
-                    model_name=caption_model_name,
-                    caption=caption_text,
-                    model_backend=caption_cfg.backend,
-                    updated_at=now,
-                )
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=[ImageCaption.image_id, ImageCaption.model_name],
-                    set_={
-                        "caption": stmt.excluded.caption,
-                        "model_backend": stmt.excluded.model_backend,
-                        "updated_at": stmt.excluded.updated_at,
-                    },
-                )
-                primary_session.execute(stmt)
-                total_captions += 1
+                    stmt = sqlite_insert(ImageCaption).values(
+                        image_id=image_id,
+                        model_name=caption_model_name,
+                        caption=caption_text,
+                        model_backend=caption_cfg.backend,
+                        updated_at=now,
+                    )
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=[ImageCaption.image_id, ImageCaption.model_name],
+                        set_={
+                            "caption": stmt.excluded.caption,
+                            "model_backend": stmt.excluded.model_backend,
+                            "updated_at": stmt.excluded.updated_at,
+                        },
+                    )
+                    primary_session.execute(stmt)
+                    total_captions += 1
 
             primary_session.commit()
 
@@ -1300,6 +1402,26 @@ class PreprocessingPipeline:
                     cache_root,
                     RunJournalRecord(stage="embeddings_and_captions", cursor_image_id=batch_ids[-1], updated_at=time.time()),
                 )
+
+            if caption_progress_interval:
+                processed_captions = min(batch_start + len(batch_ids), caption_total)
+                if processed_captions % caption_progress_interval == 0 or processed_captions == caption_total:
+                    percent = round(
+                        processed_captions * 100.0 / max(caption_total, 1),
+                        1,
+                    )
+                    self._logger.info(
+                        "captions_progress %s/%s (%.1f%%)",
+                        processed_captions,
+                        caption_total,
+                        percent,
+                        extra={
+                            "processed": processed_captions,
+                            "total": caption_total,
+                            "created": total_captions,
+                            "percent": percent,
+                        },
+                    )
 
         primary_session.commit()
         self._logger.info(
