@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from threading import Lock
 from typing import Dict
 
 from sqlalchemy import Boolean, Float, Index, Integer, String, Text, create_engine, delete
@@ -182,10 +183,10 @@ class ArtifactDependency(Base):
     )
 
 
-class MainStageResult(Base):
+class ProcessResult(Base):
     """Versioned classification and clustering outputs bound to artifacts."""
 
-    __tablename__ = "main_stage_result"
+    __tablename__ = "process_result"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     image_id: Mapped[str] = mapped_column(String, nullable=False)
@@ -202,10 +203,10 @@ class MainStageResult(Base):
     )
 
 
-class EnhancementOutput(Base):
+class PostProcessResult(Base):
     """Resource-heavy annotations stored separately from main pipeline outputs."""
 
-    __tablename__ = "enhancement_output"
+    __tablename__ = "post_process_result"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     image_id: Mapped[str] = mapped_column(String, nullable=False)
@@ -224,6 +225,7 @@ class EnhancementOutput(Base):
 
 
 _ENGINE_CACHE: Dict[Path, Engine] = {}
+_ENGINE_LOCK = Lock()
 
 
 def _ensure_parent_directory(path: Path) -> None:
@@ -241,12 +243,19 @@ def _get_engine(path: Path) -> Engine:
 
     resolved = path.resolve()
     engine = _ENGINE_CACHE.get(resolved)
-    if engine is None:
+    if engine is not None:
+        return engine
+
+    with _ENGINE_LOCK:
+        engine = _ENGINE_CACHE.get(resolved)
+        if engine is not None:
+            return engine
+
         _ensure_parent_directory(resolved)
         engine = create_engine(f"sqlite:///{resolved}", future=True)
         Base.metadata.create_all(engine)
         _ENGINE_CACHE[resolved] = engine
-    return engine
+        return engine
 
 
 def open_primary_session(path: Path) -> Session:
@@ -284,8 +293,8 @@ __all__ = [
     "ImageScene",
     "ArtifactDependency",
     "ArtifactRecord",
-    "MainStageResult",
-    "EnhancementOutput",
+    "ProcessResult",
+    "PostProcessResult",
     "open_primary_session",
     "open_projection_session",
     "reset_projection_tables",

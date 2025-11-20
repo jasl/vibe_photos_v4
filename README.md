@@ -137,11 +137,11 @@ orchestration.
 
 The Celery application (`vibe_photos.task_queue`) defines three queues:
 
-- ``preprocess`` for cacheable artifacts (thumbnails, EXIF, hashes, embeddings,
+- ``pre_process`` for cacheable artifacts (thumbnails, EXIF, hashes, embeddings,
   detections, captions).
-- ``main`` for cache-first classification, clustering, and search-index jobs
+- ``process`` for cache-first classification, clustering, and search-index jobs
   that only read from cached artifacts.
-- ``enhancement`` for optional OCR/cloud-model passes with stricter
+- ``post_process`` for optional OCR/cloud-model passes with stricter
   concurrency.
 
 To use Celery queues:
@@ -150,7 +150,7 @@ To use Celery queues:
    ``queues`` and ``enhancement``.
 2. Start one or more workers. For local development, a single worker that
    consumes all queues is often sufficient:
-   - `uv run celery -A vibe_photos.task_queue worker -Q preprocess,main,enhancement -l info`
+   - `uv run celery -A vibe_photos.task_queue worker -Q pre_process,process,post_process -l info`
    - For finer control, run separate workers per queue and tune concurrency via
      Celery options or the values in `settings.queues`.
 3. Enqueue batches from a filesystem scan with:
@@ -159,13 +159,20 @@ To use Celery queues:
      enqueues preprocessing tasks, and optionally main-stage and enhancement
      work based on the flags.
 4. For ad-hoc enqueueing in Python, use:
-   - `process_image.delay(<image_id>)`
-   - `run_main_stage.delay(<image_id>)`
-   - `run_enhancement.delay(<image_id>)`
+   - `pre_process.delay(<image_id>)`
+   - `process.delay(<image_id>)`
+   - `post_process.delay(<image_id>)`
 
 Tasks are idempotent because artifact keys combine model names and parameter
 hashes. Enhancement tasks reuse cached embeddings and write versioned manifests
 so they can be enabled per-tenant without blocking the main flow.
+
+To clear pending Celery tasks (for example after changing configuration), you can purge queues from the broker:
+
+- Purge all queues for this app (dangerous – removes all pending tasks):  
+  - `uv run celery -A vibe_photos.task_queue purge -f`
+- Purge only the default queues used by this project:  
+  - `uv run celery -A vibe_photos.task_queue purge -f -Q pre_process,process,post_process`
 
 Cache Versioning
 ----------------

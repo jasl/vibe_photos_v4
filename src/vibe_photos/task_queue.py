@@ -15,7 +15,7 @@ from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactManager, ArtifactResult, ArtifactSpec, hash_file
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import Image as ImageRow
-from vibe_photos.db import ArtifactRecord, EnhancementOutput, MainStageResult, open_primary_session, open_projection_session
+from vibe_photos.db import ArtifactRecord, PostProcessResult, ProcessResult, open_primary_session, open_projection_session
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.preprocessing import ensure_preprocessing_artifacts
 
@@ -44,9 +44,9 @@ def _init_celery() -> Celery:
     app.conf.task_acks_late = True
     app.conf.task_default_queue = settings.queues.preprocess_queue
     app.conf.task_routes = {
-        "vibe_photos.task_queue.process_image": {"queue": settings.queues.preprocess_queue},
-        "vibe_photos.task_queue.run_main_stage": {"queue": settings.queues.main_queue},
-        "vibe_photos.task_queue.run_enhancement": {"queue": settings.queues.enhancement_queue},
+        "vibe_photos.task_queue.pre_process": {"queue": settings.queues.preprocess_queue},
+        "vibe_photos.task_queue.process": {"queue": settings.queues.main_queue},
+        "vibe_photos.task_queue.post_process": {"queue": settings.queues.enhancement_queue},
     }
     return app
 
@@ -58,8 +58,8 @@ def _artifact_root() -> Path:
     return Path("cache/artifacts")
 
 
-@celery_app.task(name="vibe_photos.task_queue.process_image", acks_late=True)
-def process_image(image_id: str) -> str:
+@celery_app.task(name="vibe_photos.task_queue.pre_process", acks_late=True)
+def pre_process(image_id: str) -> str:
     """Generate preprocessing artifacts for an image if they are missing."""
 
     settings = _load_settings()
@@ -173,8 +173,8 @@ def process_image(image_id: str) -> str:
     return image_id
 
 
-@celery_app.task(name="vibe_photos.task_queue.run_main_stage", acks_late=True)
-def run_main_stage(image_id: str) -> str:
+@celery_app.task(name="vibe_photos.task_queue.process", acks_late=True)
+def process(image_id: str) -> str:
     """Consume cached artifacts to compute labels, clusters, and indices."""
 
     settings = _load_settings()
@@ -210,7 +210,7 @@ def run_main_stage(image_id: str) -> str:
             "classification_threshold": settings.main_processing.classification_threshold,
             "caption_threshold": settings.main_processing.caption_confidence_threshold,
         }
-        result = MainStageResult(
+        result = ProcessResult(
             image_id=image_id,
             result_type="labels",
             version_key=f"main:{settings.main_processing.classification_threshold}",
@@ -229,8 +229,8 @@ def run_main_stage(image_id: str) -> str:
     return image_id
 
 
-@celery_app.task(name="vibe_photos.task_queue.run_enhancement", acks_late=True)
-def run_enhancement(image_id: str) -> str:
+@celery_app.task(name="vibe_photos.task_queue.post_process", acks_late=True)
+def post_process(image_id: str) -> str:
     """Run optional OCR or cloud models with stricter concurrency limits."""
 
     settings = _load_settings()
@@ -260,7 +260,7 @@ def run_enhancement(image_id: str) -> str:
         manifest = {"enable_ocr": settings.enhancement.enable_ocr, "enable_cloud_models": settings.enhancement.enable_cloud_models}
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-        enhancement = EnhancementOutput(
+        enhancement = PostProcessResult(
             image_id=image_id,
             enhancement_type="baseline",
             version_key=f"enhancement:{int(settings.enhancement.enable_ocr)}:{int(settings.enhancement.enable_cloud_models)}",
@@ -280,4 +280,4 @@ def run_enhancement(image_id: str) -> str:
     return image_id
 
 
-__all__ = ["celery_app", "process_image", "run_main_stage", "run_enhancement"]
+__all__ = ["celery_app", "pre_process", "process", "post_process"]

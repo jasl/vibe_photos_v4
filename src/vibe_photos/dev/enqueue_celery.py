@@ -15,7 +15,7 @@ from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import Image, open_primary_session
 from vibe_photos.hasher import CONTENT_HASH_ALGO, compute_content_hash
 from vibe_photos.scanner import FileInfo, scan_roots
-from vibe_photos.task_queue import process_image, run_enhancement, run_main_stage
+from vibe_photos.task_queue import post_process, pre_process, process
 
 
 LOGGER = get_logger(__name__, extra={"component": "enqueue_celery"})
@@ -123,15 +123,15 @@ def _enqueue_targets(
 ) -> None:
     queued_preprocess = queued_main = queued_enhancement = 0
     for image_id in image_ids:
-        process_image.delay(image_id)
+        pre_process.delay(image_id)
         queued_preprocess += 1
 
         if enqueue_main:
-            run_main_stage.delay(image_id)
+            process.delay(image_id)
             queued_main += 1
 
         if enqueue_enhancement:
-            run_enhancement.delay(image_id)
+            post_process.delay(image_id)
             queued_enhancement += 1
 
     LOGGER.info(
@@ -167,9 +167,9 @@ def main(
             "enqueue_main": enqueue_main,
             "enqueue_enhancement": enqueue_enhancement,
             "queues": {
-                "preprocess": settings.queues.preprocess_queue,
-                "main": settings.queues.main_queue,
-                "enhancement": settings.queues.enhancement_queue,
+                "pre_process": settings.queues.preprocess_queue,
+                "process": settings.queues.main_queue,
+                "post_process": settings.queues.enhancement_queue,
             },
         },
     )

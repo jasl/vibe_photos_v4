@@ -281,9 +281,9 @@ class QueueConfig:
 
     broker_url: str = "redis://localhost:6379/0"
     result_backend: str = "redis://localhost:6379/1"
-    preprocess_queue: str = "preprocess"
-    main_queue: str = "main"
-    enhancement_queue: str = "enhancement"
+    preprocess_queue: str = "pre_process"
+    main_queue: str = "process"
+    enhancement_queue: str = "post_process"
     default_concurrency: int = 4
     enhancement_concurrency: int = 1
     backfill_batch_size: int = 128
