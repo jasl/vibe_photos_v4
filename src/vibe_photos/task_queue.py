@@ -231,7 +231,7 @@ def process(image_id: str) -> str:
         session.commit()
 
         LOGGER.info(
-            "main_stage_complete",
+            "process_complete",
             extra={"image_id": image_id, "version_key": result.version_key},
         )
     return image_id
