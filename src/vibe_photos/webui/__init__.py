@@ -364,11 +364,15 @@ def image_thumbnail(image_id: str) -> Any:
     settings = load_settings()
     if variant == "small":
         thumb_spec = ArtifactSpec(
-            artifact_type="thumbnail_small", model_name="pil", params={"size": min(256, settings.pipeline.thumbnail_size)}
+            artifact_type="thumbnail_small",
+            model_name="pil",
+            params={"size": settings.pipeline.thumbnail_size_small},
         )
     else:
         thumb_spec = ArtifactSpec(
-            artifact_type="thumbnail_large", model_name="pil", params={"size": max(1024, settings.pipeline.thumbnail_size)}
+            artifact_type="thumbnail_large",
+            model_name="pil",
+            params={"size": settings.pipeline.thumbnail_size_large},
         )
 
     primary_path = _get_primary_db_path()

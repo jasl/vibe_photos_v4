@@ -269,7 +269,8 @@ class PipelineConfig:
     run_detection: bool = False
     skip_duplicates_for_heavy_models: bool = True
     phash_hamming_threshold: int = 12
-    thumbnail_size: int = 512
+    thumbnail_size_small: int = 256
+    thumbnail_size_large: int = 1024
     thumbnail_quality: int = 85
     exif_datetime_format: str = "raw"
 
@@ -454,8 +455,14 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         pipeline_cfg.skip_duplicates_for_heavy_models = pipeline_raw["skip_duplicates_for_heavy_models"]
     if isinstance(pipeline_raw.get("phash_hamming_threshold"), int):
         pipeline_cfg.phash_hamming_threshold = pipeline_raw["phash_hamming_threshold"]
-    if isinstance(pipeline_raw.get("thumbnail_size"), int):
-        pipeline_cfg.thumbnail_size = pipeline_raw["thumbnail_size"]
+    if isinstance(pipeline_raw.get("thumbnail_size_small"), int):
+        pipeline_cfg.thumbnail_size_small = pipeline_raw["thumbnail_size_small"]
+    if isinstance(pipeline_raw.get("thumbnail_size_large"), int):
+        pipeline_cfg.thumbnail_size_large = pipeline_raw["thumbnail_size_large"]
+    elif isinstance(pipeline_raw.get("thumbnail_size"), int):
+        legacy_size = pipeline_raw["thumbnail_size"]
+        pipeline_cfg.thumbnail_size_small = min(256, legacy_size)
+        pipeline_cfg.thumbnail_size_large = max(1024, legacy_size)
     if isinstance(pipeline_raw.get("thumbnail_quality"), int):
         pipeline_cfg.thumbnail_quality = pipeline_raw["thumbnail_quality"]
     if isinstance(pipeline_raw.get("exif_datetime_format"), str):

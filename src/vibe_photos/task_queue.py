@@ -16,8 +16,8 @@ from vibe_photos.artifact_store import ArtifactManager, ArtifactResult, Artifact
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import Image as ImageRow
 from vibe_photos.db import EnhancementOutput, MainStageResult, open_primary_session, open_projection_session
-from vibe_photos.hasher import compute_content_hash, compute_perceptual_hash
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
+from vibe_photos.preprocessing import ensure_preprocessing_artifacts
 
 
 LOGGER = get_logger(__name__, extra={"component": "task_queue"})
@@ -58,27 +58,6 @@ def _artifact_root() -> Path:
     return Path("cache/artifacts")
 
 
-def _build_thumbnail(image: Image.Image, output_dir: Path, size: int) -> ArtifactResult:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    resized = image.copy()
-    resized.thumbnail((size, size))
-    out_path = output_dir / f"thumbnail_{size}.jpg"
-    resized.save(out_path, format="JPEG", quality=90)
-    return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path))
-
-
-def _extract_exif(image: Image.Image) -> dict:
-    try:
-        exif = image.getexif()
-    except Exception:
-        return {}
-
-    payload: dict = {}
-    for tag_id, value in dict(exif).items():
-        payload[str(tag_id)] = value if isinstance(value, (int, float, str)) else str(value)
-    return payload
-
-
 @celery_app.task(name="vibe_photos.task_queue.process_image", acks_late=True)
 def process_image(image_id: str) -> str:
     """Generate preprocessing artifacts for an image if they are missing."""
@@ -101,100 +80,24 @@ def process_image(image_id: str) -> str:
 
         image = Image.open(image_path).convert("RGB")
         manager = ArtifactManager(session=projection_session, root=artifact_root)
-
-        thumb_large = ArtifactSpec(
-            artifact_type="thumbnail_large",
-            model_name="pil",
-            params={"size": max(1024, settings.pipeline.thumbnail_size)},
-        )
-        manager.ensure_artifact(
-            image_id=image_id,
-            spec=thumb_large,
-            builder=lambda path: _build_thumbnail(image, path, max(1024, settings.pipeline.thumbnail_size)),
-        )
-
-        thumb_small = ArtifactSpec(
-            artifact_type="thumbnail_small",
-            model_name="pil",
-            params={"size": min(256, settings.pipeline.thumbnail_size)},
-        )
-        manager.ensure_artifact(
-            image_id=image_id,
-            spec=thumb_small,
-            builder=lambda path: _build_thumbnail(image, path, min(256, settings.pipeline.thumbnail_size)),
-        )
-
-        exif_spec = ArtifactSpec(
-            artifact_type="exif",
-            model_name="pil_exif",
-            params={"datetime_format": settings.pipeline.exif_datetime_format},
-        )
-
-        def _write_exif(out_dir: Path) -> ArtifactResult:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            payload = _extract_exif(image)
-            out_path = out_dir / "exif.json"
-            out_path.write_text(json.dumps(payload), encoding="utf-8")
-            return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path), payload_path=out_path)
-
-        manager.ensure_artifact(image_id=image_id, spec=exif_spec, builder=_write_exif)
-
-        hash_spec = ArtifactSpec(artifact_type="content_hash", model_name="sha256", params={})
-
-        def _write_content_hash(out_dir: Path) -> ArtifactResult:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            value = compute_content_hash(image_path)
-            out_path = out_dir / "content_hash.txt"
-            out_path.write_text(value, encoding="utf-8")
-            return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path))
-
-        content_artifact = manager.ensure_artifact(image_id=image_id, spec=hash_spec, builder=_write_content_hash)
-
-        phash_spec = ArtifactSpec(artifact_type="perceptual_hash", model_name="phash", params={})
-
-        def _write_phash(out_dir: Path) -> ArtifactResult:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            value = compute_perceptual_hash(image_path)
-            out_path = out_dir / "perceptual_hash.txt"
-            out_path.write_text(value, encoding="utf-8")
-            return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path))
-
-        phash_artifact = manager.ensure_artifact(image_id=image_id, spec=phash_spec, builder=_write_phash)
-
         detector = SiglipBlipDetector(settings=settings)
-        embed_spec = ArtifactSpec(
-            artifact_type="embedding",
-            model_name=settings.models.embedding.resolved_model_name(),
-            params={"device": settings.models.embedding.device, "batch_size": settings.models.embedding.batch_size},
+
+        artifacts = ensure_preprocessing_artifacts(
+            image_id=image_id,
+            image=image,
+            image_path=image_path,
+            settings=settings,
+            manager=manager,
+            detector=detector,
         )
 
-        def _write_embedding(out_dir: Path) -> ArtifactResult:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            scores = detector._classify_with_siglip(image=image, labels=settings.models.siglip_labels.candidate_labels)
-            out_path = out_dir / "embedding.json"
-            out_path.write_text(json.dumps(scores), encoding="utf-8")
-            return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path), payload_path=out_path)
-
-        embedding = manager.ensure_artifact(
-            image_id=image_id, spec=embed_spec, builder=_write_embedding, dependencies=[content_artifact.id]
-        )
-
-        caption_spec = ArtifactSpec(
-            artifact_type="caption",
-            model_name=settings.models.caption.resolved_model_name(),
-            params={"device": settings.models.caption.device},
-        )
-
-        def _write_caption(out_dir: Path) -> ArtifactResult:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            caption = detector._generate_caption_with_blip(image=image)
-            out_path = out_dir / "caption.txt"
-            out_path.write_text(caption, encoding="utf-8")
-            return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path))
-
-        caption_artifact = manager.ensure_artifact(
-            image_id=image_id, spec=caption_spec, builder=_write_caption, dependencies=[embedding.id]
-        )
+        content_artifact = artifacts["content_hash_artifact"]
+        phash_artifact = artifacts["phash_artifact"]
+        thumb_large = artifacts["thumb_large_spec"]
+        thumb_small = artifacts["thumb_small_spec"]
+        exif_spec = artifacts["exif_spec"]
+        embed_spec = artifacts["embedding_spec"]
+        caption_spec = artifacts["caption_spec"]
 
         detection_spec = ArtifactSpec(
             artifact_type="detector_regions",

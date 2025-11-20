@@ -35,6 +35,7 @@ from vibe_photos.hasher import (
 )
 from vibe_photos.ml.models import get_blip_caption_model, get_siglip_embedding_model
 from vibe_photos.scanner import FileInfo, scan_roots
+from vibe_photos.thumbnailing import save_thumbnail
 
 
 LOGGER = get_logger(__name__)
@@ -526,7 +527,7 @@ class PreprocessingPipeline:
             self._logger.error("thumbnail_pil_import_error", extra={"error": str(exc)})
             return
 
-        max_side = max(1, int(self._settings.pipeline.thumbnail_size))
+        max_side = max(1, int(self._settings.pipeline.thumbnail_size_large))
         quality = int(self._settings.pipeline.thumbnail_quality)
 
         for row in rows:
@@ -548,15 +549,7 @@ class PreprocessingPipeline:
                 continue
 
             try:
-                max_size = (max_side, max_side)
-                resample_attr = getattr(_ImageThumb, "Resampling", None)
-                if resample_attr is not None:
-                    resample = resample_attr.LANCZOS
-                else:
-                    resample = _ImageThumb.LANCZOS
-
-                image.thumbnail(max_size, resample=resample)
-                image.save(thumb_path, format="JPEG", quality=quality)
+                save_thumbnail(image, thumb_path, max_side, quality)
                 created += 1
             except Exception as exc:  # pragma: no cover - defensive
                 self._logger.error(

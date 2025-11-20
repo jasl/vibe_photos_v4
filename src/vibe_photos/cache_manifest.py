@@ -91,7 +91,8 @@ def write_cache_manifest(cache_root: Path, settings: Settings) -> CacheManifest:
             },
         },
         "pipeline": {
-            "thumbnail_size": settings.pipeline.thumbnail_size,
+            "thumbnail_size_small": settings.pipeline.thumbnail_size_small,
+            "thumbnail_size_large": settings.pipeline.thumbnail_size_large,
             "thumbnail_quality": settings.pipeline.thumbnail_quality,
             "phash_hamming_threshold": settings.pipeline.phash_hamming_threshold,
             "run_detection": settings.pipeline.run_detection,

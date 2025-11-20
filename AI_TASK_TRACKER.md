@@ -17,7 +17,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - [x] Implement shared logging and configuration modules. (See `src/utils/logging.py` and `src/vibe_photos/config.py`.)
 - [x] Define initial SQLite schema for photos, metadata, and model outputs. (See ORM models in `src/vibe_photos/db.py`.)
 - [x] Implement photo scanning and registration for local folders/NAS mounts. (Implemented in `src/vibe_photos/scanner.py` and `_run_scan_and_hash` in `src/vibe_photos/pipeline.py`.)
-- [x] Normalize images and generate thumbnails / web-friendly versions. (A preprocessing stage now writes configurable JPEG thumbnails (default 512×512) to `cache/images/thumbnails/`, keyed by `image_id`; `/thumbnail/<image_id>` reads from the cache with a fallback to originals. Full normalized copies under `cache/images/processed/` remain future work.)
+- [x] Normalize images and generate thumbnails / web-friendly versions. (A preprocessing stage now writes configurable JPEG thumbnails (default 256×256 small, 1024×1024 large) to `cache/images/thumbnails/`, keyed by `image_id`; `/thumbnail/<image_id>` reads from the cache with a fallback to originals. Full normalized copies under `cache/images/processed/` remain future work.)
 - [x] Extract EXIF, capture time, GPS (when present), and file timestamps. (EXIF datetime and camera model are populated on `images` rows during preprocessing; a metadata sidecar is written to `cache/images/metadata/<image_id>.json` with parsed GPS coordinates when present, and the Flask UI displays these fields.)
 - [x] Compute file hashes and perceptual hashes; record near-duplicate relationships. (Content hashes and pHash-based near-duplicate groups are implemented in `src/vibe_photos/hasher.py` and `_run_perceptual_hashing_and_duplicates` in `src/vibe_photos/pipeline.py`.)
 - [x] Integrate SigLIP embeddings and BLIP captions; cache results. (Implemented in `_run_embeddings_and_captions` with NPY/JSON caches under `cache/` and projections in SQLite.)
@@ -34,6 +34,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - A standalone SigLIP+BLIP helper (`SiglipBlipDetector` in `src/vibe_photos/ml/siglip_blip.py`) is available for ad-hoc zero-shot classification + captioning outside the main pipeline.
 - The Flask debug UI exposes additional filters such as duplicate-hiding, near-duplicate facets, and region-label filtering on top of the planned scene/attribute filters.
 - Region detection now includes: (1) class-agnostic NMS to merge highly overlapping boxes; (2) a configurable priority heuristic combining detector score, normalized box area, and distance to image center; (3) caption-based fallback regions for cases where detection misses an obvious primary object (e.g., drinks in front of background food); and (4) priority-aware filtering of low-value secondary regions so the database and UI focus on a small number of high-quality boxes per image. Priority is not stored in the database but is recomputed in the Web UI using the same heuristic for transparency and tuning.
+- Shared preprocessing steps live in `src/vibe_photos/preprocessing.py` and back both Celery workers and the `src/vibe_photos/dev/preprocess.py --image-path` single-image helper for local runs.
 
 #### M1 — Known PoC / placeholder areas
 
