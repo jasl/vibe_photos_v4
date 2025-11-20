@@ -8,6 +8,7 @@ from typing import Dict
 
 from sqlalchemy import Boolean, Float, Index, Integer, String, Text, create_engine, delete, event
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from utils.logging import get_logger
@@ -272,7 +273,21 @@ def _get_engine(path: Path) -> Engine:
             finally:
                 cursor.close()
 
-        Base.metadata.create_all(engine)
+        try:
+            Base.metadata.create_all(engine)
+        except OperationalError as exc:
+            # In highly concurrent startup (e.g., multiple Celery workers) another
+            # process may create tables between SQLite's existence check and the
+            # CREATE TABLE statement. Treat "already exists" as a benign race.
+            message = str(exc).lower()
+            if "already exists" in message:
+                LOGGER.info(
+                    "db_create_all_table_exists_race",
+                    extra={"path": str(resolved), "error": str(exc)},
+                )
+            else:
+                raise
+
         _ENGINE_CACHE[resolved] = engine
         return engine
 
