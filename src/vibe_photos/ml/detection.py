@@ -8,7 +8,7 @@ from typing import List, Protocol, Sequence, Tuple
 
 import torch
 from PIL import Image
-from torch import Tensor
+from torch import Tensor, device as TorchDevice
 from transformers import OwlViTForObjectDetection, OwlViTProcessor
 
 from utils.logging import get_logger
@@ -17,6 +17,12 @@ from vibe_photos.ml.models import _select_device
 
 
 LOGGER = get_logger(__name__, extra={"component": "detection"})
+
+
+_OWL_PROCESSOR: OwlViTProcessor | None = None
+_OWL_MODEL: OwlViTForObjectDetection | None = None
+_OWL_DEVICE: TorchDevice | None = None
+_OWL_MODEL_NAME: str | None = None
 
 
 @dataclass(frozen=True)
@@ -170,18 +176,62 @@ def filter_secondary_regions_by_priority(
     return kept_detections, kept_priorities
 
 
+def _load_owlvit(config: DetectionModelConfig) -> tuple[OwlViTProcessor, OwlViTForObjectDetection, TorchDevice]:
+    """Load (or reuse) the OWL-ViT processor/model for the current process."""
+
+    model_name = config.model_name
+    device = _select_device(config.device)
+
+    global _OWL_PROCESSOR, _OWL_MODEL, _OWL_DEVICE, _OWL_MODEL_NAME
+    if (
+        _OWL_PROCESSOR is not None
+        and _OWL_MODEL is not None
+        and _OWL_DEVICE is not None
+        and _OWL_MODEL_NAME == model_name
+        and _OWL_DEVICE == device
+    ):
+        return _OWL_PROCESSOR, _OWL_MODEL, _OWL_DEVICE
+
+    processor = OwlViTProcessor.from_pretrained(model_name)
+    model = OwlViTForObjectDetection.from_pretrained(model_name).to(device)
+    model.eval()
+
+    _OWL_PROCESSOR = processor
+    _OWL_MODEL = model
+    _OWL_DEVICE = device
+    _OWL_MODEL_NAME = model_name
+
+    LOGGER.info(
+        "owlvit_model_loaded",
+        extra={
+            "model_name": model_name,
+            "device": str(device),
+        },
+    )
+
+    return processor, model, device
+
+
 class OwlVitDetector:
     """OWL-ViT based open-vocabulary detector."""
 
-    def __init__(self, config: DetectionModelConfig, device: torch.device) -> None:
+    def __init__(
+        self,
+        config: DetectionModelConfig,
+        device: TorchDevice,
+        *,
+        processor: OwlViTProcessor | None = None,
+        model: OwlViTForObjectDetection | None = None,
+    ) -> None:
         """Initialize the OWL-ViT detector from configuration."""
 
         self._config = config
         self._device = device
 
         model_name = config.model_name
-        self._processor = OwlViTProcessor.from_pretrained(model_name)
-        self._model = OwlViTForObjectDetection.from_pretrained(model_name).to(device)
+        self._processor = processor or OwlViTProcessor.from_pretrained(model_name)
+        self._model = (model or OwlViTForObjectDetection.from_pretrained(model_name)).to(device)
+        self._model.eval()
 
         self._backend = config.backend
         self._model_name = model_name
@@ -269,8 +319,8 @@ def build_owlvit_detector(settings: Settings | None = None) -> OwlVitDetector:
     if cfg.backend != "owlvit":
         raise ValueError(f"Unsupported detection backend for build_owlvit_detector: {cfg.backend!r}")
 
-    device = _select_device(cfg.device)
-    return OwlVitDetector(config=cfg, device=device)
+    processor, model, device = _load_owlvit(cfg)
+    return OwlVitDetector(config=cfg, device=device, processor=processor, model=model)
 
 
 __all__ = [

@@ -8,20 +8,20 @@ models:
     backend: "siglip"
     model_name: "google/siglip2-base-patch16-224"
     device: "auto"           # "cuda", "mps", or "cpu"
-    batch_size: 16
+    batch_size: 8            # smaller batch to cap memory per worker
 
   caption:
     backend: "blip"
     model_name: "Salesforce/blip-image-captioning-base"
     device: "auto"
-    batch_size: 4
+    batch_size: 2
 
   detection:
     enabled: true            # M1: detection optional
     backend: "owlvit"        # or "grounding-dino" in future milestones
     model_name: "google/owlvit-base-patch32"
     device: "auto"
-    max_regions_per_image: 10
+    max_regions_per_image: 5
     score_threshold: 0.20
     # Class-agnostic non-max suppression for overlapping boxes.
     nms_iou_threshold: 0.8

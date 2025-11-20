@@ -284,7 +284,7 @@ class QueueConfig:
     preprocess_queue: str = "pre_process"
     main_queue: str = "process"
     post_process_queue: str = "post_process"
-    default_concurrency: int = 4
+    default_concurrency: int = 2
     post_process_concurrency: int = 1
     backfill_batch_size: int = 128
 

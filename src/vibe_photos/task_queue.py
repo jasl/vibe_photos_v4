@@ -41,6 +41,8 @@ def _init_celery() -> Celery:
     app = Celery("vibe_photos")
     app.conf.broker_url = settings.queues.broker_url
     app.conf.result_backend = settings.queues.result_backend
+    app.conf.worker_concurrency = settings.queues.default_concurrency
+    app.conf.worker_prefetch_multiplier = 1
     app.conf.task_acks_late = True
     app.conf.task_default_queue = settings.queues.preprocess_queue
     app.conf.task_routes = {
