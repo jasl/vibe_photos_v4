@@ -118,28 +118,28 @@ def _ingest_files(session, files: Iterable[FileInfo]) -> list[str]:
 
 def _enqueue_targets(
     image_ids: Sequence[str],
-    enqueue_main: bool,
-    enqueue_enhancement: bool,
+    enqueue_process: bool,
+    enqueue_post_process: bool,
 ) -> None:
-    queued_preprocess = queued_main = queued_enhancement = 0
+    queued_pre_process = queued_process = queued_post_process = 0
     for image_id in image_ids:
         pre_process.delay(image_id)
-        queued_preprocess += 1
+        queued_pre_process += 1
 
-        if enqueue_main:
+        if enqueue_process:
             process.delay(image_id)
-            queued_main += 1
+            queued_process += 1
 
-        if enqueue_enhancement:
+        if enqueue_post_process:
             post_process.delay(image_id)
-            queued_enhancement += 1
+            queued_post_process += 1
 
     LOGGER.info(
         "celery_enqueue_complete",
         extra={
-            "queued_preprocess": queued_preprocess,
-            "queued_main": queued_main,
-            "queued_enhancement": queued_enhancement,
+            "queued_pre_process": queued_pre_process,
+            "queued_process": queued_process,
+            "queued_post_process": queued_post_process,
         },
     )
 
@@ -147,13 +147,13 @@ def _enqueue_targets(
 def main(
     roots: List[Path] = typer.Argument(..., help="One or more directories to scan for images."),
     db: Path = typer.Option(Path("data/index.db"), help="Path to the primary SQLite database."),
-    enqueue_main: bool = typer.Option(
+    enqueue_process: bool = typer.Option(
         False,
-        help="Also enqueue main-stage classification/indexing tasks after preprocessing.",
+        help="Also enqueue process-stage classification/indexing tasks after pre_process.",
     ),
-    enqueue_enhancement: bool = typer.Option(
+    enqueue_post_process: bool = typer.Option(
         False,
-        help="Also enqueue enhancement tasks (OCR/cloud models) after preprocessing.",
+        help="Also enqueue post_process-stage tasks (OCR/cloud models) after pre_process.",
     ),
 ) -> None:
     """Scan directories, persist images, and enqueue Celery tasks."""
@@ -164,12 +164,12 @@ def main(
         extra={
             "roots": [str(root) for root in roots],
             "db": str(db),
-            "enqueue_main": enqueue_main,
-            "enqueue_enhancement": enqueue_enhancement,
+            "enqueue_process": enqueue_process,
+            "enqueue_post_process": enqueue_post_process,
             "queues": {
                 "pre_process": settings.queues.preprocess_queue,
                 "process": settings.queues.main_queue,
-                "post_process": settings.queues.enhancement_queue,
+                "post_process": settings.queues.post_process_queue,
             },
         },
     )
@@ -182,7 +182,7 @@ def main(
     with open_primary_session(db) as session:
         image_ids = _ingest_files(session, files)
 
-    _enqueue_targets(image_ids, enqueue_main, enqueue_enhancement)
+    _enqueue_targets(image_ids, enqueue_process, enqueue_post_process)
 
 
 if __name__ == "__main__":

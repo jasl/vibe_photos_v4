@@ -92,6 +92,52 @@ What a single-process run does in M1:
 - Maintains a run journal at `cache/run_journal.json` so that interrupted runs
   can resume without reprocessing completed batches when models are re-used.
 
+Redis/Celery Task Queues (Optional)
+-----------------------------------
+
+You do not need Celery for basic M1 usage. The queue-backed path is only
+required when you want durable task queues, explicit routing, or backfill
+orchestration.
+
+The Celery application (`vibe_photos.task_queue`) defines three queues:
+
+- ``pre_process`` for cacheable artifacts (thumbnails, EXIF, hashes, embeddings,
+  detections, captions).
+- ``process`` for cache-first classification, clustering, and search-index jobs
+  that only read from cached artifacts.
+- ``post_process`` for optional OCR/cloud-model passes with stricter
+  concurrency.
+
+To use Celery queues:
+
+1. Configure broker/backend and queue names via ``config/settings.yaml`` under
+   ``queues`` and ``post_process`` (which configures the ``post_process`` stage).
+2. Start one or more workers. For local development, a single worker that
+   consumes all queues is often sufficient:
+   - `uv run celery -A vibe_photos.task_queue worker -Q pre_process,process,post_process -l info`
+   - For finer control, run separate workers per queue and tune concurrency via
+     Celery options or the values in `settings.queues`.
+3. Enqueue batches from a filesystem scan with:
+   - `uv run python -m vibe_photos.dev.enqueue_celery <root1> [<root2> ...] [--enqueue-process] [--enqueue-post-process]`
+   - The helper inserts missing `images` rows into the primary database, then
+     enqueues `pre_process` tasks, and optionally `process` and `post_process`
+     work based on the flags.
+4. For ad-hoc enqueueing in Python, use:
+   - `pre_process.delay(<image_id>)`
+   - `process.delay(<image_id>)`
+   - `post_process.delay(<image_id>)`
+
+Tasks are idempotent because artifact keys combine model names and parameter
+hashes. Post-process tasks reuse cached embeddings and write versioned manifests
+so they can be enabled per-tenant without blocking the main flow.
+
+To clear pending Celery tasks (for example after changing configuration), you can purge queues from the broker:
+
+- Purge all queues for this app (dangerous – removes all pending tasks):  
+  - `uv run celery -A vibe_photos.task_queue purge -f`
+- Purge only the default queues used by this project:  
+  - `uv run celery -A vibe_photos.task_queue purge -f -Q pre_process,process,post_process`
+
 Debug UI for M1 Outputs (Flask)
 -------------------------------
 
@@ -119,60 +165,6 @@ The UI provides:
   - EXIF datetime, camera model, and GPS coordinates (when available).
   - BLIP caption and classifier attributes.
   - Near-duplicate neighbors and region detections (if detection is enabled).
-
-Local Single-Process Debugging
-------------------------------
-
-There is no separate debug-only entrypoint. Use
-`vibe_photos.dev.process` for both full runs and local validation; the
-versioned cache manifest plus the run journal keep repeated passes fast
-and resumable, even when you re-run the command over the same roots.
-
-Redis/Celery Task Queues (Optional)
------------------------------------
-
-You do not need Celery for basic M1 usage. The queue-backed path is only
-required when you want durable task queues, explicit routing, or backfill
-orchestration.
-
-The Celery application (`vibe_photos.task_queue`) defines three queues:
-
-- ``pre_process`` for cacheable artifacts (thumbnails, EXIF, hashes, embeddings,
-  detections, captions).
-- ``process`` for cache-first classification, clustering, and search-index jobs
-  that only read from cached artifacts.
-- ``post_process`` for optional OCR/cloud-model passes with stricter
-  concurrency.
-
-To use Celery queues:
-
-1. Configure broker/backend and queue names via ``config/settings.yaml`` under
-   ``queues`` and ``enhancement``.
-2. Start one or more workers. For local development, a single worker that
-   consumes all queues is often sufficient:
-   - `uv run celery -A vibe_photos.task_queue worker -Q pre_process,process,post_process -l info`
-   - For finer control, run separate workers per queue and tune concurrency via
-     Celery options or the values in `settings.queues`.
-3. Enqueue batches from a filesystem scan with:
-   - `uv run python -m vibe_photos.dev.enqueue_celery <root1> [<root2> ...] [--enqueue-main] [--enqueue-enhancement]`
-   - The helper inserts missing `images` rows into the primary database, then
-     enqueues preprocessing tasks, and optionally main-stage and enhancement
-     work based on the flags.
-4. For ad-hoc enqueueing in Python, use:
-   - `pre_process.delay(<image_id>)`
-   - `process.delay(<image_id>)`
-   - `post_process.delay(<image_id>)`
-
-Tasks are idempotent because artifact keys combine model names and parameter
-hashes. Enhancement tasks reuse cached embeddings and write versioned manifests
-so they can be enabled per-tenant without blocking the main flow.
-
-To clear pending Celery tasks (for example after changing configuration), you can purge queues from the broker:
-
-- Purge all queues for this app (dangerous – removes all pending tasks):  
-  - `uv run celery -A vibe_photos.task_queue purge -f`
-- Purge only the default queues used by this project:  
-  - `uv run celery -A vibe_photos.task_queue purge -f -Q pre_process,process,post_process`
 
 Cache Versioning
 ----------------

@@ -210,7 +210,7 @@ class PostProcessResult(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     image_id: Mapped[str] = mapped_column(String, nullable=False)
-    enhancement_type: Mapped[str] = mapped_column(String, nullable=False)
+    post_process_type: Mapped[str] = mapped_column(String, nullable=False)
     version_key: Mapped[str] = mapped_column(String, nullable=False)
     storage_path: Mapped[str] = mapped_column(String, nullable=False)
     checksum: Mapped[str] = mapped_column(String, nullable=False)
@@ -219,8 +219,8 @@ class PostProcessResult(Base):
     updated_at: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
     __table_args__ = (
-        Index("idx_enhancement_image", "image_id"),
-        Index("idx_enhancement_type", "enhancement_type"),
+        Index("idx_post_process_image", "image_id"),
+        Index("idx_post_process_type", "post_process_type"),
     )
 
 

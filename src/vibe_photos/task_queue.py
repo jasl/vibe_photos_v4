@@ -1,4 +1,4 @@
-"""Celery task wiring for preprocessing, main, and enhancement stages."""
+"""Celery task wiring for pre_process, process, and post_process stages."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def _init_celery() -> Celery:
     app.conf.task_routes = {
         "vibe_photos.task_queue.pre_process": {"queue": settings.queues.preprocess_queue},
         "vibe_photos.task_queue.process": {"queue": settings.queues.main_queue},
-        "vibe_photos.task_queue.post_process": {"queue": settings.queues.enhancement_queue},
+        "vibe_photos.task_queue.post_process": {"queue": settings.queues.post_process_queue},
     }
     return app
 
@@ -234,8 +234,8 @@ def post_process(image_id: str) -> str:
     """Run optional OCR or cloud models with stricter concurrency limits."""
 
     settings = _load_settings()
-    if not settings.enhancement.enable_ocr and not settings.enhancement.enable_cloud_models:
-        LOGGER.info("enhancement_disabled", extra={"image_id": image_id})
+    if not settings.post_process.enable_ocr and not settings.post_process.enable_cloud_models:
+        LOGGER.info("post_process_disabled", extra={"image_id": image_id})
         return image_id
 
     projection_path = _default_projection_db()
@@ -254,28 +254,31 @@ def post_process(image_id: str) -> str:
         )
 
         now = time.time()
-        out_dir = artifact_root / image_id / "enhancement" / "baseline"
+        out_dir = artifact_root / image_id / "post_process" / "baseline"
         out_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = out_dir / "manifest.json"
-        manifest = {"enable_ocr": settings.enhancement.enable_ocr, "enable_cloud_models": settings.enhancement.enable_cloud_models}
+        manifest = {
+            "enable_ocr": settings.post_process.enable_ocr,
+            "enable_cloud_models": settings.post_process.enable_cloud_models,
+        }
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-        enhancement = PostProcessResult(
+        post_process_result = PostProcessResult(
             image_id=image_id,
-            enhancement_type="baseline",
-            version_key=f"enhancement:{int(settings.enhancement.enable_ocr)}:{int(settings.enhancement.enable_cloud_models)}",
+            post_process_type="baseline",
+            version_key=f"post_process:{int(settings.post_process.enable_ocr)}:{int(settings.post_process.enable_cloud_models)}",
             storage_path=str(manifest_path),
             checksum=hash_file(manifest_path),
             source_artifact_ids=json.dumps([embedding.id]),
             created_at=now,
             updated_at=now,
         )
-        session.add(enhancement)
+        session.add(post_process_result)
         session.commit()
 
         LOGGER.info(
-            "enhancement_complete",
-            extra={"image_id": image_id, "version_key": enhancement.version_key},
+            "post_process_complete",
+            extra={"image_id": image_id, "version_key": post_process_result.version_key},
         )
     return image_id
 

@@ -283,9 +283,9 @@ class QueueConfig:
     result_backend: str = "redis://localhost:6379/1"
     preprocess_queue: str = "pre_process"
     main_queue: str = "process"
-    enhancement_queue: str = "post_process"
+    post_process_queue: str = "post_process"
     default_concurrency: int = 4
-    enhancement_concurrency: int = 1
+    post_process_concurrency: int = 1
     backfill_batch_size: int = 128
 
 
@@ -301,12 +301,12 @@ class MainProcessingConfig:
 
 
 @dataclass
-class EnhancementConfig:
-    """Optional resource-heavy analyses such as OCR or cloud models."""
+class PostProcessConfig:
+    """Optional post-process analyses such as OCR or cloud models."""
 
     enable_ocr: bool = False
     enable_cloud_models: bool = False
-    queue_name: str = "enhancement"
+    queue_name: str = "post_process"
     max_concurrency: int = 1
 
 
@@ -318,7 +318,7 @@ class Settings:
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     queues: QueueConfig = field(default_factory=QueueConfig)
     main_processing: MainProcessingConfig = field(default_factory=MainProcessingConfig)
-    enhancement: EnhancementConfig = field(default_factory=EnhancementConfig)
+    post_process: PostProcessConfig = field(default_factory=PostProcessConfig)
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -478,12 +478,12 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         queue_cfg.preprocess_queue = queue_raw["preprocess_queue"]
     if isinstance(queue_raw.get("main_queue"), str):
         queue_cfg.main_queue = queue_raw["main_queue"]
-    if isinstance(queue_raw.get("enhancement_queue"), str):
-        queue_cfg.enhancement_queue = queue_raw["enhancement_queue"]
+    if isinstance(queue_raw.get("post_process_queue"), str):
+        queue_cfg.post_process_queue = queue_raw["post_process_queue"]
     if isinstance(queue_raw.get("default_concurrency"), int):
         queue_cfg.default_concurrency = queue_raw["default_concurrency"]
-    if isinstance(queue_raw.get("enhancement_concurrency"), int):
-        queue_cfg.enhancement_concurrency = queue_raw["enhancement_concurrency"]
+    if isinstance(queue_raw.get("post_process_concurrency"), int):
+        queue_cfg.post_process_concurrency = queue_raw["post_process_concurrency"]
     if isinstance(queue_raw.get("backfill_batch_size"), int):
         queue_cfg.backfill_batch_size = queue_raw["backfill_batch_size"]
 
@@ -502,16 +502,16 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     if isinstance(main_stage_raw.get("search_index_shard_size"), int):
         main_stage_cfg.search_index_shard_size = main_stage_raw["search_index_shard_size"]
 
-    enhancement_raw = _as_dict(raw.get("enhancement"))
-    enhancement_cfg = settings.enhancement
-    if isinstance(enhancement_raw.get("enable_ocr"), bool):
-        enhancement_cfg.enable_ocr = enhancement_raw["enable_ocr"]
-    if isinstance(enhancement_raw.get("enable_cloud_models"), bool):
-        enhancement_cfg.enable_cloud_models = enhancement_raw["enable_cloud_models"]
-    if isinstance(enhancement_raw.get("queue_name"), str):
-        enhancement_cfg.queue_name = enhancement_raw["queue_name"]
-    if isinstance(enhancement_raw.get("max_concurrency"), int):
-        enhancement_cfg.max_concurrency = enhancement_raw["max_concurrency"]
+    post_process_raw = _as_dict(raw.get("post_process"))
+    post_process_cfg = settings.post_process
+    if isinstance(post_process_raw.get("enable_ocr"), bool):
+        post_process_cfg.enable_ocr = post_process_raw["enable_ocr"]
+    if isinstance(post_process_raw.get("enable_cloud_models"), bool):
+        post_process_cfg.enable_cloud_models = post_process_raw["enable_cloud_models"]
+    if isinstance(post_process_raw.get("queue_name"), str):
+        post_process_cfg.queue_name = post_process_raw["queue_name"]
+    if isinstance(post_process_raw.get("max_concurrency"), int):
+        post_process_cfg.max_concurrency = post_process_raw["max_concurrency"]
 
     return settings
 
@@ -540,7 +540,7 @@ __all__ = [
     "PipelineConfig",
     "QueueConfig",
     "MainProcessingConfig",
-    "EnhancementConfig",
+    "PostProcessConfig",
     "Settings",
     "load_settings",
     "get_embedding_model_name",

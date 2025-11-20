@@ -131,7 +131,7 @@ Several pieces of the M1 stack are already in place and can be reused directly:
   - `src/vibe_photos/hasher.py`, `src/vibe_photos/scanner.py`, and `src/vibe_photos/pipeline.py` implement content/perceptual hashing, filesystem scanning, and the high-level `PreprocessingPipeline` orchestration (including cache manifest and run journal).
   - `src/vibe_photos/preprocessing.py` and `src/vibe_photos/artifact_store.py` define shared preprocessing steps and an artifact manager used by both Celery workers and the single-image helper.
   - `src/vibe_photos/dev/process.py` exposes the recommended single-process CLI for running the full M1 pipeline (`uv run python -m vibe_photos.dev.process ...`).
-  - `src/vibe_photos/task_queue.py` and `src/vibe_photos/dev/enqueue_celery.py` wire Celery + Redis queues for preprocessing, main-stage, and enhancement tasks on top of the same preprocessing primitives.
+  - `src/vibe_photos/task_queue.py` and `src/vibe_photos/dev/enqueue_celery.py` wire Celery + Redis queues for `pre_process`, `process`, and `post_process` tasks on top of the same preprocessing primitives.
   - `src/vibe_photos/webui/` implements the Flask-based debug UI used to inspect canonical photos, near-duplicate groups, and preprocessing outputs.
 
 Together, these components mean that new work can focus on search, APIs, and deployment rather than re-implementing the M1 preprocessing and storage pipeline.
