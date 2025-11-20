@@ -56,11 +56,12 @@ Status: ready for implementation (implements reviewed guidance for the first mil
 Run modes:
 - CLI preprocessing entry point (`uv run python -m vibe_photos.dev.preprocess --root <album> --db data/index.db [--cache-db cache/index.db] [--batch-size ... --device ...]`) for scan + hash + classify + embeddings/captions; batch size/device are read from `config/settings.yaml` with CLI flags acting as overrides when provided.
 - Flask app for manual inspection during development.
+- A cache manifest under `cache/manifest.json` versions model/config settings; preprocessing stages trust cache artifacts only when the manifest matches the active `cache_format_version`, and a run journal in `cache/run_journal.json` supports resumable single-process runs.
 
 ## 4. Data Model (SQLite)
 M1 uses two SQLite databases:
 - A **primary operational database** at `data/index.db` for canonical image metadata, model outputs, near-duplicate relationships, and run state. This database is the only one that production-facing services (CLI, Web UI, future APIs) MUST read and write.
-- A **projection database** at `cache/index.db` that MAY mirror the same schema for experimentation or ad-hoc analysis. It is considered disposable and rebuildable from the primary database and cache artifacts; production services SHOULD NOT depend on it.
+- A **projection database** at `cache/index.db` that MAY mirror the same schema for experimentation or ad-hoc analysis. It is considered disposable and is repopulated during preprocessing runs when the cache manifest matches the current `cache_format_version`; production services SHOULD NOT depend on it.
 
 ### Hash Strategy: Content vs Perceptual
 M1 uses two distinct hash types:
@@ -301,7 +302,7 @@ pipeline:
 - Write embeddings and captions primarily to cache:
   - Embeddings under `cache/embeddings/<image_id>.npy` (embedding vector + model metadata and preprocessing version).
   - Captions under `cache/captions/<image_id>.json` (caption text + model metadata + timestamps).
-- Project these cached results into the projection SQLite database (`cache/index.db`) using the `image_embedding` and `image_caption` tables to support lightweight search and inspection; the projection database remains rebuildable from cache artifacts.
+- Project these cached results into the projection SQLite database (`cache/index.db`) using the `image_embedding` and `image_caption` tables to support lightweight search and inspection; projection tables are written during preprocessing when the cache manifest matches the active format version.
 - When `skip_duplicates_for_heavy_models=True` in `Settings.pipeline`, only run embeddings and captions for canonical representatives of duplicate/near-duplicate groups:
   - Exact duplicates (identical `image_id`) share one canonical representative.
   - Near-duplicates discovered via `image_near_duplicate` (anchor/duplicate relationships) reuse the anchor image's embeddings and captions.
