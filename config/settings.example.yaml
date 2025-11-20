@@ -74,6 +74,7 @@ models:
         - "toast"
         - "dessert"
         - "cake"
+        - "steak"
         - "drink"
         - "butter"
         - "cheese"
