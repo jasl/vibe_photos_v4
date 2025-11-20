@@ -75,6 +75,7 @@ models:
         - "dessert"
         - "cake"
         - "steak"
+        - "meat"
         - "drink"
         - "butter"
         - "cheese"
