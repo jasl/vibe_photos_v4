@@ -76,8 +76,9 @@ What a single-process run does in M1:
 
 - Scans the specified roots and registers images in `images` with stable content
   hashes (`image_id`) and file metadata.
-- Computes perceptual hashes (`phash`) and builds near-duplicate groups in
-  `image_near_duplicate`.
+- Computes perceptual hashes (`phash`) and builds near-duplicate groups:
+  - pHash is recomputed when missing or algorithm changes.
+  - Near-duplicate pairs are incremental: new or content-changed images delete their old pairs and recompute against all active images; if the table is empty, a full pass runs once. Results are written to `image_near_duplicate` in both cache and primary DBs.
 - Generates JPEG thumbnails under `cache/images/thumbnails/` and writes EXIF and
   GPS metadata JSON under `cache/images/metadata/`.
 - Runs SigLIP embeddings and BLIP captions for canonical images and stores:
@@ -198,5 +199,6 @@ Notes and Limitations
   `process` stages copy needed subsets into `data/index.db` for API/UI use.
 - Use `uv run python -m vibe_photos.dev.clear_cache --stage <...>` to invalidate
   specific cache stages (or `--full-reset` to clear all caches and cache/index.db).
+- When a file’s content hash changes, its cache artifacts and near-duplicate pairs in `cache/index.db` are invalidated and rebuilt on the next run; primary DB rows remain intact for auditability.
 - All paths in this document are relative to the project root; commands should
   be executed from the repository root with the virtual environment activated.
