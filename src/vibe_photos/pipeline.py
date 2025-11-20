@@ -23,7 +23,6 @@ from vibe_photos.db import (
     ImageNearDuplicate,
     ImageRegion,
     ImageScene,
-    PreprocessTask,
     open_primary_session,
     open_projection_session,
 )
