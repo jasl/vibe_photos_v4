@@ -34,7 +34,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - A standalone SigLIP+BLIP helper (`SiglipBlipDetector` in `src/vibe_photos/ml/siglip_blip.py`) is available for ad-hoc zero-shot classification + captioning outside the main pipeline.
 - The Flask debug UI exposes additional filters such as duplicate-hiding, near-duplicate facets, and region-label filtering on top of the planned scene/attribute filters.
 - Region detection now includes: (1) class-agnostic NMS to merge highly overlapping boxes; (2) a configurable priority heuristic combining detector score, normalized box area, and distance to image center; (3) caption-based fallback regions for cases where detection misses an obvious primary object (e.g., drinks in front of background food); and (4) priority-aware filtering of low-value secondary regions so the database and UI focus on a small number of high-quality boxes per image. Priority is not stored in the database but is recomputed in the Web UI using the same heuristic for transparency and tuning.
-- Shared preprocessing steps live in `src/vibe_photos/preprocessing.py` and back both Celery workers and the `src/vibe_photos/dev/preprocess.py --image-path` single-image helper for local runs.
+- Shared preprocessing steps live in `src/vibe_photos/preprocessing.py` and back both Celery workers and the `src/vibe_photos/dev/process.py --image-path` single-image helper for local runs.
 
 #### M1 — Known PoC / placeholder areas
 

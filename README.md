@@ -45,18 +45,18 @@ On Linux or Windows machines with a compatible NVIDIA GPU and CUDA 13.0:
   - `models.detection.device: "cuda"` (if detection is enabled)
 - Alternatively, pass `--device cuda` to the preprocessing CLI or workers to override the configured device at runtime.
 
-Running the M1 Preprocessing Pipeline
--------------------------------------
+Running the M1 Processing Pipeline (Single-Process)
+---------------------------------------------------
 
-`vibe_photos.dev.preprocess` is a single-process Typer CLI that scans album roots,
-populates the primary SQLite database, and writes versioned cache artifacts for
-embeddings, captions, thumbnails, detections, and regions. Use it for both full
-runs and local debugging—it is the only supported entrypoint for M1 at the
-moment.
+For local runs, the recommended and simplest path is a single-process Typer CLI:
 
-Basic usage:
+- `vibe_photos.dev.process` — scans album roots, populates the primary SQLite database,
+  and writes all versioned cache artifacts for embeddings, captions, thumbnails, detections,
+  regions, and scene labels.
 
-- `uv run python -m vibe_photos.dev.preprocess --root <album_root> --db data/index.db --cache-db cache/index.db`
+Basic single-process run:
+
+- `uv run python -m vibe_photos.dev.process --root <album_root> --db data/index.db --cache-db cache/index.db`
 
 Key options:
 
@@ -65,8 +65,10 @@ Key options:
 - `--cache-db`: path to the projection SQLite database (default `cache/index.db`).
 - `--batch-size`: override the model batch size from `config/settings.yaml`.
 - `--device`: override the model device (for example `cpu`, `cuda`, or `mps`).
+- `--image-path`: process a single image into the projection cache using shared preprocessing steps.
+- `--image-id`: optional explicit `image_id` when `--image-path` is used; defaults to the content hash.
 
-What the pipeline does in M1:
+What a single-process run does in M1:
 
 - Scans the specified roots and registers images in `images` with stable content
   hashes (`image_id`) and file metadata.
@@ -79,8 +81,8 @@ What the pipeline does in M1:
   - Embedding metadata under `cache/embeddings/<image_id>.json`.
   - Caption payloads under `cache/captions/<image_id>.json`.
   - Corresponding projection rows in `image_embedding` and `image_caption`.
-- Computes lightweight scene classification attributes and caches them under
-  `cache/detections/<image_id>.json` as well as in `image_scene`.
+- Computes lightweight scene classification attributes and stores them in
+  `image_scene` (with any auxiliary JSON cached under `cache/detections/`).
 - Optionally runs OWL-ViT based region detection (when enabled in settings) and
   writes region metadata under `cache/regions/<image_id>.json` and
   `image_region`.
@@ -122,16 +124,18 @@ Local Single-Process Debugging
 ------------------------------
 
 There is no separate debug-only entrypoint. Use
-`vibe_photos.dev.preprocess` for local validation as well as end-to-end runs;
-the versioned cache manifest plus the run journal keep repeated passes fast
-and resumable.
+`vibe_photos.dev.process` for both full runs and local validation; the
+versioned cache manifest plus the run journal keep repeated passes fast
+and resumable, even when you re-run the command over the same roots.
 
-Redis/Celery Task Queues (Preprocess/Main/Enhancement)
-------------------------------------------------------
+Redis/Celery Task Queues (Optional)
+-----------------------------------
 
-A Celery application (`vibe_photos.task_queue`) is available when you need
-durable queues, explicit routing, or backfill orchestration. It defines three
-queues:
+You do not need Celery for basic M1 usage. The queue-backed path is only
+required when you want durable task queues, explicit routing, or backfill
+orchestration.
+
+The Celery application (`vibe_photos.task_queue`) defines three queues:
 
 - ``preprocess`` for cacheable artifacts (thumbnails, EXIF, hashes, embeddings,
   detections, captions).
@@ -140,22 +144,28 @@ queues:
 - ``enhancement`` for optional OCR/cloud-model passes with stricter
   concurrency.
 
-Key usage notes:
+To use Celery queues:
 
-- Configure broker/backend and queue names via ``config/settings.yaml`` under
-  ``queues`` and ``enhancement``.
-- Start workers with ``celery -A vibe_photos.task_queue worker -Q preprocess``
-  (or substitute ``main`` / ``enhancement``); concurrency defaults are derived
-  from the same settings block.
-- Enqueue batches from a filesystem scan with ``uv run python -m
-  vibe_photos.dev.enqueue_celery <root1> [<root2> ...]``. The helper inserts
-  missing ``images`` rows, then enqueues preprocessing tasks, and can also
-  enqueue main-stage and enhancement work via flags.
-- Enqueue work with ``process_image.delay(<image_id>)`` or
-  ``run_main_stage.delay(<image_id>)``. Tasks are idempotent because artifact
-  keys combine model names and parameter hashes.
-- Enhancement tasks reuse cached embeddings and write versioned manifests so
-  they can be enabled per-tenant without blocking the main flow.
+1. Configure broker/backend and queue names via ``config/settings.yaml`` under
+   ``queues`` and ``enhancement``.
+2. Start one or more workers. For local development, a single worker that
+   consumes all queues is often sufficient:
+   - `uv run celery -A vibe_photos.task_queue worker -Q preprocess,main,enhancement -l info`
+   - For finer control, run separate workers per queue and tune concurrency via
+     Celery options or the values in `settings.queues`.
+3. Enqueue batches from a filesystem scan with:
+   - `uv run python -m vibe_photos.dev.enqueue_celery <root1> [<root2> ...] [--enqueue-main] [--enqueue-enhancement]`
+   - The helper inserts missing `images` rows into the primary database, then
+     enqueues preprocessing tasks, and optionally main-stage and enhancement
+     work based on the flags.
+4. For ad-hoc enqueueing in Python, use:
+   - `process_image.delay(<image_id>)`
+   - `run_main_stage.delay(<image_id>)`
+   - `run_enhancement.delay(<image_id>)`
+
+Tasks are idempotent because artifact keys combine model names and parameter
+hashes. Enhancement tasks reuse cached embeddings and write versioned manifests
+so they can be enabled per-tenant without blocking the main flow.
 
 Cache Versioning
 ----------------

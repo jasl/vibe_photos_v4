@@ -1,4 +1,9 @@
-"""CLI entrypoint for the M1 preprocessing pipeline."""
+"""CLI entrypoint for the M1 processing pipeline.
+
+This single-process CLI scans album roots, populates the primary database,
+and writes all versioned cache artifacts. It is the recommended entrypoint
+for local runs of M1.
+"""
 
 from __future__ import annotations
 
@@ -109,7 +114,7 @@ def main(
         help="Override the model device from settings.yaml, for example cpu, cuda, or mps.",
     ),
 ) -> None:
-    """Run the M1 preprocessing pipeline for one or more album roots."""
+    """Run the M1 processing pipeline for one or more album roots."""
 
     settings = load_settings()
     settings = _apply_cli_overrides(settings, batch_size=batch_size, device=device)
@@ -122,7 +127,7 @@ def main(
             image_id=image_id,
         )
         LOGGER.info(
-            "single_image_preprocess_complete",
+            "single_image_process_complete",
             extra={"image_id": resolved_id, "image_path": str(image_path), "projection_db": str(cache_db)},
         )
         return
@@ -136,3 +141,4 @@ if __name__ == "__main__":
 
 
 __all__ = ["main", "ensure_artifacts_for_image"]
+

@@ -54,7 +54,7 @@ Status: ready for implementation (implements reviewed guidance for the first mil
 ```
 
 Run modes:
-- CLI preprocessing entry point (`uv run python -m vibe_photos.dev.preprocess --root <album> --db data/index.db [--cache-db cache/index.db] [--batch-size ... --device ...]`) for scan + hash + classify + embeddings/captions; batch size/device are read from `config/settings.yaml` with CLI flags acting as overrides when provided.
+- CLI processing entry point (`uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-db cache/index.db] [--batch-size ... --device ...]`) for scan + hash + classify + embeddings/captions; batch size/device are read from `config/settings.yaml` with CLI flags acting as overrides when provided.
 - Flask app for manual inspection during development.
 - A cache manifest under `cache/manifest.json` versions model/config settings; preprocessing stages trust cache artifacts only when the manifest matches the active `cache_format_version`, and a run journal in `cache/run_journal.json` supports resumable single-process runs.
 
@@ -403,13 +403,13 @@ project_root/
       m1_development_plan.md  # this blueprint
 ```
 
-- M1 preprocessing CLI: `uv run python -m vibe_photos.dev.preprocess --root <album> --db data/index.db [--cache-db cache/index.db] [--batch-size ... --device ...]`, using `config/settings.yaml` as the source of defaults with CLI flags overriding when provided.
+- M1 processing CLI: `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-db cache/index.db] [--batch-size ... --device ...]`, using `config/settings.yaml` as the source of defaults with CLI flags overriding when provided.
 - When `--cache-db` is omitted, the preprocessing CLI uses `cache/index.db` as the default projection/cache database path.
 - Flask Web UI: `FLASK_APP=vibe_photos.webui uv run flask run` for manual inspection during development.
 
 ## 8. Acceptance Criteria
 ### Functional
-- `uv run python -m vibe_photos.dev.preprocess --root <album> --db data/index.db --cache-db cache/index.db --batch-size 16 --device cpu|cuda`:
+- `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db --cache-db cache/index.db --batch-size 16 --device cpu|cuda`:
   - Populates `images` with active assets, content hashes (`image_id`), and perceptual hashes (`phash`) for all decodable images.
   - Populates `image_scene` for active images and writes corresponding cache files under `cache/detections/`; records errors without stopping.
   - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 12`) and persists them into `image_near_duplicate` in `cache/index.db`.
