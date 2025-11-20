@@ -39,9 +39,11 @@ On Linux or Windows machines with a compatible NVIDIA GPU and CUDA 13.0:
 Running the M1 Preprocessing Pipeline
 -------------------------------------
 
-The main entrypoint for M1 is a Typer-based CLI that scans album roots,
-populates the primary SQLite database, and writes cache artifacts for
-embeddings, captions, thumbnails, and detections.
+`vibe_photos.dev.preprocess` is a single-process Typer CLI that scans album roots,
+populates the primary SQLite database, and writes versioned cache artifacts for
+embeddings, captions, thumbnails, detections, and regions. Use it for both full
+runs and local debugging—it is the only supported entrypoint for M1 at the
+moment.
 
 Basic usage:
 
@@ -73,6 +75,9 @@ What the pipeline does in M1:
 - Optionally runs OWL-ViT based region detection (when enabled in settings) and
   writes region metadata under `cache/regions/<image_id>.json` and
   `image_region`.
+- Writes a cache manifest (`cache/manifest.json`) that records the cache format
+  version plus the effective model/backends used for embeddings, captions, and
+  detection so caches can be trusted across runs.
 - Maintains a run journal at `cache/run_journal.json` so that interrupted runs
   can resume without reprocessing completed batches when models are re-used.
 
@@ -104,47 +109,13 @@ The UI provides:
   - BLIP caption and classifier attributes.
   - Near-duplicate neighbors and region detections (if detection is enabled).
 
-Rebuilding Projection Tables from Cache (`rebuild_cache`)
----------------------------------------------------------
-
-Projection tables in `cache/index.db` are considered disposable and can be
-rebuilt from cache artifacts under `cache/`. A dedicated CLI entrypoint is
-provided for this purpose.
-
-Basic usage:
-
-- `uv run python -m vibe_photos.dev.rebuild_cache --cache-root cache --cache-db cache/index.db`
-
-Options:
-
-- `--cache-root`: root directory for cache artifacts (default `cache`).
-- `--cache-db`: SQLite database whose projection tables should be rebuilt
-  (default `cache/index.db`).
-- `--reset-db/--no-reset-db`:
-  - When `--reset-db` (default), all projection tables (`image_scene`,
-    `image_embedding`, `image_caption`, `image_near_duplicate`, `image_region`)
-    are cleared before rebuilding.
-  - Use `--no-reset-db` when you want to rebuild only missing rows and preserve
-    any existing data.
-
-What `rebuild_cache` currently restores:
-
-- Embeddings: from `cache/embeddings/<image_id>.npy` and
-  `cache/embeddings/<image_id>.json` into `image_embedding`.
-- Captions: from `cache/captions/<image_id>.json` into `image_caption`.
-- Scene attributes: from `cache/detections/<image_id>.json` into `image_scene`.
-- Regions: from `cache/regions/<image_id>.json` into `image_region`.
-
 Local Single-Process Debugging
 ------------------------------
 
-`vibe_photos.dev.preprocess` remains a single-threaded entrypoint intended for
-quick debugging runs:
-
-- `uv run python -m vibe_photos.dev.preprocess --root <album_root> --db data/index.db --cache-db cache/index.db`
-
-Use this path when you need to validate configuration or model changes locally
-without bringing up external services.
+There is no separate debug-only entrypoint. Use
+`vibe_photos.dev.preprocess` for local validation as well as end-to-end runs;
+the versioned cache manifest plus the run journal keep repeated passes fast
+and resumable.
 
 Redis/Celery Task Queues (Preprocess/Main/Enhancement)
 ------------------------------------------------------
@@ -190,9 +161,8 @@ The cache layer is versioned via a manifest file:
 Going forward:
 
 - When `cache_format_version` changes, older cache directories may be treated as
-  untrusted for projection rebuild and certain artifacts may be skipped during
-  `rebuild_cache`. In those cases, re-running the preprocessing pipeline is the
-  recommended way to regenerate compatible cache data.
+  untrusted. In those cases, re-running the preprocessing pipeline is the
+  recommended way to regenerate compatible cache data and projection tables.
 
 Notes and Limitations
 ---------------------

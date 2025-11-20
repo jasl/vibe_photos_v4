@@ -24,7 +24,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - [x] (Optional) Integrate Grounding DINO / OWL-ViT detection and SigLIP re-ranking. (OWL-ViT + SigLIP region re-ranking and JSON caches are implemented; enabled via `models.detection.enabled` and `pipeline.run_detection` settings.)
 - [x] Consolidated preprocessing orchestration onto Celery task queues; the legacy SQLite `preprocess_task` queue and associated enqueue/worker CLIs have been removed in favor of `vibe_photos.task_queue` and `vibe_photos.dev.enqueue_celery`.
 - [x] Add a Celery-backed enqueue helper to scan directories and push preprocessing/main/enhancement jobs to dedicated queues (`vibe_photos.dev.enqueue_celery`).
-- [x] Define a stable, versioned on-disk format for preprocessing caches under `cache/` that is decoupled from the database schema. (A cache manifest (`cache/manifest.json`) and per-image JSON sidecars now version embeddings, captions, detections, and regions; `vibe_photos.dev.rebuild_cache` rebuilds projection tables from cache when needed.)
+- [x] Define a stable, versioned on-disk format for preprocessing caches under `cache/` that is decoupled from the database schema. (A cache manifest (`cache/manifest.json`) and per-image JSON sidecars now version embeddings, captions, detections, and regions; projection tables are populated during pipeline runs and rely on the manifest for trust.)
 - [x] Build a simple Flask-based debug UI to list canonical photos and show per-photo preprocessing details and similar images. (Implemented in `src/vibe_photos/webui/__init__.py` with templates under `src/vibe_photos/webui/templates`.)
 - [x] Standardize database access on SQLAlchemy ORM/Core models and prohibit new raw SQL usage in pipeline and web UI.
 
@@ -39,8 +39,8 @@ This file tracks high-level implementation tasks and their status for the Phase 
 
 - Full image normalization and storage under `cache/images/processed/` is not yet implemented; only thumbnails are generated in the preprocessing pipeline today.
 - EXIF and GPS metadata are parsed during preprocessing and surfaced in the debug UI, but the on-disk metadata format is minimal and may evolve as later milestones add richer EXIF/sidecar handling.
-- The preprocessing pipeline is resumable via a JSON run journal in `cache/run_journal.json`; it now skips completed stages and resumes batch cursors. Celery (`vibe_photos.task_queue`) is the supported path for durable preprocessing/main/enhancement workers, while the single-process loop remains only for quick local debugging runs.
-- The projection database (`cache/index.db`) is created but not yet used for read models; projection-table maintenance remains a placeholder for later milestones.
+- The preprocessing pipeline is resumable via a JSON run journal in `cache/run_journal.json`; it now skips completed stages and resumes batch cursors. Celery (`vibe_photos.task_queue`) is available for durable preprocessing/main/enhancement workers, while the single-process loop remains the default local entrypoint.
+- The projection database (`cache/index.db`) is populated alongside cache artifacts; cache validity is gated by the manifest version rather than by a separate rebuild path.
  - Caption-aware primary-region fallback in the detection stage assumes that BLIP captions have already been computed and written to `image_caption` for any image that runs detection. Future incremental “detection-only” entry points must either preserve this ordering (captions first) or gracefully disable/adjust caption-based fallbacks to avoid surprising gaps in primary regions.
 
 #### Future technical improvements (beyond M1)
