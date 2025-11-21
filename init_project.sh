@@ -11,4 +11,10 @@ fi
 echo "Initializing SQLite databases..."
 uv run python "${ROOT_DIR}/scripts/init_databases.py" --data-db "${ROOT_DIR}/data/index.db" --cache-db "${ROOT_DIR}/cache/index.db"
 
+# Optionally seed the initial object labels (idempotent).
+if [[ "${SEED_OBJECT_LABELS:-1}" -eq 1 ]]; then
+  echo "Seeding object labels into data/index.db..."
+  uv run python -m vibe_photos.labels.seed_object_labels --db "${ROOT_DIR}/data/index.db"
+fi
+
 echo "Done."

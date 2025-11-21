@@ -293,6 +293,15 @@ CREATE TABLE label_assignment (
   - `source='classifier'`：自动模型输出；
   - `source='manual'`：人工修正，UI 查询时可优先使用人工标签覆盖模型标签。
 
+一个典型的配置示意为：
+
+```yaml
+label_spaces:
+  scene_current: scene_v1
+  object_current: object_v1
+  cluster_current: cluster_v1
+```
+
 这样，**标签层可以安全地持续演进**，而不会出现“重算一次就把历史结果全覆盖”的问题。
 
 进一步约定 `label_space_ver` 的语义与使用方式：
@@ -687,7 +696,7 @@ Scene Label Pass（可映射为单独 Celery 任务，如 `run_label_pass_scene`
 
 #### 6.2.2 文本 embedding 与原型构建
 
-独立 job：`build_label_text_embeddings`：
+独立 job：`build_object_label_text_prototypes`：
 
 1. 对所有 `level='object'` 的 labels：
    - 聚合其 alias 文本集合；
@@ -736,6 +745,67 @@ M2 只在数据结构层面预留：
 - 允许用户通过 CLI / 简单 UI 添加 `source='manual'` 的 object labels；
 - 在查询层面优先使用 manual 覆盖其它来源；
 - 聚类后的 cluster 也可以批量赋予某个 object label（见下文）。
+
+#### 6.2.5 参考实现：原型构建与 Object Label Pass
+
+为了让 M2 中「从 seed → prototype → region zero‑shot → label_assignment」的闭环更易实现，推荐按两个独立 job 来落地 object label 流程，并在 pipeline 中按阶段串联起来。
+
+**一）`build_object_label_text_prototypes`：从 Label + alias → SigLIP 文本原型**
+
+- 建议实现为单独模块（例如 `vibe_photos.labels.object_prototypes`），核心职责：
+  1. 扫描 DB 中所有 `level='object'` 且 `is_active=1` 的标签，按 `id` 排序；
+  2. 对每个 label：
+     - 从 `label_aliases` 中收集 alias 文本，优先使用 `language='en'`，其次 `language='zh'`，若都没有则回退到 `display_name`；
+     - 使用 SigLIP 文本 encoder 对 alias 文本编码，得到一批 L2-normalized 文本 embedding；
+     - 对同一标签的多条 alias embedding 求平均，再做一次 L2 归一化，得到该标签的 prototype 向量；
+  3. 将所有 prototype 堆成矩阵，并缓存到：
+     - 路径：`{cache_root}/label_text_prototypes/{output_name}.npz`（例如 `object_v1.npz`）；
+     - 内容三列：
+       - `label_ids`: `[L] int64`；
+       - `label_keys`: `[L] str`；
+       - `prototypes`: `[L, D] float32`（所有行 L2-normalized）。
+- 该 job 只在 object label 定义（或 alias 集合）更新时需要重跑；实际使用时通过 `load_object_label_text_prototypes` 读取 `.npz` 即可。
+
+**二）`run_object_label_pass`：Region embedding → zero‑shot 打标签**
+
+- 建议实现为独立模块（例如 `vibe_photos.labels.object_label_pass`），核心职责：
+  1. 前置条件：
+     - detection 阶段已对 canonical image 跑完 OWL‑ViT + SigLIP，并填充了 `regions` 与 `region_embedding` 表；
+     - `build_object_label_text_prototypes` 已完成，或在第一次运行时自动触发一次构建。
+  2. 启动时：
+     - 从 `{cache_root}/label_text_prototypes/{prototype_name}.npz` 载入 `label_ids / label_keys / prototypes`；
+     - 从 `labels` 表中一次性拉出这些 `label_ids` 对应的 `Label` 记录，构建 `id → Label` 映射；
+     - 根据配置选择要使用的 region embedding 模型名（例如 `settings.models.embedding.resolved_model_name()`）。
+  3. 遍历所有待处理的 region embedding：
+     - SQL 层面：`RegionEmbedding JOIN Region`，按 `model_name` 过滤，必要时可按 `image_id` 子集过滤；
+     - 对于每一条 `(region_id, embedding_path, image_id)`：
+       - 从 `{cache_root}/embeddings/{embedding_path}` 载入 `.npy` 向量，确保是一维向量，并做 L2 归一化；
+       - 计算与所有 prototypes 的相似度：`sims = prototypes @ region_vec`，得到 `[L]` 的相似度数组；
+       - 对 `sims` 做降序排序，取前 `top_k` 作为候选，计算：
+         - `top1_score`：最大相似度；
+         - `second_score`：次大相似度（若存在），`margin = top1_score − second_score`。
+       - 基于 6.2.3 定义的 `score_min` / `margin_min` 做筛选：
+         - 若 `top1_score < score_min` 或 `margin < margin_min`，则跳过该 region；
+         - 否则可以选择：
+           - 仅对 top‑1 标签写入记录；
+           - 或对 top‑k 中所有 `score >= score_min` 的标签写入记录。
+  4. 写入标签时：
+     - Region 级标签：
+       - `target_type='region'`，`target_id=region_id`；
+       - `source='zero_shot'`，`label_space_ver='object_v1'`；
+       - `score=sim`（region embedding 与该 label prototype 的余弦相似度）；
+       - `extra_json` 建议包含：
+         - `{"sim_rank": idx, "top1_score": top1_score, "margin": margin}`。
+     - Image 级聚合标签：
+       - `target_type='image'`，`target_id=image_id`；
+       - `source='aggregated'`，`label_space_ver='object_v1'`；
+       - `score` 可直接复用 region 级的 `sim`，或按多 region 做简单聚合（例如最大值）；
+       - `extra_json` 建议包含：
+         - `{"from_region": region_id, "sim_rank": idx, "margin": margin}`。
+- 典型函数签名可类似：
+  - `run_object_label_pass(settings, cache_root, projection_session, label_space_ver="object_v1", prototype_name="object_v1", embedding_model_name=...)`；
+  - 其中 `projection_session` 负责操作主库中与 label 层相关的表（`labels / label_aliases / label_assignment`），`regions / region_embedding` 则按 4.4 约定从 cache DB 提供视图或投影表。
+- 在 pipeline 串联上，推荐在 detection 阶段（写完 `regions + region_embedding`）之后、scene label pass 之前增加一个 Object Label Pass stage（例如 `run_object_label_pass`），确保下游 clustering 和 QA UI 可以直接使用 object 标签。
 
 ### 6.3 标签层约束与合法组合
 
@@ -952,7 +1022,6 @@ M2 不要求完整交互 UI，但结构上预留：
 {"image_id": "a3f5c8...", "scene": ["scene.product"], "attributes": {"attr.has_person": false}, "objects": ["object.electronics.computer_case"]}
 {"image_id": "b7129d...", "scene": ["scene.food"],    "attributes": {"attr.is_screenshot": false}, "objects": ["object.food.pizza"]}
 ```
-```
 
 目标：
 
@@ -979,6 +1048,57 @@ M2 不要求完整交互 UI，但结构上预留：
 
 默认评估只针对 canonical image；  
 如需评估 near‑duplicate 标签传播质量，可以额外定义「duplicate consistency」指标，对每个 near‑duplicate 分组比较 canonical 与成员图片在 scene / object / attribute 上的一致性。
+
+推荐查询模式（示意 SQL）：
+
+- Scene（单图的 scene 预测）：
+
+  ```sql
+  SELECT l.key, la.score
+  FROM label_assignment la
+  JOIN labels l ON la.label_id = l.id
+  WHERE la.target_type = 'image'
+    AND la.target_id = :image_id
+    AND la.label_space_ver = :scene_current
+    AND l.level = 'scene';
+  ```
+
+- Attributes（单图的布尔属性）：
+
+  ```sql
+  SELECT l.key, la.score
+  FROM label_assignment la
+  JOIN labels l ON la.label_id = l.id
+  WHERE la.target_type = 'image'
+    AND la.target_id = :image_id
+    AND la.label_space_ver = :scene_current
+    AND l.level = 'attribute';
+  ```
+
+- Object（按图评估 object labels，默认聚合 image‑level）：
+
+  ```sql
+  SELECT l.key, la.score
+  FROM label_assignment la
+  JOIN labels l ON la.label_id = l.id
+  WHERE la.target_type = 'image'
+    AND la.target_id = :image_id
+    AND la.label_space_ver = :object_current
+    AND l.level = 'object'
+    AND la.source IN ('aggregated','manual','duplicate_propagated');
+  ```
+
+- Cluster（可选，用于检查某图的 cluster 归属）：
+
+  ```sql
+  SELECT l.key
+  FROM label_assignment la
+  JOIN labels l ON la.label_id = l.id
+  WHERE la.target_type = 'image'
+    AND la.target_id = :image_id
+    AND la.label_space_ver = :cluster_current
+    AND l.level = 'cluster';
+  ```
 
 ### 8.3 Analysis Helpers
 

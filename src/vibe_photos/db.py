@@ -6,7 +6,19 @@ from pathlib import Path
 from threading import Lock
 from typing import Dict
 
-from sqlalchemy import Boolean, Float, Index, Integer, String, Text, create_engine, delete, event
+from sqlalchemy import (
+    Boolean,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    delete,
+    event,
+)
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
@@ -225,6 +237,68 @@ class PostProcessResult(Base):
     )
 
 
+class Label(Base):
+    """Unified labels covering scenes, objects, attributes, and clusters."""
+
+    __tablename__ = "labels"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    display_name: Mapped[str] = mapped_column(String, nullable=False)
+    level: Mapped[str] = mapped_column(String, nullable=False)
+    parent_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("labels.id"), nullable=True)
+    icon: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (Index("idx_labels_level_key", "level", "key"),)
+
+
+class LabelAlias(Base):
+    """Multilingual aliases used to build text prototypes for labels."""
+
+    __tablename__ = "label_aliases"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    label_id: Mapped[int] = mapped_column(Integer, ForeignKey("labels.id"), nullable=False)
+    alias_text: Mapped[str] = mapped_column(String, nullable=False)
+    language: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_preferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (Index("idx_label_aliases_label", "label_id"),)
+
+
+class LabelAssignment(Base):
+    """Label assignments for images or regions with source and version metadata."""
+
+    __tablename__ = "label_assignment"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    target_type: Mapped[str] = mapped_column(String, nullable=False)
+    target_id: Mapped[str] = mapped_column(String, nullable=False)
+    label_id: Mapped[int] = mapped_column(Integer, ForeignKey("labels.id"), nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    label_space_ver: Mapped[str] = mapped_column(String, nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    extra_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "target_type",
+            "target_id",
+            "label_id",
+            "source",
+            "label_space_ver",
+            name="uq_label_assignment_target_label",
+        ),
+        Index("idx_label_assignment_target", "target_type", "target_id", "label_space_ver"),
+        Index("idx_label_assignment_label", "label_id", "label_space_ver", "source"),
+    )
+
+
 _ENGINE_CACHE: Dict[Path, Engine] = {}
 _ENGINE_LOCK = Lock()
 
@@ -329,6 +403,9 @@ __all__ = [
     "ArtifactRecord",
     "ProcessResult",
     "PostProcessResult",
+    "Label",
+    "LabelAlias",
+    "LabelAssignment",
     "open_primary_session",
     "open_projection_session",
     "reset_projection_tables",
