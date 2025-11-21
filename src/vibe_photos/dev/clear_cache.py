@@ -15,8 +15,9 @@ from vibe_photos.db import (
     ImageCaption,
     ImageEmbedding,
     ImageNearDuplicate,
-    ImageRegion,
     ImageScene,
+    Region,
+    RegionEmbedding,
     open_projection_session,
 )
 
@@ -39,7 +40,8 @@ def _invalidate_db_tables(session, stages: set[Stage]) -> None:
     if "scenes" in stages or "all" in stages:
         session.execute(delete(ImageScene))
     if "regions" in stages or "all" in stages:
-        session.execute(delete(ImageRegion))
+        session.execute(delete(Region))
+        session.execute(delete(RegionEmbedding))
     if "duplicates" in stages or "all" in stages:
         session.execute(delete(ImageNearDuplicate))
     session.commit()
@@ -54,6 +56,7 @@ def _invalidate_cache_dirs(cache_root: Path, stages: set[Stage]) -> None:
         _remove_path(cache_root / "detections")
     if "regions" in stages or "all" in stages:
         _remove_path(cache_root / "regions")
+        _remove_path(cache_root / "embeddings" / "regions")
     if "duplicates" in stages or "all" in stages:
         # No dedicated dir; rely on DB cleanup.
         return
@@ -93,4 +96,3 @@ def main(
 
 if __name__ == "__main__":
     typer.run(main)
-

@@ -14,7 +14,6 @@ from vibe_photos.db import (
     ImageCaption,
     ImageEmbedding,
     ImageNearDuplicate,
-    ImageRegion,
     ImageScene,
     open_primary_session,
     open_projection_session,
@@ -23,7 +22,7 @@ from vibe_photos.db import (
 
 LOGGER = get_logger(__name__)
 
-TableName = Literal["embeddings", "captions", "scenes", "regions", "duplicates", "all"]
+TableName = Literal["embeddings", "captions", "scenes", "duplicates", "all"]
 
 
 def _sync_embeddings(src_session, dst_session) -> int:
@@ -111,46 +110,6 @@ def _sync_scenes(src_session, dst_session) -> int:
     return count
 
 
-def _sync_regions(src_session, dst_session) -> int:
-    rows = src_session.execute(select(ImageRegion)).scalars()
-    count = 0
-    for row in rows:
-        stmt = sqlite_insert(ImageRegion).values(
-            image_id=row.image_id,
-            region_index=row.region_index,
-            x_min=row.x_min,
-            y_min=row.y_min,
-            x_max=row.x_max,
-            y_max=row.y_max,
-            detector_label=row.detector_label,
-            detector_score=row.detector_score,
-            refined_label=row.refined_label,
-            refined_score=row.refined_score,
-            backend=row.backend,
-            model_name=row.model_name,
-            updated_at=row.updated_at,
-        ).on_conflict_do_update(
-            index_elements=[ImageRegion.image_id, ImageRegion.region_index],
-            set_={
-                "x_min": row.x_min,
-                "y_min": row.y_min,
-                "x_max": row.x_max,
-                "y_max": row.y_max,
-                "detector_label": row.detector_label,
-                "detector_score": row.detector_score,
-                "refined_label": row.refined_label,
-                "refined_score": row.refined_score,
-                "backend": row.backend,
-                "model_name": row.model_name,
-                "updated_at": row.updated_at,
-            },
-        )
-        dst_session.execute(stmt)
-        count += 1
-    dst_session.commit()
-    return count
-
-
 def _sync_duplicates(src_session, dst_session) -> int:
     rows = src_session.execute(select(ImageNearDuplicate)).scalars()
     count = 0
@@ -177,7 +136,7 @@ def main(
     cache_db: Path = typer.Option(Path("cache/index.db"), help="Cache DB path (projection)."),
     db: Path = typer.Option(Path("data/index.db"), help="Primary DB path."),
     tables: Iterable[TableName] = typer.Option(
-        ["all"], "--table", "-t", help="Tables to sync: embeddings, captions, scenes, regions, duplicates, or all."
+        ["all"], "--table", "-t", help="Tables to sync: embeddings, captions, scenes, duplicates, or all."
     ),
 ) -> None:
     """Copy cache projection tables into the primary DB."""
@@ -191,8 +150,6 @@ def main(
             total += _sync_captions(src, dst)
         if "scenes" in selected or "all" in selected:
             total += _sync_scenes(src, dst)
-        if "regions" in selected or "all" in selected:
-            total += _sync_regions(src, dst)
         if "duplicates" in selected or "all" in selected:
             total += _sync_duplicates(src, dst)
 
@@ -201,4 +158,3 @@ def main(
 
 if __name__ == "__main__":
     typer.run(main)
-

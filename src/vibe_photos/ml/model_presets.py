@@ -16,14 +16,14 @@ BLIP_IMAGE_CAPTIONING_BASE = "Salesforce/blip-image-captioning-base"
 BLIP_IMAGE_CAPTIONING_LARGE = "Salesforce/blip-image-captioning-large"
 
 SIGLIP_PRESETS: Dict[str, str] = {
-    # Default embedding model for M1.
+    # Default embedding model for the current pipeline.
     "m1_default": SIGLIP2_BASE_PATCH16_224,
     # Higher-quality, higher-cost SigLIP2 variant for capable hardware.
     "hq_384": SIGLIP2_LARGE_PATCH16_384,
 }
 
 BLIP_PRESETS: Dict[str, str] = {
-    # Default captioning model for M1.
+    # Default captioning model for the current pipeline.
     "caption_base": BLIP_IMAGE_CAPTIONING_BASE,
     # Optional larger captioning model when a GPU is available.
     "caption_large": BLIP_IMAGE_CAPTIONING_LARGE,
@@ -37,4 +37,3 @@ __all__ = [
     "SIGLIP_PRESETS",
     "BLIP_PRESETS",
 ]
-

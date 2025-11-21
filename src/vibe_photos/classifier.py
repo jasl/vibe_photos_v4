@@ -1,4 +1,4 @@
-"""Lightweight scene classification and attribute prediction for M1."""
+"""Lightweight scene classification and attribute prediction for the pipeline."""
 
 from __future__ import annotations
 

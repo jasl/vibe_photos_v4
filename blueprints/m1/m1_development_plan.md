@@ -1,4 +1,7 @@
-# M1 Preprocessing & Lightweight Classification Blueprint
+# M1 Preprocessing & Lightweight Classification Blueprint _(Archived)_
+
+> This blueprint is kept for historical context. The active pipeline now
+> follows the M2 label-layer design; use this document only for background.
 
 Status: ready for implementation (implements reviewed guidance for the first milestone)
 

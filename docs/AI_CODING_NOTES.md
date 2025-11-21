@@ -23,11 +23,11 @@ are written for coding AIs implementing Phase Final pipelines.
 
 ## 3. Batching
 
-- M1 must support batching:
+- The pipeline must support batching:
   - SigLIP: batch images up to `models.embedding.batch_size`.
   - BLIP: batch images up to `models.caption.batch_size`.
-- Detection batching is optional in M1. Correctness is more important
-  than throughput in the first implementation.
+- Detection batching is optional; correctness is more important than
+  throughput.
 - Keep batch sizes configurable in `settings.yaml`; never hard-code
   them in library code.
 
@@ -63,4 +63,3 @@ are written for coding AIs implementing Phase Final pipelines.
 - Toggle detection, OCR, and heavy models via configuration flags:
   library code should honor `enabled` / `run_detection` style options
   instead of embedding conditional logic in multiple places.
-

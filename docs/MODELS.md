@@ -1,19 +1,18 @@
-# Models — Phase Final (M1 Focus)
+# Models — Phase Final (Current Defaults)
 
-This document specifies the concrete model choices for M1
-(Preprocessing and Feature Extraction), consistent with the Phase Final
-requirements and solution design, and reflects the current implementation in
-this repository.
+This document specifies the concrete model choices for the Phase Final pipeline
+(foundation built in M1, extended in M2 with the label layer) and reflects the
+current implementation in this repository.
 
-M1 MUST implement:
+The pipeline MUST provide:
 
 - SigLIP image embeddings (full image) for search and coarse categories.
 - BLIP captions (one short caption per image).
 - Optional open-vocabulary detection (OWL-ViT) where hardware permits.
 
-Detection is **not required** to ship M1, but the code should be
-structured so that a detector can be plugged in without refactoring the
-rest of the pipeline.
+Detection is optional and can be enabled when hardware permits; the pipeline is
+structured so detectors can be plugged in without refactoring the rest of the
+pipeline.
 
 ## 1. Embeddings and Zero-Shot Classification (SigLIP)
 
@@ -23,7 +22,7 @@ rest of the pipeline.
 - Zero-shot classification for coarse categories (electronics, food, document, etc.).
 - Re-ranking detection regions.
 
-**Default model (M1, implemented)**
+**Default model (implemented)**
 
 - `google/siglip2-base-patch16-224`
 
@@ -80,7 +79,7 @@ constructing models manually.
   - Quick visual understanding in the UI.
   - Full-text search over captions.
 
-**Default model (M1, implemented)**
+**Default model (implemented)**
 
 - `Salesforce/blip-image-captioning-base`
 
@@ -165,8 +164,8 @@ Where `Detection` includes:
 Detections should be stored under:
 
 - JSON cache file per photo under `cache/regions/` (for rebuilds).
-- The `image_region` table in SQLite via the ORM models in
-  `src/vibe_photos/db.py`.
+- The feature-only `regions` + `region_embedding` tables in SQLite (cache DB)
+  via the ORM models in `src/vibe_photos/db.py`.
 
 ## 4. OCR (Out of Scope for M1)
 

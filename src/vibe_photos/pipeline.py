@@ -1,4 +1,4 @@
-"""High-level M1 preprocessing pipeline orchestration."""
+"""High-level preprocessing + label-layer pipeline orchestration."""
 
 from __future__ import annotations
 
@@ -232,7 +232,7 @@ def _remove_path(path: Path) -> None:
 
 
 class PreprocessingPipeline:
-    """Orchestrates the M1 preprocessing steps for one or more album roots."""
+    """Orchestrates preprocessing + label stages for one or more album roots."""
 
     def __init__(self, settings: Settings | None = None) -> None:
         """Initialize the pipeline with application settings.

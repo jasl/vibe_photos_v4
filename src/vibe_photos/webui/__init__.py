@@ -1,4 +1,4 @@
-"""Flask Web UI for inspecting M1 preprocessing outputs."""
+"""Flask Web UI for inspecting preprocessing + label-layer outputs."""
 
 from __future__ import annotations
 

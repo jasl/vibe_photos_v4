@@ -1,7 +1,8 @@
-Vibe Photos — M1 Preprocessing Quickstart
-========================================
+Vibe Photos — Preprocessing & Label Layer Quickstart
+====================================================
 
-This document describes how to run the M1 preprocessing pipeline and related
+This document describes how to run the current preprocessing + label pipeline
+(SigLIP/BLIP features, region embeddings, label layer, clustering) and related
 tools (debug UI and cache rebuild) on a local machine.
 
 Environment Setup
@@ -45,8 +46,8 @@ On Linux or Windows machines with a compatible NVIDIA GPU and CUDA 13.0:
   - `models.detection.device: "cuda"` (if detection is enabled)
 - Alternatively, pass `--device cuda` to the preprocessing CLI or workers to override the configured device at runtime.
 
-Running the M1 Processing Pipeline (Single-Process)
----------------------------------------------------
+Running the Pipeline (Single-Process)
+------------------------------------
 
 For local runs, the recommended and simplest path is a single-process Typer CLI:
 
@@ -72,7 +73,7 @@ Key options:
 from this cache and may copy into the primary DB when required.
 Serve/UI/API must read from `data/index.db` only; use the sync helper (below) to copy projection tables from cache into primary when needed.
 
-What a single-process run does in M1:
+What a single-process run does:
 
 - Scans the specified roots and registers images in `images` with stable content
   hashes (`image_id`) and file metadata.
@@ -86,11 +87,13 @@ What a single-process run does in M1:
   - Embedding metadata under `cache/embeddings/<image_id>.json`.
   - Caption payloads under `cache/captions/<image_id>.json`.
   - Corresponding projection rows in `image_embedding` and `image_caption` (stored in `cache/index.db`; downstream steps may copy to `data/index.db` if needed).
-- Computes lightweight scene classification attributes and stores them in
-  `image_scene` (with auxiliary JSON cached under `cache/detections/` and rows written to `cache/index.db`).
+- Computes lightweight scene classification attributes and mirrors them into the
+  label layer while retaining the legacy `image_scene` projection (rows written
+  to `cache/index.db`).
 - Optionally runs OWL-ViT based region detection (when enabled in settings) and
-  writes region metadata under `cache/regions/<image_id>.json` and
-  `image_region` in `cache/index.db`.
+  writes region metadata under `cache/regions/<image_id>.json` plus feature-only
+  `regions` / `region_embedding` projections in `cache/index.db`. Object / cluster
+  labels are produced later via label passes, not in the detection step.
 - Writes a cache manifest (`cache/manifest.json`) that records the cache format
   version plus the effective model/backends used for embeddings, captions, and
   detection so caches can be trusted across runs.
@@ -142,8 +145,8 @@ To clear pending Celery tasks (for example after changing configuration), you ca
 - Purge only the default queues used by this project:  
   - `uv run celery -A vibe_photos.task_queue purge -f -Q pre_process,process,post_process`
 
-Debug UI for M1 Outputs (Flask)
--------------------------------
+Debug UI for Pipeline Outputs (Flask)
+-------------------------------------
 
 After running the preprocessing pipeline, you can inspect results through a
 simple Flask-based debug UI.

@@ -1,8 +1,8 @@
-"""CLI entrypoint for the M1 processing pipeline.
+"""CLI entrypoint for the preprocessing + label pipeline.
 
 This single-process CLI scans album roots, populates the primary database,
 and writes all versioned cache artifacts. It is the recommended entrypoint
-for local runs of M1.
+for local runs.
 """
 
 from __future__ import annotations
@@ -131,7 +131,7 @@ def main(
         help="Prototype file name (without .npz); defaults to settings.label_spaces.object_current.",
     ),
 ) -> None:
-    """Run the M1 processing pipeline for one or more album roots."""
+    """Run the preprocessing + label pipeline for one or more album roots."""
 
     settings = load_settings()
     settings = _apply_cli_overrides(settings, batch_size=batch_size, device=device)
