@@ -156,6 +156,7 @@ Use the object label layer to suppress or merge noisy predictions without changi
 - `config/settings.yaml` → `object.remap`: map noisy keys to canonical ones (for example `object.remap: {"object.test.old": "object.test.new"}`).
 - Both apply inside the zero-shot object pass and the aggregated image labels; detection stays feature-only.
 - Tune these after inspecting sample outputs to remove “butter / water / generic-food” style labels before large runs.
+- Defaults in `config/settings.yaml` / `.example`: blacklist `butter`, `water`, `sauce`; remap `glass of drink → drink`, `phone → smartphone`.
 
 Debug UI for Pipeline Outputs (Flask)
 -------------------------------------
