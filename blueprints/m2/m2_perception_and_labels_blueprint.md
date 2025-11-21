@@ -295,6 +295,24 @@ CREATE TABLE label_assignment (
 
 这样，**标签层可以安全地持续演进**，而不会出现“重算一次就把历史结果全覆盖”的问题。
 
+进一步约定 `label_space_ver` 的语义与使用方式：
+
+- 对于某一类标签（scene / object / cluster），同一 `label_space_ver` 表示「在一套固定模型 + 超参配置下，对全库 target 的**完整标签视图**」。
+- 若仅做 bugfix 或轻微阈值调整且不改变整体语义，可在同一 `label_space_ver` 上重跑 label pass：依赖 `UNIQUE(target_type, target_id, label_id, source, label_space_ver)` 约束，重跑会覆盖 `score / extra_json / updated_at`，语义上视为**全量刷新**，无需新起版本号。
+- 当发生以下任意情况时，应 bump 新版本号（如 `scene_v2` / `object_v2` / `cluster_v2`）：
+  - 更换底层模型 checkpoint 或 embedding 维度；
+  - 标签集合发生明显变化（增加/删除 scene / object / attribute / cluster key）；
+  - 打分逻辑或决策边界（score → label 的映射）有实质性调整，导致新旧结果不可直接对比。
+- 清理策略建议：
+  - 线上环境通常只保留每类标签最近 1–2 个版本，其余通过 CLI 显式清理；
+  - 清理某版本可直接删除对应 `label_assignment` 记录，例如：
+
+```sql
+DELETE FROM label_assignment WHERE label_space_ver = 'scene_v0';
+```
+
+- UI 与检索始终只使用配置中声明的当前版本（如 `label_spaces.scene_current`），评估脚本可以显式指定多个 `label_space_ver` 并行读取做对比。
+
 ### 4.2 Region & Region Embedding
 
 为避免在标签层反查 JSON，建议在主库中增加 region 与 region embedding 的简化表：
@@ -419,6 +437,25 @@ CREATE TABLE cluster_membership (
 
 标签层可以简单地把每个 cluster 映射成一个 `labels` 记录（`level='cluster'`），并将簇成员写入 `label_assignment(source='cluster')`。
 
+为了避免多次重跑同一聚类算法导致结果混乱，约定 cluster 的生命周期与重跑策略如下：
+
+- 一个聚类运行由 `(method, label_space_ver)` 唯一标识：
+  - `image_similarity_cluster.method` 标记算法与配置（如 `siglip_image_knn_v1` / `siglip_region_knn_v1`）；
+  - `label_space_ver`（如 `cluster_v1`）标记写入的标签空间版本，`params_json` 记录具体参数（k、sim_threshold 等）。
+- 创建 cluster 时：
+  - `image_similarity_cluster.id` 为自增整数；
+  - 对每条新建记录设置 `key = "cluster.{method}.{id}"`；
+  - 在 `labels` 中同时插入一条 `level='cluster'`、`key` 相同的记录，生命周期与对应 cluster 完全一致。
+- 对同一 `(method, label_space_ver)` 重跑时，视为**全量刷新**：
+  - 先删除该组合下所有旧结果：
+    - `cluster_membership` 中的成员关系；
+    - `image_similarity_cluster` 中对应记录；
+    - `labels(level='cluster')` 中对应 `key`；
+    - `label_assignment(source='cluster', label_space_ver=...)` 中关联记录；
+  - 再插入新的 cluster / membership / labels / label_assignment。
+- 若算法或配置发生语义性变更（例如阈值大幅变动、构图方式改变），推荐新建 `method` 或新的 `cluster_v2`，旧版结果可按需保留用于对比，但 UI 默认只使用配置的当前 `cluster_*` 版本。
+- `source='cluster'` 的 `label_assignment.score` 固定为 `1.0`，真实距离信息通过 `cluster_membership.distance` 暴露，用于排序和分析。
+
 ### 4.4 存储落点与重算策略
 
 遵循「cache 存放预处理/模型特征的可复用缓存，data 存放 process 阶段的语义输出」：
@@ -427,6 +464,46 @@ CREATE TABLE cluster_membership (
 - `data/index.db`：主库，承载 `labels`、`label_aliases`、`label_assignment`（含自动/人工）、聚类结果（`image_similarity_cluster`、`cluster_membership`）、其它 process 计算产物。需要时通过重跑 process（读取 cache 特征）即可再生成。
 - 任务层不做跨库 JOIN；process 任务读取 cache、计算后直接写 data。cache 可随时重建，重建后跑一次 process 可恢复 data（人工标签除外）。
 - 数据库初始化通过 `scripts/` 目录下的独立脚本一次性创建所需表（原型阶段不做向后兼容），并在 `init_project.sh` 中调用，后续可演进到版本化迁移工具。
+
+### 4.5 SQLite 索引与查询模式（推荐）
+
+为保证在 SQLite 上的查询性能，推荐在初始化脚本中创建以下索引（使用 `IF NOT EXISTS` 以便安全重跑）：
+
+```sql
+-- label_assignment：按目标查标签（单图或单 region 的所有标签）
+CREATE INDEX IF NOT EXISTS idx_label_assignment_target
+  ON label_assignment (target_type, target_id, label_space_ver);
+
+-- label_assignment：按标签聚合（某标签下有哪些图，用于 UI facets）
+CREATE INDEX IF NOT EXISTS idx_label_assignment_label
+  ON label_assignment (label_id, label_space_ver, source);
+
+-- labels：按 level/key 查找（构建标签树与按 key 查询）
+CREATE INDEX IF NOT EXISTS idx_labels_level_key
+  ON labels (level, key);
+
+-- image_embedding：按模型过滤（来自现有 M1 表）
+CREATE INDEX IF NOT EXISTS idx_image_embedding_model
+  ON image_embedding (model_name);
+
+-- region_embedding：按模型过滤
+CREATE INDEX IF NOT EXISTS idx_region_embedding_model
+  ON region_embedding (model_name);
+
+-- regions：按 image 查 region
+CREATE INDEX IF NOT EXISTS idx_regions_image
+  ON regions (image_id);
+
+-- cluster_membership：按 target 查其所在 cluster
+CREATE INDEX IF NOT EXISTS idx_cluster_membership_target
+  ON cluster_membership (target_type, target_id);
+```
+
+上述索引覆盖了典型访问模式：  
+- 查询某张图片/region 的所有标签；  
+- 查询某个标签下有哪些图片；  
+- 按模型名称遍历 embedding；  
+- 按图片/region 查找其 cluster 归属。
 
 ---
 
@@ -496,8 +573,22 @@ M2 在感知层不过度追求全新模型，而是围绕现有 SigLIP / BLIP / 
 
 #### 5.1.5 特征存储（可选）
 
-- 上述 face_count、screenshot_score、document_score 等中间特征可以只在 scene/attribute pass 内存中使用；
-- 如果后续需要更系统地调参与 debug，推荐在 projection DB 中增加轻量的 image-level feature 表（例如 `image_features`），将这些标量以 JSON 形式投影，便于 label pass 与评估脚本复用。
+上述 face_count、screenshot_score、document_score 等中间特征可以只在 scene/attribute pass 内存中使用；  
+为了便于后续系统化调参与评估，推荐在 projection DB（当前为 `cache/index.db`）中增加轻量的 image‑level feature 表，将这些标量以 JSON 形式投影：
+
+```sql
+CREATE TABLE image_features (
+  image_id      TEXT PRIMARY KEY,
+  features_json TEXT NOT NULL,   -- 例如 {"face_count":1,"screenshot_score":0.9,"document_score":0.1}
+  updated_at    REAL NOT NULL
+);
+```
+
+约定：
+
+- `image_features` 属于可重算缓存，只存放由 preprocess / scene pass 直接产出的标量特征；  
+- scene / attribute label pass 可以读取或更新该表，评估脚本也可以直接使用其中特征分析阈值与分布；  
+- 当需要重建特征时，可以安全地清空该表，再通过重跑相关 pass 回填。
 
 #### 5.1.6 配置与默认值（写入 `config/settings.yaml`）
 
@@ -645,6 +736,45 @@ M2 只在数据结构层面预留：
 - 允许用户通过 CLI / 简单 UI 添加 `source='manual'` 的 object labels；
 - 在查询层面优先使用 manual 覆盖其它来源；
 - 聚类后的 cluster 也可以批量赋予某个 object label（见下文）。
+
+### 6.3 标签层约束与合法组合
+
+#### 6.3.1 `target_type` / `target_id` 约定
+
+- `label_assignment.target_type` 只允许两个枚举值：
+  - `'image'`：`target_id` 必须等于 `images.image_id`（内容哈希，不因 canonical 或传播而改变）；
+  - `'region'`：`target_id` 必须等于 `regions.id`（统一格式：`"{image_id}#{index}"`，见 4.2）。
+- 任何其它目标类型（例如文件夹、相册、cluster 本身）不在 M2 范围内，如后续需要会在新版本中扩展。
+
+#### 6.3.2 `labels.level` 与 `target_type` 的合法组合
+
+为避免出现「scene 贴在 region 上」这类语义模糊情况，约定：
+
+- `level='scene'`
+  - 只用于 `target_type='image'` 的记录；
+  - scene label 不直接贴在 region 上。
+- `level='attribute'`
+  - 默认只用于 `target_type='image'`（如 `attr.has_person` / `attr.is_document`）；
+  - 若未来需要 region‑level 属性（如 `attr.is_blurry_region`），将通过新增 label key 并在 Blueprint 中单独说明的方式引入。
+- `level='object'`
+  - 既可以贴在 `image` 级（聚合视图），也可以贴在 `region` 级（具体物体框）；
+  - 推荐约定：
+    - region 级多来自 `source in ('zero_shot','classifier')`；
+    - image 级多来自 `source in ('aggregated','manual','duplicate_propagated')`。
+- `level='cluster'`
+  - 可贴在 `image` 级或 `region` 级，分别对应 image‑level / region‑level cluster；
+  - 聚类算法的 `method` 与 `label_space_ver` 决定「这是哪一类簇」。
+
+> M2 不在 DB schema 层面强制上述组合约束，但所有 label pass 的实现必须遵守这些约定，避免写出语义含糊的标签记录。
+
+#### 6.3.3 `labels.key` 与 `parent_id` 语义
+
+- `labels.key` 一旦确定，不重用：
+  - 若某标签语义发生重大改变（如 `object.phone.iphone` 从「iPhone」扩展为「所有智能手机」），必须新建 key，而不是就地复用；
+  - 旧 key 的历史记录可以保留，用于回溯与评估。
+- `parent_id` 只表达标签树结构，不自动做「父标签继承」：
+  - 是否给父标签打 assignment 由各 pass 决定；
+  - 例如：object label pass 可以选择在子标签命中时，同时为父标签写入 `source='aggregated'` 的标签，也可以完全依赖查询时的「沿树向上聚合」。
 
 ---
 
@@ -798,11 +928,14 @@ M2 不要求完整交互 UI，但结构上预留：
 
 ### 8.1 Labeled Subset
 
-构建一个约 800–1500 张图片的小标注集，格式建议 JSON/JSONL，例如：
+构建一个约 800–1500 张图片的小标注集，格式建议 JSON/JSONL。  
+评估标注文件中的每条记录必须包含 `image_id` 字段，与主库中 `images.image_id` 一一对应，可选再附带原始文件名或相对路径作为辅助信息。
+
+示意格式（JSONC）：
 
 ```jsonc
 {
-  "IMG_0176.JPG": {
+  "a3f5c8...": {
     "scene": ["scene.product"],
     "attributes": {
       "attr.has_person": false,
@@ -810,8 +943,15 @@ M2 不要求完整交互 UI，但结构上预留：
       "attr.is_screenshot": false
     },
     "objects": ["object.electronics.computer_case"]
-  }
+  }  // 其中 "a3f5c8..." 即为 images.image_id
 }
+
+也可以使用 JSONL 形式，每行一条记录，例如：
+
+```json
+{"image_id": "a3f5c8...", "scene": ["scene.product"], "attributes": {"attr.has_person": false}, "objects": ["object.electronics.computer_case"]}
+{"image_id": "b7129d...", "scene": ["scene.food"],    "attributes": {"attr.is_screenshot": false}, "objects": ["object.food.pizza"]}
+```
 ```
 
 目标：
@@ -836,6 +976,9 @@ M2 不要求完整交互 UI，但结构上预留：
   - Attributes：precision / recall / F1；
   - Object labels：top‑1 / top‑3 命中率；
   - 聚类：对于标注过的物体，观察其所属 cluster 的 purity（可选）。
+
+默认评估只针对 canonical image；  
+如需评估 near‑duplicate 标签传播质量，可以额外定义「duplicate consistency」指标，对每个 near‑duplicate 分组比较 canonical 与成员图片在 scene / object / attribute 上的一致性。
 
 ### 8.3 Analysis Helpers
 
@@ -895,6 +1038,19 @@ M2 不要求完整交互 UI，但结构上预留：
 
 - 在不跑任何 label pass 的情况下，`regions + region_embedding` 已能完整反映 detection + region 特征；
 - 旧 UI 至少能继续显示 bbox 信息（可以临时仍用旧的字段 / JSON）。
+
+为了平滑地从 M1 迁移到 M2，避免长时间功能倒退，推荐遵循下面的 detection / canonical 迁移顺序：
+
+1. **先稳定 canonical 机制（不改 detection 输出）**：  
+   - 引入 pHash 分组与 canonical 标记（见 7.2.1），仍然使用现有 detection / scene 结果。
+2. **在 canonical image 上增加新的 detection pipeline**：  
+   - 仅对 canonical image 跑 OWL‑ViT + SigLIP，写入 `regions` 与 `region_embedding`；  
+   - 同期继续保留旧的 detection 结构（例如 JSON cache 或旧表），作为过渡期 fallback。
+3. **将 object label pass / clustering 完全迁移到新特征上**：  
+   - 新的 object label pass 与 cluster pass 只依赖 `regions + region_embedding` 与 image/region embedding；  
+   - Web UI / QA 工具从 label 层读取 object / cluster 标签，而不再直接依赖旧 detection 的 refined label。
+4. **最后按需清理 legacy detection 产物**：  
+   - 在确认新 pipeline 稳定后，可以停止写入旧 detection 字段/表，并视需要通过一次性脚本清理历史遗留数据。
 
 ### 9.3 M2‑C: Object Label Pass（核心收益点）
 
