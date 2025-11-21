@@ -78,6 +78,35 @@
         </div>
       {% endif %}
 
+      {% if object_labels %}
+        <div class="detail-section">
+          <h3>Object labels</h3>
+          <ul>
+            {% for obj in object_labels %}
+              <li>
+                <span class="pill">{{ obj.display_name }}</span>
+                score: {{ "%.3f"|format(obj.score or 0.0) }}
+                <small>({{ obj.source }})</small>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
+      {% if cluster_labels %}
+        <div class="detail-section">
+          <h3>Cluster labels</h3>
+          <ul>
+            {% for cluster in cluster_labels %}
+              <li>
+                <span class="pill">{{ cluster.display_name }}</span>
+                <small>source: {{ cluster.source }}</small>
+              </li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+
       {% if caption %}
         <div class="detail-section">
           <h3>Caption</h3>
@@ -118,6 +147,7 @@
                 <th>BBox (x_min, y_min, x_max, y_max)</th>
                 <th>Detector</th>
                 <th>Priority</th>
+                <th>Labels</th>
               </tr>
             </thead>
             <tbody>
@@ -143,6 +173,31 @@
                       <br />
                       <span class="pill">caption-fallback</span>
                     {% endif %}
+                  </td>
+                  <td>
+                    <div>
+                      {% if region.object_labels %}
+                        <div>
+                          <strong>Objects:</strong>
+                          {% for obj in region.object_labels %}
+                            <span class="pill">{{ obj.display_name }}</span>
+                            <small>{{ "%.3f"|format(obj.score or 0.0) }}</small>
+                          {% endfor %}
+                        </div>
+                      {% endif %}
+                      {% if region.cluster_labels %}
+                        <div style="margin-top:0.15rem;">
+                          <strong>Clusters:</strong>
+                          {% for cluster in region.cluster_labels %}
+                            <span class="pill">{{ cluster.display_name }}</span>
+                            <small>{{ "%.3f"|format(cluster.score or 0.0) }}</small>
+                          {% endfor %}
+                        </div>
+                      {% endif %}
+                      {% if not region.object_labels and not region.cluster_labels %}
+                        <span style="color:#888;">N/A</span>
+                      {% endif %}
+                    </div>
                   </td>
                 </tr>
               {% endfor %}

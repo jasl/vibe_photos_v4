@@ -130,6 +130,58 @@ class ImageNearDuplicate(Base):
     __table_args__ = (Index("idx_image_near_duplicate_duplicate", "duplicate_image_id"),)
 
 
+class ImageNearDuplicateGroup(Base):
+    """Connected components of near-duplicate images with a canonical representative."""
+
+    __tablename__ = "image_near_duplicate_group"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    canonical_image_id: Mapped[str] = mapped_column(String, nullable=False)
+    method: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class ImageNearDuplicateMembership(Base):
+    """Membership records linking images to their duplicate groups."""
+
+    __tablename__ = "image_near_duplicate_membership"
+
+    group_id: Mapped[int] = mapped_column(Integer, ForeignKey("image_near_duplicate_group.id"), primary_key=True)
+    image_id: Mapped[str] = mapped_column(String, primary_key=True)
+    is_canonical: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    distance: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (Index("idx_image_near_duplicate_membership_image", "image_id"),)
+
+
+class ImageSimilarityCluster(Base):
+    """Clustering metadata for similar images or regions."""
+
+    __tablename__ = "image_similarity_cluster"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    key: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    method: Mapped[str] = mapped_column(String, nullable=False)
+    params_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class ClusterMembership(Base):
+    """Members of a similarity cluster."""
+
+    __tablename__ = "cluster_membership"
+
+    cluster_id: Mapped[int] = mapped_column(Integer, ForeignKey("image_similarity_cluster.id"), primary_key=True)
+    target_type: Mapped[str] = mapped_column(String, primary_key=True)
+    target_id: Mapped[str] = mapped_column(String, primary_key=True)
+    distance: Mapped[float] = mapped_column(Float, nullable=False)
+    is_center: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        Index("idx_cluster_membership_target", "target_type", "target_id"),
+    )
+
+
 class ImageRegion(Base):
     """Object-level detection regions for an image."""
 

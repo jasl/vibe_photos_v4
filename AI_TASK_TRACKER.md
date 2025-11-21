@@ -58,7 +58,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - [ ] Improve SigLIP label dictionaries and grouping to reduce manual maintenance of `settings.models.siglip_labels` and cover common creator scenarios (electronics, food, documents, screenshots).
 - [ ] Tighten detection thresholds and add label blacklist/remapping to suppress low-information or noisy nouns in region and image-level labels.
 - [ ] Run targeted evaluations on a labeled subset (≈1k photos) to measure coarse category accuracy, object/product recall, and failure patterns; capture findings in `blueprints/phase_final/knowledge/lessons_learned.md`.
-- [ ] Add lightweight tools (CLI or notebooks) to inspect per-label distributions and confusion cases, wired against the existing SQLite + cache stack.
+- [x] Add lightweight tools (CLI or notebooks) to inspect per-label distributions and confusion cases, wired against the existing SQLite + cache stack. (See `python -m vibe_photos.eval.labels --gt samples/ground_truth.json`.)
 
 ### M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)
 

@@ -189,6 +189,23 @@ class LabelRepository:
         stmt = select(Label).where(Label.key == key)
         return self._session.execute(stmt).scalar_one_or_none()
 
+    def get_label_by_key(self, key: str) -> Label | None:
+        """Return a label by key without creating it."""
+
+        return self._get_label_by_key(key)
+
+    def require_label(self, key: str) -> Label:
+        """Return a persisted label, raising when it does not exist."""
+
+        label = self._get_label_by_key(key)
+        if label is None:
+            raise ValueError(f"Label {key!r} does not exist.")
+        if label.id is None:
+            self._session.flush()
+        if label.id is None:
+            raise ValueError(f"Label {key!r} has no primary key after flush.")
+        return label
+
     def _maybe_lookup_label_id(self, key: str | None) -> int | None:
         if key is None:
             return None

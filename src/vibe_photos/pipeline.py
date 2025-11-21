@@ -8,20 +8,21 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from collections import defaultdict
 from typing import Callable, Dict, List, Optional, Sequence
 
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from torch import Tensor
 from utils.logging import get_logger
 from vibe_photos.cache_manifest import CACHE_FORMAT_VERSION, ensure_cache_manifest
-from vibe_photos.classifier import SceneClassifierWithAttributes, build_scene_classifier
 from vibe_photos.config import Settings, _normalize_siglip_label, load_settings
 from vibe_photos.db import (
     Image,
     ImageCaption,
     ImageEmbedding,
     ImageNearDuplicate,
+    ImageNearDuplicateGroup,
+    ImageNearDuplicateMembership,
     ImageScene,
     Region,
     RegionEmbedding,
@@ -35,6 +36,11 @@ from vibe_photos.hasher import (
     compute_perceptual_hash,
     hamming_distance_phash,
 )
+from vibe_photos.labels.build_object_prototypes import build_object_prototypes
+from vibe_photos.labels.cluster_pass import run_image_cluster_pass, run_region_cluster_pass
+from vibe_photos.labels.duplicate_propagation import propagate_duplicate_labels
+from vibe_photos.labels.object_label_pass import run_object_label_pass
+from vibe_photos.labels.scene_label_pass import run_scene_label_pass
 from vibe_photos.ml.models import get_blip_caption_model, get_siglip_embedding_model
 from vibe_photos.scanner import FileInfo, scan_roots
 from vibe_photos.thumbnailing import save_thumbnail
@@ -359,6 +365,20 @@ class PreprocessingPipeline:
                     (
                         "region_detection",
                         lambda: self._run_region_detection_and_reranking(primary_session, projection_session),
+                        False,
+                    )
+                )
+                stage_plan.append(
+                    (
+                        "object_label_pass",
+                        lambda: self._run_object_label_pass_stage(primary_session, projection_session),
+                        False,
+                    )
+                )
+            stage_plan.append(
+                (
+                    "cluster_pass",
+                    lambda: self._run_cluster_pass(primary_session, projection_session),
                         False,
                     )
                 )
@@ -758,10 +778,9 @@ class PreprocessingPipeline:
 
         process_ids = sorted(paths_by_id.keys())
 
-        if self._settings.pipeline.skip_duplicates_for_heavy_models:
-            duplicate_rows = projection_session.execute(select(ImageNearDuplicate.duplicate_image_id))
-            duplicate_ids = {row.duplicate_image_id for row in duplicate_rows}
-            process_ids = [image_id for image_id in process_ids if image_id not in duplicate_ids]
+        non_canonical_ids = self._load_non_canonical_image_ids(primary_session)
+        if non_canonical_ids:
+            process_ids = [image_id for image_id in process_ids if image_id not in non_canonical_ids]
 
         nms_iou_threshold = float(detection_cfg.nms_iou_threshold)
         area_gamma = float(detection_cfg.primary_area_gamma)
@@ -1002,176 +1021,128 @@ class PreprocessingPipeline:
             extra={"regions_created": updated_rows},
         )
 
-    def _run_scene_classification(self, primary_session, projection_session) -> None:
-        """Run lightweight scene classification based on cached embeddings."""
+    def _run_object_label_pass_stage(self, primary_session, projection_session) -> None:
+        """Run object label pass based on cached region embeddings."""
 
         if self._cache_root is None:
             raise RuntimeError("cache_root is not initialized")
 
-        self._logger.info("scene_classification_start", extra={})
+        cache_root = self._cache_root
+        self._logger.info("object_label_pass_start", extra={})
+
+        proto_name = self._settings.label_spaces.object_current
+        proto_path = cache_root / "label_text_prototypes" / f"{proto_name}.npz"
+        if not proto_path.exists():
+            self._logger.info("object_label_pass_build_prototypes", extra={"prototype": proto_name})
+            build_object_prototypes(
+                session=primary_session,
+                settings=self._settings,
+                cache_root=cache_root,
+                output_name=proto_name,
+            )
+
+        run_object_label_pass(
+            primary_session=primary_session,
+            projection_session=projection_session,
+            settings=self._settings,
+            cache_root=cache_root,
+            label_space_ver=self._settings.label_spaces.object_current,
+            prototype_name=proto_name,
+        )
+
+        propagated = propagate_duplicate_labels(
+            primary_session=primary_session,
+            label_space_ver=self._settings.label_spaces.object_current,
+        )
+        self._logger.info(
+            "object_label_pass_complete",
+            extra={"duplicate_labels_propagated": propagated},
+        )
+
+    def _run_cluster_pass(self, primary_session, projection_session) -> None:
+        """Run image + region clustering passes."""
+
+        if self._cache_root is None:
+            raise RuntimeError("cache_root is not initialized")
 
         cache_root = self._cache_root
+        self._logger.info("cluster_pass_start", extra={})
 
-        classifier: SceneClassifierWithAttributes = build_scene_classifier(self._settings)
-        classifier_version = classifier.classifier_version
-
-        embedding_model_name = self._settings.models.embedding.resolved_model_name()
-
-        existing_versions = {
-            row.image_id: row.classifier_version
-            for row in projection_session.execute(select(ImageScene.image_id, ImageScene.classifier_version))
-        }
-
-        embedding_rows = projection_session.execute(
-            select(ImageEmbedding.image_id, ImageEmbedding.embedding_path).where(ImageEmbedding.model_name == embedding_model_name)
+        image_clusters, image_members = run_image_cluster_pass(
+            primary_session=primary_session,
+            projection_session=projection_session,
+            settings=self._settings,
+            cache_root=cache_root,
         )
-        embedding_path_by_id = {row.image_id: row.embedding_path for row in embedding_rows}
+        region_clusters, region_members = run_region_cluster_pass(
+            primary_session=primary_session,
+            projection_session=projection_session,
+            settings=self._settings,
+            cache_root=cache_root,
+        )
 
-        candidate_ids = [
-            row.image_id
-            for row in primary_session.execute(
-                select(Image.image_id).where(Image.status == "active").order_by(Image.image_id)
-            )
-        ]
+        propagated = propagate_duplicate_labels(
+            primary_session=primary_session,
+            label_space_ver=self._settings.label_spaces.cluster_current,
+        )
+        self._logger.info(
+            "cluster_pass_complete",
+            extra={
+                "image_clusters": image_clusters,
+                "image_members": image_members,
+                "region_clusters": region_clusters,
+                "region_members": region_members,
+                "duplicate_labels_propagated": propagated,
+            },
+        )
 
-        target_ids: List[str] = []
-        for image_id in candidate_ids:
-            if image_id not in embedding_path_by_id:
-                continue
-            if image_id not in existing_versions:
-                target_ids.append(image_id)
-                continue
-            if existing_versions[image_id] != classifier_version:
-                target_ids.append(image_id)
+    def _run_scene_classification(self, primary_session, projection_session) -> None:
+        """Run scene label pass that mirrors outputs into the label layer."""
 
-        if self._journal is not None and self._journal.stage == "scene_classification" and self._journal.cursor_image_id:
-            cursor_id = self._journal.cursor_image_id
-            before = len(target_ids)
-            target_ids = [image_id for image_id in target_ids if image_id > cursor_id]
-            self._logger.info(
-                "scene_classification_resume_from_cursor",
-                extra={"cursor_image_id": cursor_id, "skipped": before - len(target_ids)},
-            )
+        if self._cache_root is None:
+            raise RuntimeError("cache_root is not initialized")
 
-        if not target_ids:
-            self._logger.info("scene_classification_noop", extra={})
-            return
+        cache_root = self._cache_root
+        self._logger.info("scene_classification_start", extra={})
 
-        import numpy as np
-        import torch
+        start_after = None
+        if self._journal is not None and self._journal.stage == "scene_classification":
+            start_after = self._journal.cursor_image_id
+            if start_after:
+                self._logger.info(
+                    "scene_classification_resume_from_cursor",
+                    extra={"cursor_image_id": start_after},
+                )
 
-        detections_dir = cache_root / "detections"
-        detections_dir.mkdir(parents=True, exist_ok=True)
-
-        batch_size = max(1, self._settings.models.embedding.batch_size)
-        updated_rows = 0
-        total_targets = len(target_ids)
-        progress_interval = max(1, total_targets // 20) if total_targets else 0
-
-        for batch_start in range(0, total_targets, batch_size):
-            batch_ids = target_ids[batch_start : batch_start + batch_size]
-            embeddings: List[Tensor] = []
-            valid_ids: List[str] = []
-
-            for image_id in batch_ids:
-                rel_path = embedding_path_by_id[image_id]
-                emb_path = cache_root / "embeddings" / rel_path
-                try:
-                    vec = np.load(emb_path)
-                except Exception as exc:
-                    self._logger.error(
-                        "scene_embedding_load_error",
-                        extra={"image_id": image_id, "path": str(emb_path), "error": str(exc)},
-                    )
-                    continue
-
-                try:
-                    tensor = torch.from_numpy(vec).float()
-                except Exception as exc:
-                    self._logger.error(
-                        "scene_embedding_tensor_error",
-                        extra={"image_id": image_id, "error": str(exc)},
-                    )
-                    continue
-
-                embeddings.append(tensor)
-                valid_ids.append(image_id)
-
-            if embeddings:
-                attributes_list = classifier.classify_batch(embeddings)
-
-                now = time.time()
-                for image_id, attributes in zip(valid_ids, attributes_list):
-                    stmt = sqlite_insert(ImageScene).values(
-                        image_id=image_id,
-                        scene_type=attributes.scene_type,
-                        scene_confidence=attributes.scene_confidence,
-                        has_text=bool(attributes.has_text),
-                        has_person=bool(attributes.has_person),
-                        is_screenshot=bool(attributes.is_screenshot),
-                        is_document=bool(attributes.is_document),
-                        classifier_name=attributes.classifier_name,
-                        classifier_version=attributes.classifier_version,
-                        updated_at=now,
-                    )
-                    stmt = stmt.on_conflict_do_update(
-                        index_elements=[ImageScene.image_id],
-                        set_={
-                            "scene_type": stmt.excluded.scene_type,
-                            "scene_confidence": stmt.excluded.scene_confidence,
-                            "has_text": stmt.excluded.has_text,
-                            "has_person": stmt.excluded.has_person,
-                            "is_screenshot": stmt.excluded.is_screenshot,
-                            "is_document": stmt.excluded.is_document,
-                            "classifier_name": stmt.excluded.classifier_name,
-                            "classifier_version": stmt.excluded.classifier_version,
-                            "updated_at": stmt.excluded.updated_at,
-                        },
-                    )
-                    projection_session.execute(stmt)
-                    primary_session.execute(stmt)
-
-                    detection_payload = {
-                        "image_id": image_id,
-                        "scene_type": attributes.scene_type,
-                        "scene_confidence": attributes.scene_confidence,
-                        "has_text": attributes.has_text,
-                        "has_person": attributes.has_person,
-                        "is_screenshot": attributes.is_screenshot,
-                        "is_document": attributes.is_document,
-                        "classifier_name": attributes.classifier_name,
-                        "classifier_version": attributes.classifier_version,
-                        "updated_at": now,
-                    }
-                    cache_path = detections_dir / f"{image_id}.json"
-                    cache_path.write_text(json.dumps(detection_payload), encoding="utf-8")
-                    updated_rows += 1
-
+        def _update_cursor(cursor_id: str | None) -> None:
             save_run_journal(
                 cache_root,
-                RunJournalRecord(stage="scene_classification", cursor_image_id=batch_ids[-1], updated_at=time.time()),
+                RunJournalRecord(stage="scene_classification", cursor_image_id=cursor_id, updated_at=time.time()),
             )
 
-            if progress_interval:
-                processed = min(batch_start + len(batch_ids), total_targets)
-                if processed % progress_interval == 0 or processed == total_targets:
-                    percent = round(processed * 100.0 / max(total_targets, 1), 1)
-                    self._logger.info(
-                        "scene_classification_progress %s/%s (%.1f%%)",
-                        processed,
-                        total_targets,
-                        percent,
-                        extra={
-                            "processed": processed,
-                            "total": total_targets,
-                            "updated_rows": updated_rows,
-                            "percent": percent,
-                        },
-                    )
+        processed = run_scene_label_pass(
+            primary_session=primary_session,
+            projection_session=projection_session,
+            settings=self._settings,
+            cache_root=cache_root,
+            label_space_ver=self._settings.label_spaces.scene_current,
+            start_after=start_after,
+            update_cursor=_update_cursor,
+        )
+        _update_cursor(None)
 
-        projection_session.commit()
-        primary_session.commit()
-        self._logger.info("scene_classification_complete", extra={"updated_rows": updated_rows})
+        propagated = propagate_duplicate_labels(
+            primary_session=primary_session,
+            label_space_ver=self._settings.label_spaces.scene_current,
+        )
+
+        if processed == 0:
+            self._logger.info("scene_classification_noop", extra={})
+        else:
+                    self._logger.info(
+                "scene_classification_complete",
+                extra={"processed": processed, "duplicate_labels_propagated": propagated},
+            )
 
     def _run_embeddings_and_captions(self, primary_session, projection_session) -> None:
         """Compute SigLIP embeddings and BLIP captions for canonical images."""
@@ -1203,10 +1174,9 @@ class PreprocessingPipeline:
 
         process_ids = sorted(paths_by_id.keys())
 
-        if self._settings.pipeline.skip_duplicates_for_heavy_models:
-            duplicate_rows = projection_session.execute(select(ImageNearDuplicate.duplicate_image_id))
-            duplicate_ids = {row.duplicate_image_id for row in duplicate_rows}
-            process_ids = [image_id for image_id in process_ids if image_id not in duplicate_ids]
+        non_canonical_ids = self._load_non_canonical_image_ids(primary_session)
+        if non_canonical_ids:
+            process_ids = [image_id for image_id in process_ids if image_id not in non_canonical_ids]
 
         if self._journal is not None and self._journal.stage == "embeddings_and_captions" and self._journal.cursor_image_id:
             cursor_id = self._journal.cursor_image_id
@@ -1744,7 +1714,7 @@ class PreprocessingPipeline:
         self._logger.info("phash_update_complete", extra={"updated_count": phash_updated})
 
         rows = primary_session.execute(
-            select(Image.image_id, Image.phash, Image.mtime).where(
+            select(Image.image_id, Image.phash, Image.mtime, Image.width, Image.height, Image.size_bytes).where(
                 and_(Image.status == "active", Image.phash.is_not(None), Image.phash_algo == PHASH_ALGO)
             )
         )
@@ -1754,6 +1724,7 @@ class PreprocessingPipeline:
             threshold = 12
 
         items: List[Dict[str, object]] = []
+        image_meta: Dict[str, Dict[str, object]] = {}
         for row in rows:
             if not row.phash:
                 continue
@@ -1761,13 +1732,16 @@ class PreprocessingPipeline:
                 ph_int = int(row.phash, 16)
             except (TypeError, ValueError):
                 continue
-            items.append(
-                {
+            record = {
                     "image_id": row.image_id,
                     "phash_int": ph_int,
                     "mtime": float(row.mtime or 0.0),
+                "width": int(row.width or 0),
+                "height": int(row.height or 0),
+                "size_bytes": int(row.size_bytes or 0),
                 }
-            )
+            items.append(record)
+            image_meta[row.image_id] = record
 
         if not items:
             self._logger.info("phash_and_duplicates_noop", extra={})
@@ -1856,10 +1830,127 @@ class PreprocessingPipeline:
 
         self._near_duplicate_dirty.clear()
 
+        groups_created, memberships_created = self._rebuild_duplicate_groups(primary_session, image_meta)
+
         self._logger.info(
             "phash_and_duplicates_complete",
-            extra={"phash_updated": phash_updated, "near_duplicate_pairs": pair_count, "threshold": threshold},
+            extra={
+                "phash_updated": phash_updated,
+                "near_duplicate_pairs": pair_count,
+                "threshold": threshold,
+                "duplicate_groups": groups_created,
+                "duplicate_memberships": memberships_created,
+            },
         )
+
+    def _rebuild_duplicate_groups(self, primary_session, image_meta: Dict[str, Dict[str, object]]) -> tuple[int, int]:
+        primary_session.execute(delete(ImageNearDuplicateMembership))
+        primary_session.execute(delete(ImageNearDuplicateGroup))
+        pair_rows = primary_session.execute(
+            select(ImageNearDuplicate.anchor_image_id, ImageNearDuplicate.duplicate_image_id)
+        ).all()
+        if not pair_rows:
+            primary_session.commit()
+            return 0, 0
+
+        graph: Dict[str, set[str]] = defaultdict(set)
+        for row in pair_rows:
+            anchor_id = row.anchor_image_id
+            duplicate_id = row.duplicate_image_id
+            graph[anchor_id].add(duplicate_id)
+            graph[duplicate_id].add(anchor_id)
+
+        visited: set[str] = set()
+        groups_created = 0
+        memberships_created = 0
+        method = f"{PHASH_ALGO}_v1"
+        timestamp = time.time()
+
+        for node in graph:
+            if node in visited:
+                continue
+
+            component: List[str] = []
+            stack = [node]
+            while stack:
+                current = stack.pop()
+                if current in visited:
+                    continue
+                visited.add(current)
+                component.append(current)
+                stack.extend(graph.get(current, []))
+
+            if len(component) < 2:
+                continue
+
+            canonical_id = self._select_canonical_image(component, image_meta)
+            if canonical_id is None:
+                continue
+
+            group = ImageNearDuplicateGroup(
+                canonical_image_id=canonical_id,
+                method=method,
+                created_at=timestamp,
+            )
+            primary_session.add(group)
+            primary_session.flush()
+
+            canonical_meta = image_meta.get(canonical_id)
+            if canonical_meta is None:
+                continue
+
+            for member_id in component:
+                member_meta = image_meta.get(member_id)
+                if member_meta is None:
+                    continue
+                distance = self._phash_distance(
+                    int(member_meta["phash_int"]),
+                    int(canonical_meta["phash_int"]),
+                )
+                primary_session.add(
+                    ImageNearDuplicateMembership(
+                        group_id=group.id,
+                        image_id=member_id,
+                        is_canonical=member_id == canonical_id,
+                        distance=float(distance),
+                    )
+                )
+                memberships_created += 1
+
+            groups_created += 1
+
+        primary_session.commit()
+        return groups_created, memberships_created
+
+    @staticmethod
+    def _select_canonical_image(members: Sequence[str], image_meta: Dict[str, Dict[str, object]]) -> str | None:
+        best_id: str | None = None
+        best_key: tuple[int, int, str] | None = None
+        for image_id in members:
+            meta = image_meta.get(image_id)
+            if meta is None:
+                continue
+            width = int(meta.get("width", 0))
+            height = int(meta.get("height", 0))
+            area = width * height
+            size_bytes = int(meta.get("size_bytes", 0))
+            key = (area, size_bytes, image_id)
+            if best_key is None or key > best_key:
+                best_key = key
+                best_id = image_id
+        return best_id
+
+    @staticmethod
+    def _phash_distance(lhs: int, rhs: int) -> int:
+        return int((int(lhs) ^ int(rhs)).bit_count())
+
+    def _load_non_canonical_image_ids(self, primary_session) -> set[str]:
+        if not self._settings.pipeline.skip_duplicates_for_heavy_models:
+            return set()
+        rows = primary_session.execute(
+            select(ImageNearDuplicateMembership.image_id).where(ImageNearDuplicateMembership.is_canonical.is_(False))
+        )
+        return {row.image_id for row in rows}
 
 
 __all__ = ["PreprocessingPipeline", "RunJournalRecord", "load_run_journal", "save_run_journal"]

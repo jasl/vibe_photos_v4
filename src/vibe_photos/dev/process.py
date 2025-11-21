@@ -116,9 +116,9 @@ def main(
         help="Override the model device from settings.yaml, for example cpu, cuda, or mps.",
     ),
     run_object_labels: bool = typer.Option(
-        True,
+        False,
         "--run-object-labels/--skip-object-labels",
-        help="After preprocessing, run the object label pass (region zero-shot + image aggregation).",
+        help="Run the object label pass after preprocessing (the main pipeline already does this automatically).",
     ),
     label_space: Optional[str] = typer.Option(
         None,

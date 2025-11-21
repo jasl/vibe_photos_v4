@@ -301,6 +301,23 @@ class ObjectConfig:
 
 
 @dataclass
+class ClusterLevelConfig:
+    """Clustering hyperparameters for a specific target type."""
+
+    k: int = 20
+    sim_threshold: float = 0.78
+    min_size: int = 3
+
+
+@dataclass
+class ClusterConfig:
+    """Configuration bundle for image/region clustering."""
+
+    image: ClusterLevelConfig = field(default_factory=ClusterLevelConfig)
+    region: ClusterLevelConfig = field(default_factory=ClusterLevelConfig)
+
+
+@dataclass
 class ModelsConfig:
     """Bundle of all model-related configuration."""
 
@@ -379,6 +396,7 @@ class Settings:
     post_process: PostProcessConfig = field(default_factory=PostProcessConfig)
     label_spaces: LabelSpacesConfig = field(default_factory=LabelSpacesConfig)
     object: ObjectConfig = field(default_factory=ObjectConfig)
+    cluster: ClusterConfig = field(default_factory=ClusterConfig)
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -602,6 +620,23 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         object_cfg.aggregation.min_regions = aggregation_raw["min_regions"]
     if isinstance(aggregation_raw.get("score_min"), (int, float)):
         object_cfg.aggregation.score_min = float(aggregation_raw["score_min"])
+
+    cluster_raw = _as_dict(raw.get("cluster"))
+    cluster_cfg = settings.cluster
+    image_cluster_raw = _as_dict(cluster_raw.get("image"))
+    region_cluster_raw = _as_dict(cluster_raw.get("region"))
+    if isinstance(image_cluster_raw.get("k"), int):
+        cluster_cfg.image.k = image_cluster_raw["k"]
+    if isinstance(image_cluster_raw.get("sim_threshold"), (int, float)):
+        cluster_cfg.image.sim_threshold = float(image_cluster_raw["sim_threshold"])
+    if isinstance(image_cluster_raw.get("min_size"), int):
+        cluster_cfg.image.min_size = image_cluster_raw["min_size"]
+    if isinstance(region_cluster_raw.get("k"), int):
+        cluster_cfg.region.k = region_cluster_raw["k"]
+    if isinstance(region_cluster_raw.get("sim_threshold"), (int, float)):
+        cluster_cfg.region.sim_threshold = float(region_cluster_raw["sim_threshold"])
+    if isinstance(region_cluster_raw.get("min_size"), int):
+        cluster_cfg.region.min_size = region_cluster_raw["min_size"]
 
     return settings
 

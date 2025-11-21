@@ -7,13 +7,16 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from collections import defaultdict
+
 from flask import Flask, abort, redirect, render_template, request, send_file, url_for
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 
 from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactSpec
 from vibe_photos.config import load_settings
-from vibe_photos.db import ArtifactRecord, Image, ImageCaption, ImageNearDuplicate, ImageScene, Region
+from vibe_photos.db import ArtifactRecord, Image, ImageCaption, ImageNearDuplicate, Label, LabelAssignment, Region
+from vibe_photos.labels.scene_schema import ATTRIBUTE_LABEL_KEYS, normalize_scene_filter, scene_type_from_label_key
 from vibe_photos.db import open_primary_session, open_projection_session
 
 
@@ -34,6 +37,32 @@ def _get_projection_db_path() -> Path:
     return _CACHE_ROOT / "index.db"
 
 
+def _is_checked(value: str | None) -> bool:
+    if value is None:
+        return False
+    lowered = value.strip().lower()
+    return lowered in {"1", "true", "yes", "on"}
+
+
+def _load_label_ids(session, keys) -> Dict[str, int]:
+    key_list = [key for key in keys if key]
+    if not key_list:
+        return {}
+    stmt = select(Label.key, Label.id).where(Label.key.in_(tuple(key_list)))
+    return {row.key: row.id for row in session.execute(stmt)}
+
+
+def _assignment_exists_clause(label_id: int, label_space: str):
+    return exists().where(
+        and_(
+            LabelAssignment.target_type == "image",
+            LabelAssignment.target_id == Image.image_id,
+            LabelAssignment.label_id == label_id,
+            LabelAssignment.label_space_ver == label_space,
+        )
+    )
+
+
 @app.route("/")
 def index() -> Any:
     """Redirect to the images list."""
@@ -44,6 +73,9 @@ def index() -> Any:
 @app.route("/images")
 def images() -> Any:
     """List images with basic filters and pagination."""
+
+    settings = load_settings()
+    scene_space = settings.label_spaces.scene_current
 
     scene_type = request.args.get("scene_type") or None
     has_text = request.args.get("has_text")
@@ -72,34 +104,39 @@ def images() -> Any:
         else:
             region_filter_ids = set()
 
-    filters = [Image.status == "active"]
-    if scene_type:
-        filters.append(ImageScene.scene_type == scene_type)
-
-    def _flag_clause(value: Optional[str], column) -> None:
-        if value is None or value == "":
-            return
-        if value.lower() in {"1", "true", "yes"}:
-            filters.append(column.is_(True))
-        elif value.lower() in {"0", "false", "no"}:
-            filters.append(column.is_(False))
-
-    _flag_clause(has_text, ImageScene.has_text)
-    _flag_clause(has_person, ImageScene.has_person)
-    _flag_clause(is_screenshot, ImageScene.is_screenshot)
-    _flag_clause(is_document, ImageScene.is_document)
-
     primary_path = _get_primary_db_path()
 
     with open_primary_session(primary_path) as session:
-        base_query = select(Image.image_id).where(Image.status == "active")
-        if filters:
-            base_query = base_query.join(ImageScene, ImageScene.image_id == Image.image_id, isouter=True).where(
-                and_(*filters)
-            )
+        label_keys = set(ATTRIBUTE_LABEL_KEYS.values())
+        scene_filter_key = normalize_scene_filter(scene_type)
+        if scene_filter_key:
+            label_keys.add(scene_filter_key)
+
+        label_ids = _load_label_ids(session, label_keys)
+
+        stmt = select(Image.image_id).where(Image.status == "active")
+
+        scene_label_id = label_ids.get(scene_filter_key) if scene_filter_key else None
+        if scene_label_id is not None:
+            stmt = stmt.where(_assignment_exists_clause(scene_label_id, scene_space))
+
+        attr_filters = [
+            (has_person, ATTRIBUTE_LABEL_KEYS["has_person"]),
+            (has_text, ATTRIBUTE_LABEL_KEYS["has_text"]),
+            (is_screenshot, ATTRIBUTE_LABEL_KEYS["is_screenshot"]),
+            (is_document, ATTRIBUTE_LABEL_KEYS["is_document"]),
+        ]
+        for param_value, label_key in attr_filters:
+            if not _is_checked(param_value):
+                continue
+            label_id = label_ids.get(label_key)
+            if label_id is None:
+                continue
+            stmt = stmt.where(_assignment_exists_clause(label_id, scene_space))
+
         if region_filter_ids is not None:
             if region_filter_ids:
-                base_query = base_query.where(Image.image_id.in_(region_filter_ids))
+                stmt = stmt.where(Image.image_id.in_(region_filter_ids))
             else:
                 return render_template(
                     "images.html",
@@ -116,46 +153,22 @@ def images() -> Any:
                     hide_duplicates=hide_duplicates or "",
                     region_label=region_label,
                 )
-        if hide_duplicates and hide_duplicates.lower() in {"1", "true", "yes"}:
+        if _is_checked(hide_duplicates):
             dup_subq = select(ImageNearDuplicate.duplicate_image_id)
-            base_query = base_query.where(~Image.image_id.in_(dup_subq))
-        if has_duplicates and has_duplicates.lower() in {"1", "true", "yes"}:
-            base_query = (
-                base_query.join(
-                    ImageNearDuplicate,
-                    or_(
-                        ImageNearDuplicate.anchor_image_id == Image.image_id,
-                        ImageNearDuplicate.duplicate_image_id == Image.image_id,
-                    ),
-                ).distinct(ImageScene.image_id)
-            )
-        total_stmt = select(func.count()).select_from(base_query.subquery())
-        total = int(session.execute(total_stmt).scalar_one())
-
-        query_stmt = select(
-            Image.image_id,
-            ImageScene.scene_type,
-            ImageScene.has_text,
-            ImageScene.has_person,
-            ImageScene.is_screenshot,
-            ImageScene.is_document,
-        ).join(ImageScene, ImageScene.image_id == Image.image_id, isouter=True).where(Image.status == "active")
-        if filters:
-            query_stmt = query_stmt.where(and_(*filters))
-        if region_filter_ids is not None and region_filter_ids:
-            query_stmt = query_stmt.where(Image.image_id.in_(region_filter_ids))
-        if hide_duplicates and hide_duplicates.lower() in {"1", "true", "yes"}:
-            dup_subq = select(ImageNearDuplicate.duplicate_image_id)
-            query_stmt = query_stmt.where(~Image.image_id.in_(dup_subq))
-        if has_duplicates and has_duplicates.lower() in {"1", "true", "yes"}:
-            query_stmt = query_stmt.join(
+            stmt = stmt.where(~Image.image_id.in_(dup_subq))
+        if _is_checked(has_duplicates):
+            stmt = stmt.join(
                 ImageNearDuplicate,
                 or_(
                     ImageNearDuplicate.anchor_image_id == Image.image_id,
                     ImageNearDuplicate.duplicate_image_id == Image.image_id,
                 ),
             ).distinct(Image.image_id)
-        query_stmt = query_stmt.order_by(Image.image_id).limit(page_size).offset(offset)
+
+        total_stmt = select(func.count()).select_from(stmt.subquery())
+        total = int(session.execute(total_stmt).scalar_one())
+
+        query_stmt = stmt.order_by(Image.image_id).limit(page_size).offset(offset)
         rows = session.execute(query_stmt).mappings().all()
 
         dup_ids = {
@@ -163,17 +176,56 @@ def images() -> Any:
             for row in session.execute(select(ImageNearDuplicate.duplicate_image_id))
         }
 
+        image_ids = [row.image_id for row in rows]
+        scenes_by_image: Dict[str, Dict[str, Any]] = {}
+        attributes_by_image: Dict[str, Dict[str, bool]] = defaultdict(dict)
+
+        if image_ids:
+            label_rows = session.execute(
+                select(
+                    LabelAssignment.target_id,
+                    Label.key,
+                    Label.level,
+                    LabelAssignment.score,
+                    LabelAssignment.extra_json,
+                )
+                .join(Label, Label.id == LabelAssignment.label_id)
+                .where(
+                    LabelAssignment.target_type == "image",
+                    LabelAssignment.target_id.in_(image_ids),
+                    LabelAssignment.label_space_ver == scene_space,
+                    Label.level.in_(["scene", "attribute"]),
+                )
+            ).all()
+
+            for label_row in label_rows:
+                target_id = label_row.target_id
+                if label_row.level == "scene":
+                    existing = scenes_by_image.get(target_id)
+                    if existing is None or label_row.score > existing["score"]:
+                        scenes_by_image[target_id] = {
+                            "key": label_row.key,
+                            "score": label_row.score,
+                            "extra": label_row.extra_json,
+                        }
+                    continue
+
+                attributes_by_image[target_id][label_row.key] = True
+
     items: List[Dict[str, Any]] = []
     for row in rows:
-        image_id = row["image_id"]
+        image_id = row.image_id
+        scene_entry = scenes_by_image.get(image_id)
+        scene_label = scene_type_from_label_key(scene_entry["key"]) if scene_entry else None
+        attr_flags = attributes_by_image.get(image_id, {})
         items.append(
             {
                 "image_id": image_id,
-                "scene_type": row["scene_type"],
-                "has_text": bool(row["has_text"]),
-                "has_person": bool(row["has_person"]),
-                "is_screenshot": bool(row["is_screenshot"]),
-                "is_document": bool(row["is_document"]),
+                "scene_type": scene_label,
+                "has_text": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_text"])),
+                "has_person": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_person"])),
+                "is_screenshot": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_screenshot"])),
+                "is_document": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_document"])),
                 "is_duplicate": image_id in dup_ids,
             }
         )
@@ -200,13 +252,13 @@ def image_detail(image_id: str) -> Any:
     """Detail page for a single image, keyed by logical image identifier."""
 
     primary_path = _get_primary_db_path()
+    settings = load_settings()
+    scene_space = settings.label_spaces.scene_current
 
     with open_primary_session(primary_path) as session:
         image_row = session.get(Image, image_id)
         if image_row is None:
             abort(404)
-
-        scene_row = session.execute(select(ImageScene).where(ImageScene.image_id == image_id)).scalar_one_or_none()
 
         caption_row = (
             session.execute(
@@ -225,20 +277,156 @@ def image_detail(image_id: str) -> Any:
             region_rows = (
                 projection_session.execute(select(Region).where(Region.image_id == image_id)).scalars().all()
             )
+    region_ids = [region.id for region in region_rows]
+
+    with open_primary_session(primary_path) as session:
+        label_rows = session.execute(
+            select(
+                Label.key,
+                Label.level,
+                LabelAssignment.score,
+                LabelAssignment.extra_json,
+            )
+            .join(Label, Label.id == LabelAssignment.label_id)
+            .where(
+                LabelAssignment.target_type == "image",
+                LabelAssignment.target_id == image_id,
+                LabelAssignment.label_space_ver == scene_space,
+                Label.level.in_(["scene", "attribute"]),
+            )
+        ).all()
+
+        image_object_rows = session.execute(
+            select(
+                Label.display_name,
+                Label.key,
+                LabelAssignment.score,
+                LabelAssignment.source,
+            )
+            .join(Label, Label.id == LabelAssignment.label_id)
+            .where(
+                LabelAssignment.target_type == "image",
+                LabelAssignment.target_id == image_id,
+                LabelAssignment.label_space_ver == settings.label_spaces.object_current,
+                Label.level == "object",
+            )
+            .order_by(LabelAssignment.score.desc())
+        ).all()
+
+        cluster_image_rows = session.execute(
+            select(
+                Label.display_name,
+                Label.key,
+                LabelAssignment.score,
+                LabelAssignment.source,
+            )
+            .join(Label, Label.id == LabelAssignment.label_id)
+            .where(
+                LabelAssignment.target_type == "image",
+                LabelAssignment.target_id == image_id,
+                LabelAssignment.label_space_ver == settings.label_spaces.cluster_current,
+                Label.level == "cluster",
+            )
+            .order_by(LabelAssignment.created_at.desc())
+        ).all()
+
+        region_object_rows = []
+        region_cluster_rows = []
+        if region_ids:
+            region_object_rows = session.execute(
+                select(
+                    LabelAssignment.target_id,
+                    Label.display_name,
+                    LabelAssignment.score,
+                )
+                .join(Label, Label.id == LabelAssignment.label_id)
+                .where(
+                    LabelAssignment.target_type == "region",
+                    LabelAssignment.target_id.in_(region_ids),
+                    LabelAssignment.label_space_ver == settings.label_spaces.object_current,
+                    Label.level == "object",
+                )
+                .order_by(LabelAssignment.score.desc())
+            ).all()
+
+            region_cluster_rows = session.execute(
+                select(
+                    LabelAssignment.target_id,
+                    Label.display_name,
+                    LabelAssignment.score,
+                )
+                .join(Label, Label.id == LabelAssignment.label_id)
+                .where(
+                    LabelAssignment.target_type == "region",
+                    LabelAssignment.target_id.in_(region_ids),
+                    LabelAssignment.label_space_ver == settings.label_spaces.cluster_current,
+                    Label.level == "cluster",
+                )
+            ).all()
+
+    scene_entry: Dict[str, Any] | None = None
+    attr_flags: Dict[str, bool] = {}
+    object_labels: List[Dict[str, Any]] = [
+        {
+            "display_name": row.display_name,
+            "key": row.key,
+            "score": row.score,
+            "source": row.source,
+        }
+        for row in image_object_rows
+    ]
+    cluster_labels: List[Dict[str, Any]] = [
+        {
+            "display_name": row.display_name,
+            "key": row.key,
+            "score": row.score,
+            "source": row.source,
+        }
+        for row in cluster_image_rows
+    ]
+    region_object_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    region_cluster_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+    for row in region_object_rows:
+        region_object_map[row.target_id].append(
+            {
+                "display_name": row.display_name,
+                "score": row.score,
+            }
+        )
+    for row in region_cluster_rows:
+        region_cluster_map[row.target_id].append(
+            {
+                "display_name": row.display_name,
+                "score": row.score,
+            }
+        )
+    for row in label_rows:
+        if row.level == "scene":
+            if scene_entry is None or row.score > scene_entry.get("score", 0.0):
+                scene_entry = {"key": row.key, "score": row.score, "extra": row.extra_json}
+            continue
+        attr_flags[row.key] = True
 
     scene_info: Dict[str, Any] | None = None
-    if scene_row is not None:
-        scene_info = {
-            "scene_type": scene_row.scene_type,
-            "scene_confidence": scene_row.scene_confidence,
-            "has_text": bool(scene_row.has_text),
-            "has_person": bool(scene_row.has_person),
-            "is_screenshot": bool(scene_row.is_screenshot),
-            "is_document": bool(scene_row.is_document),
-            "classifier_name": scene_row.classifier_name,
-            "classifier_version": scene_row.classifier_version,
-        }
+    if scene_entry is not None:
+        extra_payload: Dict[str, Any] = {}
+        if scene_entry.get("extra"):
+            try:
+                extra_payload = json.loads(scene_entry["extra"])
+            except Exception:
+                extra_payload = {}
 
+        scene_info = {
+            "scene_type": scene_type_from_label_key(scene_entry["key"]),
+            "scene_confidence": scene_entry["score"],
+            "has_text": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_text"])),
+            "has_person": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_person"])),
+            "is_screenshot": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_screenshot"])),
+            "is_document": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_document"])),
+            "classifier_name": extra_payload.get("classifier_name"),
+            "classifier_version": extra_payload.get("classifier_version"),
+        }
     caption_text: Optional[str] = None
     caption_model: Optional[str] = None
     if caption_row is not None:
@@ -318,7 +506,6 @@ def image_detail(image_id: str) -> Any:
 
     regions: List[Dict[str, Any]] = []
     if region_rows:
-        settings = load_settings()
         detection_cfg = settings.models.detection
         area_gamma = float(detection_cfg.primary_area_gamma)
         center_penalty = float(detection_cfg.primary_center_penalty)
@@ -355,6 +542,8 @@ def image_detail(image_id: str) -> Any:
                     "detector_score": region.raw_score,
                     "backend": region.detector,
                     "priority": priority,
+                    "object_labels": region_object_map.get(region.id, []),
+                    "cluster_labels": region_cluster_map.get(region.id, []),
                 }
             )
 
@@ -372,6 +561,8 @@ def image_detail(image_id: str) -> Any:
         gps_latitude=gps_latitude,
         gps_longitude=gps_longitude,
         scene=scene_info,
+        object_labels=object_labels,
+        cluster_labels=cluster_labels,
         caption=caption_text,
         caption_model=caption_model,
         near_duplicates=near_duplicates,
