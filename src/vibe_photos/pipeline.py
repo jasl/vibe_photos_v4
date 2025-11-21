@@ -1140,7 +1140,7 @@ class PreprocessingPipeline:
         if processed == 0:
             self._logger.info("scene_classification_noop", extra={})
         else:
-                    self._logger.info(
+            self._logger.info(
                 "scene_classification_complete",
                 extra={"processed": processed, "duplicate_labels_propagated": propagated},
             )

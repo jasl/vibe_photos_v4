@@ -23,7 +23,7 @@ models:
     model_name: "google/owlvit-base-patch32"
     device: "cuda"
     max_regions_per_image: 5
-    score_threshold: 0.20
+    score_threshold: 0.26
     # Class-agnostic non-max suppression for overlapping boxes.
     nms_iou_threshold: 0.8
     # Primary region priority weights (area + distance to center).
@@ -167,6 +167,13 @@ object:
   aggregation:
     min_regions: 1
     score_min: 0.32
+  blacklist:
+    - "object.food.butter"
+    - "object.food.water"
+    - "object.food.sauce"
+  remap:
+    "object.food.glass of drink": "object.food.drink"
+    "object.electronics.phone": "object.electronics.smartphone"
 
 cluster:
   image:

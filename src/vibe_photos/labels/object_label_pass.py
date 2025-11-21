@@ -98,6 +98,34 @@ def run_object_label_pass(
     label_idx_by_id = {int(label_id): idx for idx, label_id in enumerate(label_ids.tolist())}
     label_idx_by_key = {label_by_id[lid].key: label_idx_by_id[lid] for lid in label_by_id if lid in label_idx_by_id}
 
+    blacklist_keys = {key.strip() for key in settings.object.blacklist if key}
+    remap_targets: Dict[str, Label] = {}
+    for src_key, dst_key in (settings.object.remap or {}).items():
+        if not src_key or not dst_key:
+            continue
+        try:
+            remap_targets[src_key] = repo.require_label(dst_key)
+        except ValueError as exc:  # pragma: no cover - defensive
+            raise RuntimeError(f"Remap target {dst_key!r} missing in labels table") from exc
+
+    for mapped_label in remap_targets.values():
+        if mapped_label.id is not None and mapped_label.id not in label_by_id:
+            label_by_id[mapped_label.id] = mapped_label
+
+    def _resolve_label(global_idx: int) -> tuple[Label | None, int]:
+        """Return the mapped label (or None if blacklisted) and its id."""
+
+        raw_label_id = int(label_ids[global_idx])
+        label = label_by_id.get(raw_label_id)
+        if label is None:
+            return None, raw_label_id
+        if label.key in blacklist_keys:
+            return None, raw_label_id
+        mapped = remap_targets.get(label.key)
+        if mapped is not None:
+            return mapped, int(mapped.id) if mapped.id is not None else raw_label_id
+        return label, raw_label_id
+
     embedding_model_name = settings.models.embedding.resolved_model_name()
     emb_rows = _load_region_rows(projection_session, embedding_model_name)
     if not emb_rows:
@@ -177,27 +205,29 @@ def run_object_label_pass(
         # Write region-level assignments for accepted labels (default top-k filtered by score).
         for rank, proto_idx in enumerate(accepted_indices):
             global_idx = allowed_indices[proto_idx] if allowed_indices is not None else int(proto_idx)
-            label_id = int(label_ids[global_idx])
-            label = label_by_id[label_id]
+            resolved_label, target_label_id = _resolve_label(global_idx)
+            if resolved_label is None:
+                continue
+
             score_val = float(top_scores[rank])
             extra = json.dumps({"sim_rank": rank, "top1_score": top1_score, "margin": margin})
 
             repo.upsert_label_assignment(
                 target_type="region",
                 target_id=region_id,
-                label=label,
+                label=resolved_label,
                 source="zero_shot",
                 label_space_ver=label_space,
                 score=score_val,
                 extra_json=extra,
             )
 
-            current_best = image_best[image_id].get(label_id, 0.0)
+            current_best = image_best[image_id].get(target_label_id, 0.0)
             if score_val > current_best:
-                image_best[image_id][label_id] = score_val
+                image_best[image_id][target_label_id] = score_val
 
             if score_val >= agg_score_min:
-                image_label_counts[image_id][label_id] += 1
+                image_label_counts[image_id][target_label_id] += 1
 
         if progress_interval and idx % progress_interval == 0:
             percent = round(idx * 100.0 / max(total_regions, 1), 1)
@@ -210,7 +240,9 @@ def run_object_label_pass(
             if num_regions < agg_min_regions:
                 continue
 
-            label = label_by_id[label_id]
+            label = label_by_id.get(label_id)
+            if label is None:
+                continue
             repo.upsert_label_assignment(
                 target_type="image",
                 target_id=image_id,

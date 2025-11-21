@@ -299,6 +299,8 @@ class ObjectConfig:
 
     zero_shot: ObjectZeroShotConfig = field(default_factory=ObjectZeroShotConfig)
     aggregation: ObjectAggregationConfig = field(default_factory=ObjectAggregationConfig)
+    blacklist: List[str] = field(default_factory=list)
+    remap: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -628,6 +630,14 @@ def load_settings(settings_path: Path | None = None) -> Settings:
             parsed[str(scene_key)] = [str(label) for label in label_list if str(label)]
         if parsed:
             object_cfg.zero_shot.scene_fallback_labels = parsed
+
+    blacklist_raw = object_raw.get("blacklist")
+    if isinstance(blacklist_raw, list):
+        object_cfg.blacklist = [str(item) for item in blacklist_raw if str(item)]
+
+    remap_raw = _as_dict(object_raw.get("remap"))
+    if remap_raw:
+        object_cfg.remap = {str(src): str(dst) for src, dst in remap_raw.items() if str(dst)}
 
     if isinstance(aggregation_raw.get("min_regions"), int):
         object_cfg.aggregation.min_regions = aggregation_raw["min_regions"]

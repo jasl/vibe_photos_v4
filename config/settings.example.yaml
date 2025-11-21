@@ -23,7 +23,7 @@ models:
     model_name: "google/owlvit-base-patch32"
     device: "auto"
     max_regions_per_image: 5
-    score_threshold: 0.20
+    score_threshold: 0.25
     # Class-agnostic non-max suppression for overlapping boxes.
     nms_iou_threshold: 0.8
     # Primary region priority weights (area + distance to center).
@@ -170,6 +170,13 @@ object:
   aggregation:
     min_regions: 1
     score_min: 0.32
+  blacklist:               # label keys to suppress from object assignments
+    - "object.food.butter"
+    - "object.food.water"
+    - "object.food.sauce"
+  remap:                   # {"object.old": "object.new"} to consolidate noisy labels
+    "object.food.glass of drink": "object.food.drink"
+    "object.electronics.phone": "object.electronics.smartphone"
 
 cluster:
   image:

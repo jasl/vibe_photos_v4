@@ -147,6 +147,16 @@ To clear pending Celery tasks (for example after changing configuration), you ca
 - Purge only the default queues used by this project:  
   - `uv run celery -A vibe_photos.task_queue purge -f -Q pre_process,process,post_process`
 
+Object Label Noise Controls (M2)
+--------------------------------
+
+Use the object label layer to suppress or merge noisy predictions without changing model features:
+
+- `config/settings.yaml` → `object.blacklist`: label keys to drop when writing region/image assignments.
+- `config/settings.yaml` → `object.remap`: map noisy keys to canonical ones (for example `object.remap: {"object.test.old": "object.test.new"}`).
+- Both apply inside the zero-shot object pass and the aggregated image labels; detection stays feature-only.
+- Tune these after inspecting sample outputs to remove “butter / water / generic-food” style labels before large runs.
+
 Debug UI for Pipeline Outputs (Flask)
 -------------------------------------
 
@@ -167,12 +177,13 @@ The UI provides:
 - A paginated grid of images with thumbnails, scene type, and boolean flags
   (`has_text`, `has_person`, `is_screenshot`, `is_document`).
 - Filters for scene type, presence of text/people, screenshots/documents, and
-  optional region labels.
+  an object label key (uses label assignments, not raw detector labels).
 - Controls to hide or focus on near-duplicates based on `image_near_duplicate`.
 - A detail view for each image that shows:
   - Original file path, size, dimensions, and status.
   - EXIF datetime, camera model, and GPS coordinates (when available).
   - BLIP caption and classifier attributes.
+  - Object and cluster labels (top-ranked per image) and region-level object/cluster labels when detection is enabled.
   - Near-duplicate neighbors and region detections (if detection is enabled).
 
 Cache Versioning

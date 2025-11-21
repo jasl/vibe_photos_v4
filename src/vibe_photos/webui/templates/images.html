@@ -61,6 +61,21 @@
             {% if image.is_screenshot %}🖥{% endif %}
             {% if image.is_document %}📄{% endif %}
           </div>
+          {% if image.objects %}
+            <div style="margin-top:0.25rem;">
+              {% for obj in image.objects %}
+                <span class="pill">{{ obj.display_name }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+          {% if image.clusters %}
+            <div style="margin-top:0.15rem; color:#666; font-size:0.75rem;">
+              clusters:
+              {% for cl in image.clusters %}
+                <span class="pill">{{ cl.display_name }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
         </div>
       </div>
     {% endfor %}

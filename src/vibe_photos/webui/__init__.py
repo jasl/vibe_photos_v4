@@ -93,16 +93,6 @@ def images() -> Any:
     offset = (page - 1) * page_size
 
     region_filter_ids: Optional[set[str]] = None
-    if region_label:
-        projection_path = _get_projection_db_path()
-        if projection_path.exists():
-            with open_projection_session(projection_path) as projection_session:
-                rows = projection_session.execute(
-                    select(Region.image_id).where(Region.raw_label == region_label)
-                ).all()
-                region_filter_ids = {row.image_id for row in rows}
-        else:
-            region_filter_ids = set()
 
     primary_path = _get_primary_db_path()
 
@@ -133,6 +123,19 @@ def images() -> Any:
             if label_id is None:
                 continue
             stmt = stmt.where(_assignment_exists_clause(label_id, scene_space))
+
+        obj_space = settings.label_spaces.object_current
+        if region_label:
+            rows = session.execute(
+                select(LabelAssignment.target_id)
+                .join(Label, Label.id == LabelAssignment.label_id)
+                .where(
+                    LabelAssignment.target_type == "region",
+                    LabelAssignment.label_space_ver == obj_space,
+                    Label.key == region_label,
+                )
+            ).scalars()
+            region_filter_ids = {str(target_id).split("#", 1)[0] for target_id in rows}
 
         if region_filter_ids is not None:
             if region_filter_ids:
@@ -179,6 +182,8 @@ def images() -> Any:
         image_ids = [row.image_id for row in rows]
         scenes_by_image: Dict[str, Dict[str, Any]] = {}
         attributes_by_image: Dict[str, Dict[str, bool]] = defaultdict(dict)
+        objects_by_image: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        clusters_by_image: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
         if image_ids:
             label_rows = session.execute(
@@ -188,13 +193,22 @@ def images() -> Any:
                     Label.level,
                     LabelAssignment.score,
                     LabelAssignment.extra_json,
+                    Label.display_name,
+                    LabelAssignment.source,
+                    LabelAssignment.label_space_ver,
                 )
                 .join(Label, Label.id == LabelAssignment.label_id)
                 .where(
                     LabelAssignment.target_type == "image",
                     LabelAssignment.target_id.in_(image_ids),
-                    LabelAssignment.label_space_ver == scene_space,
-                    Label.level.in_(["scene", "attribute"]),
+                    LabelAssignment.label_space_ver.in_(
+                        (
+                            scene_space,
+                            settings.label_spaces.object_current,
+                            settings.label_spaces.cluster_current,
+                        )
+                    ),
+                    Label.level.in_(["scene", "attribute", "object", "cluster"]),
                 )
             ).all()
 
@@ -210,7 +224,27 @@ def images() -> Any:
                         }
                     continue
 
-                attributes_by_image[target_id][label_row.key] = True
+                if label_row.level == "attribute":
+                    attributes_by_image[target_id][label_row.key] = True
+                    continue
+
+                if label_row.level == "object" and label_row.label_space_ver == settings.label_spaces.object_current:
+                    objects_by_image[target_id].append(
+                        {
+                            "display_name": label_row.display_name,
+                            "score": label_row.score,
+                            "source": label_row.source,
+                        }
+                    )
+                    continue
+
+                if label_row.level == "cluster" and label_row.label_space_ver == settings.label_spaces.cluster_current:
+                    clusters_by_image[target_id].append(
+                        {
+                            "display_name": label_row.display_name,
+                            "score": label_row.score,
+                        }
+                    )
 
     items: List[Dict[str, Any]] = []
     for row in rows:
@@ -218,17 +252,19 @@ def images() -> Any:
         scene_entry = scenes_by_image.get(image_id)
         scene_label = scene_type_from_label_key(scene_entry["key"]) if scene_entry else None
         attr_flags = attributes_by_image.get(image_id, {})
-        items.append(
-            {
-                "image_id": image_id,
-                "scene_type": scene_label,
-                "has_text": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_text"])),
-                "has_person": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_person"])),
-                "is_screenshot": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_screenshot"])),
-                "is_document": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_document"])),
-                "is_duplicate": image_id in dup_ids,
-            }
-        )
+            items.append(
+                {
+                    "image_id": image_id,
+                    "scene_type": scene_label,
+                    "has_text": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_text"])),
+                    "has_person": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_person"])),
+                    "is_screenshot": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_screenshot"])),
+                    "is_document": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_document"])),
+                    "is_duplicate": image_id in dup_ids,
+                    "objects": sorted(objects_by_image.get(image_id, []), key=lambda entry: entry.get("score", 0.0), reverse=True)[:4],
+                    "clusters": sorted(clusters_by_image.get(image_id, []), key=lambda entry: entry.get("score", 0.0), reverse=True)[:3],
+                }
+            )
 
     return render_template(
         "images.html",
