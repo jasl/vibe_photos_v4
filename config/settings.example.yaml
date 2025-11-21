@@ -119,8 +119,10 @@ models:
         - "Surface"
 
 pipeline:
-  # Whether to run detection step in M1.
+  # Whether to run detection step.
   run_detection: false       # keep off by default for lower memory
+  # Whether to run clustering passes.
+  run_cluster: false
   # Whether to skip heavy models for near-duplicates.
   skip_duplicates_for_heavy_models: true
   # Hamming distance threshold for near-duplicate grouping (default 12).
@@ -160,6 +162,11 @@ object:
     scene_whitelist:
       - "scene.product"
       - "scene.food"
+    # Optional: allow restricted label sets for specific scenes (for example screenshots or documents).
+    # scene_fallback_labels:
+    #   scene.screenshot:
+    #     - "object.electronics.laptop"
+    #     - "object.electronics.phone"
   aggregation:
     min_regions: 1
     score_min: 0.32

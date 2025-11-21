@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from utils.logging import get_logger
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import Label, Region, RegionEmbedding, open_primary_session, open_projection_session
+from vibe_photos.db import Label, LabelAssignment, Region, RegionEmbedding, open_primary_session, open_projection_session
 from vibe_photos.labels.repository import LabelRepository
 
 LOGGER = get_logger(__name__, extra={"command": "object_label_pass"})
@@ -37,6 +37,26 @@ def _load_region_rows(projection_session, embedding_model_name: str) -> Iterable
     return rows.all()
 
 
+def _load_scene_labels(primary_session, settings: Settings) -> Dict[str, str]:
+    """Return best scene label key per image_id for the active scene space."""
+
+    stmt = (
+        select(LabelAssignment.target_id, Label.key, LabelAssignment.score)
+        .join(Label, Label.id == LabelAssignment.label_id)
+        .where(
+            LabelAssignment.target_type == "image",
+            LabelAssignment.label_space_ver == settings.label_spaces.scene_current,
+            Label.level == "scene",
+        )
+    )
+    best: Dict[str, Tuple[str, float]] = {}
+    for row in primary_session.execute(stmt):
+        current = best.get(row.target_id)
+        if current is None or float(row.score or 0.0) > current[1]:
+            best[row.target_id] = (row.key, float(row.score or 0.0))
+    return {image_id: key for image_id, (key, _) in best.items()}
+
+
 def run_object_label_pass(
     *,
     primary_session,
@@ -50,6 +70,16 @@ def run_object_label_pass(
 
     label_space = label_space_ver or settings.label_spaces.object_current
     proto_name = prototype_name or settings.label_spaces.object_current
+
+    # Clear previous auto-generated assignments for idempotent reruns.
+    primary_session.execute(
+        delete(LabelAssignment).where(
+            LabelAssignment.label_space_ver == label_space,
+            LabelAssignment.target_type.in_(("image", "region")),
+            LabelAssignment.source.in_(("zero_shot", "aggregated", "duplicate_propagated")),
+        )
+    )
+    primary_session.commit()
 
     label_ids, prototypes = _load_prototypes(cache_root, proto_name)
     if prototypes.ndim != 2:
@@ -65,17 +95,24 @@ def run_object_label_pass(
     if missing:
         raise RuntimeError(f"Label ids missing in DB: {missing}")
 
+    label_idx_by_id = {int(label_id): idx for idx, label_id in enumerate(label_ids.tolist())}
+    label_idx_by_key = {label_by_id[lid].key: label_idx_by_id[lid] for lid in label_by_id if lid in label_idx_by_id}
+
     embedding_model_name = settings.models.embedding.resolved_model_name()
     emb_rows = _load_region_rows(projection_session, embedding_model_name)
     if not emb_rows:
         LOGGER.info("object_label_pass_no_regions", extra={})
         return
 
+    scene_by_image = _load_scene_labels(primary_session, settings)
+
     score_min = float(settings.object.zero_shot.score_min)
     margin_min = float(settings.object.zero_shot.margin_min)
     top_k = int(settings.object.zero_shot.top_k)
     agg_min_regions = int(settings.object.aggregation.min_regions)
     agg_score_min = float(settings.object.aggregation.score_min)
+    scene_whitelist = set(settings.object.zero_shot.scene_whitelist or [])
+    scene_fallback = {k: list(v) for k, v in (settings.object.zero_shot.scene_fallback_labels or {}).items()}
 
     label_matrix = prototypes.astype(np.float32)
     image_best: Dict[str, Dict[int, float]] = defaultdict(dict)
@@ -88,6 +125,21 @@ def run_object_label_pass(
         region_id = row.region_id
         embedding_rel = row.embedding_path
         image_id = row.image_id
+
+        scene_label = scene_by_image.get(image_id)
+        allowed_indices: List[int] | None = None
+        if scene_label and scene_label in scene_whitelist:
+            allowed_indices = None  # use all labels
+        elif scene_label and scene_label in scene_fallback:
+            allowed_indices = [
+                label_idx_by_key[key]
+                for key in scene_fallback[scene_label]
+                if key in label_idx_by_key
+            ]
+            if not allowed_indices:
+                continue
+        else:
+            continue  # skip scenes outside whitelist/fallback
 
         emb_path = cache_root / "embeddings" / embedding_rel
         try:
@@ -106,7 +158,8 @@ def run_object_label_pass(
             continue
         region_vec = region_vec / norm
 
-        sims = label_matrix @ region_vec
+        current_matrix = label_matrix if allowed_indices is None else label_matrix[allowed_indices]
+        sims = current_matrix @ region_vec
         top_indices = sims.argsort()[::-1][: top_k or len(sims)]
         top_scores = sims[top_indices]
 
@@ -123,7 +176,8 @@ def run_object_label_pass(
 
         # Write region-level assignments for accepted labels (default top-k filtered by score).
         for rank, proto_idx in enumerate(accepted_indices):
-            label_id = int(label_ids[proto_idx])
+            global_idx = allowed_indices[proto_idx] if allowed_indices is not None else int(proto_idx)
+            label_id = int(label_ids[global_idx])
             label = label_by_id[label_id]
             score_val = float(top_scores[rank])
             extra = json.dumps({"sim_rank": rank, "top1_score": top1_score, "margin": margin})

@@ -282,6 +282,7 @@ class ObjectZeroShotConfig:
     score_min: float = 0.32
     margin_min: float = 0.08
     scene_whitelist: List[str] = field(default_factory=lambda: ["scene.product", "scene.food"])
+    scene_fallback_labels: Dict[str, List[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -333,6 +334,7 @@ class PipelineConfig:
     """Configuration for the preprocessing and inference pipeline."""
 
     run_detection: bool = False
+    run_cluster: bool = False
     skip_duplicates_for_heavy_models: bool = True
     phash_hamming_threshold: int = 12
     thumbnail_size_small: int = 256
@@ -534,6 +536,8 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     pipeline_cfg = settings.pipeline
     if isinstance(pipeline_raw.get("run_detection"), bool):
         pipeline_cfg.run_detection = pipeline_raw["run_detection"]
+    if isinstance(pipeline_raw.get("run_cluster"), bool):
+        pipeline_cfg.run_cluster = pipeline_raw["run_cluster"]
     if isinstance(pipeline_raw.get("skip_duplicates_for_heavy_models"), bool):
         pipeline_cfg.skip_duplicates_for_heavy_models = pipeline_raw["skip_duplicates_for_heavy_models"]
     if isinstance(pipeline_raw.get("phash_hamming_threshold"), int):
@@ -615,6 +619,15 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         object_cfg.zero_shot.margin_min = float(zero_shot_raw["margin_min"])
     if isinstance(zero_shot_raw.get("scene_whitelist"), list):
         object_cfg.zero_shot.scene_whitelist = [str(item) for item in zero_shot_raw["scene_whitelist"] if str(item)]
+    scene_fallback_raw = _as_dict(zero_shot_raw.get("scene_fallback_labels"))
+    if scene_fallback_raw:
+        parsed: Dict[str, List[str]] = {}
+        for scene_key, label_list in scene_fallback_raw.items():
+            if not isinstance(label_list, list):
+                continue
+            parsed[str(scene_key)] = [str(label) for label in label_list if str(label)]
+        if parsed:
+            object_cfg.zero_shot.scene_fallback_labels = parsed
 
     if isinstance(aggregation_raw.get("min_regions"), int):
         object_cfg.aggregation.min_regions = aggregation_raw["min_regions"]

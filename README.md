@@ -94,6 +94,8 @@ What a single-process run does:
   writes region metadata under `cache/regions/<image_id>.json` plus feature-only
   `regions` / `region_embedding` projections in `cache/index.db`. Object / cluster
   labels are produced later via label passes, not in the detection step.
+- Object label pass respects `object.zero_shot.scene_whitelist` and optional
+  `scene_fallback_labels` to avoid noisy predictions on screenshots/documents.
 - Writes a cache manifest (`cache/manifest.json`) that records the cache format
   version plus the effective model/backends used for embeddings, captions, and
   detection so caches can be trusted across runs.

@@ -375,10 +375,11 @@ class PreprocessingPipeline:
                         False,
                     )
                 )
-            stage_plan.append(
-                (
-                    "cluster_pass",
-                    lambda: self._run_cluster_pass(primary_session, projection_session),
+            if self._settings.pipeline.run_cluster:
+                stage_plan.append(
+                    (
+                        "cluster_pass",
+                        lambda: self._run_cluster_pass(primary_session, projection_session),
                         False,
                     )
                 )

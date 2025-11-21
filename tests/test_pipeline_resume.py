@@ -46,6 +46,8 @@ def test_pipeline_skips_completed_and_resumes_next_stage(monkeypatch, tmp_path):
     pipeline._run_thumbnails = _stub_stage(executed, "thumbnails")  # type: ignore[assignment]
     pipeline._run_embeddings_and_captions = _stub_stage(executed, "embeddings_and_captions")  # type: ignore[assignment]
     pipeline._run_scene_classification = _stub_stage(executed, "scene_classification")  # type: ignore[assignment]
+    pipeline._run_cluster_pass = _stub_stage(executed, "cluster_pass")  # type: ignore[assignment]
+    pipeline._run_cluster_pass = _stub_stage(executed, "cluster_pass")  # type: ignore[assignment]
 
     pipeline.run(roots=[Path("/tmp/album")], primary_db_path=primary_db, projection_db_path=projection_db)
 
