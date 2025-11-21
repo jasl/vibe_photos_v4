@@ -1,0 +1,120 @@
+"""Build SigLIP text prototypes for object labels (M2 label layer)."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+from typing import Dict, List, Sequence
+
+import numpy as np
+import torch
+from sqlalchemy import select
+
+from utils.logging import get_logger
+from vibe_photos.config import Settings, load_settings
+from vibe_photos.db import Label, LabelAlias, open_primary_session
+from vibe_photos.ml.models import get_siglip_embedding_model
+
+LOGGER = get_logger(__name__, extra={"command": "build_object_prototypes"})
+
+
+def _collect_alias_texts(session, label_id: int) -> Dict[str | None, List[str]]:
+    rows = session.execute(
+        select(LabelAlias.alias_text, LabelAlias.language).where(LabelAlias.label_id == label_id)
+    ).all()
+    grouped: Dict[str | None, List[str]] = {}
+    for alias_text, language in rows:
+        grouped.setdefault(language, []).append(alias_text)
+    return grouped
+
+
+def build_object_prototypes(
+    *,
+    session,
+    settings: Settings,
+    cache_root: Path,
+    output_name: str,
+) -> Path:
+    """Encode label aliases into SigLIP text prototypes and persist to cache."""
+
+    siglip_processor, siglip_model, siglip_device = get_siglip_embedding_model(settings=settings)
+
+    label_rows = session.execute(
+        select(Label).where(Label.level == "object", Label.is_active.is_(True)).order_by(Label.id)
+    ).scalars()
+
+    label_ids: List[int] = []
+    label_keys: List[str] = []
+    prototype_vecs: List[np.ndarray] = []
+
+    for label in label_rows:
+        alias_map = _collect_alias_texts(session, label.id)
+        candidates: List[str] = []
+        candidates.extend(alias_map.get("en", []))
+        candidates.extend(alias_map.get("zh", []))
+        candidates.extend(alias_map.get(None, []))
+        if not candidates:
+            candidates.append(label.display_name)
+
+        inputs = siglip_processor(text=candidates, padding=True, return_tensors="pt")
+        inputs = inputs.to(siglip_device)
+        with torch.no_grad():
+            text_emb = siglip_model.get_text_features(**inputs)
+
+        text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
+        proto = text_emb.mean(dim=0)
+        proto = proto / proto.norm()
+
+        label_ids.append(label.id)
+        label_keys.append(label.key)
+        prototype_vecs.append(proto.detach().cpu().numpy().astype(np.float32))
+
+    if not prototype_vecs:
+        raise RuntimeError("No object labels found; seed labels before building prototypes.")
+
+    prototypes = np.stack(prototype_vecs, axis=0)
+    output_dir = cache_root / "label_text_prototypes"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{output_name}.npz"
+
+    np.savez(
+        output_path,
+        label_ids=np.asarray(label_ids, dtype=np.int64),
+        label_keys=np.asarray(label_keys),
+        prototypes=prototypes,
+    )
+
+    LOGGER.info(
+        "build_object_prototypes_complete",
+        extra={"count": len(label_ids), "output_path": str(output_path)},
+    )
+    return output_path
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Build SigLIP text prototypes for object labels.")
+    parser.add_argument("--db", type=Path, default=Path("data/index.db"), help="Primary DB with labels table.")
+    parser.add_argument(
+        "--cache-root",
+        type=Path,
+        default=Path("cache"),
+        help="Cache root where prototypes will be stored (under label_text_prototypes/).",
+    )
+    parser.add_argument(
+        "--output-name",
+        type=str,
+        default="object_v1",
+        help="Name of the prototype file (produces <name>.npz).",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    settings = load_settings()
+    with open_primary_session(args.db) as session:
+        build_object_prototypes(session=session, settings=settings, cache_root=args.cache_root, output_name=args.output_name)
+
+
+if __name__ == "__main__":
+    main()

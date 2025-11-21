@@ -13,7 +13,7 @@ from sqlalchemy import and_, func, or_, select
 from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactSpec
 from vibe_photos.config import load_settings
-from vibe_photos.db import ArtifactRecord, Image, ImageCaption, ImageNearDuplicate, ImageRegion, ImageScene
+from vibe_photos.db import ArtifactRecord, Image, ImageCaption, ImageNearDuplicate, ImageScene, Region
 from vibe_photos.db import open_primary_session, open_projection_session
 
 
@@ -31,7 +31,7 @@ def _get_primary_db_path() -> Path:
 
 
 def _get_projection_db_path() -> Path:
-    return _DATA_ROOT / "projection.db"
+    return _CACHE_ROOT / "index.db"
 
 
 @app.route("/")
@@ -60,6 +60,18 @@ def images() -> Any:
     page_size = max(1, min(64, int(request.args.get("page_size", "24"))))
     offset = (page - 1) * page_size
 
+    region_filter_ids: Optional[set[str]] = None
+    if region_label:
+        projection_path = _get_projection_db_path()
+        if projection_path.exists():
+            with open_projection_session(projection_path) as projection_session:
+                rows = projection_session.execute(
+                    select(Region.image_id).where(Region.raw_label == region_label)
+                ).all()
+                region_filter_ids = {row.image_id for row in rows}
+        else:
+            region_filter_ids = set()
+
     filters = [Image.status == "active"]
     if scene_type:
         filters.append(ImageScene.scene_type == scene_type)
@@ -85,12 +97,25 @@ def images() -> Any:
             base_query = base_query.join(ImageScene, ImageScene.image_id == Image.image_id, isouter=True).where(
                 and_(*filters)
             )
-        if region_label:
-            base_query = (
-                base_query.join(ImageRegion, ImageRegion.image_id == Image.image_id).where(
-                    ImageRegion.refined_label == region_label
+        if region_filter_ids is not None:
+            if region_filter_ids:
+                base_query = base_query.where(Image.image_id.in_(region_filter_ids))
+            else:
+                return render_template(
+                    "images.html",
+                    images=[],
+                    page=page,
+                    page_size=page_size,
+                    total=0,
+                    scene_type=scene_type or "",
+                    has_text=has_text or "",
+                    has_person=has_person or "",
+                    is_screenshot=is_screenshot or "",
+                    is_document=is_document or "",
+                    has_duplicates=has_duplicates or "",
+                    hide_duplicates=hide_duplicates or "",
+                    region_label=region_label,
                 )
-            )
         if hide_duplicates and hide_duplicates.lower() in {"1", "true", "yes"}:
             dup_subq = select(ImageNearDuplicate.duplicate_image_id)
             base_query = base_query.where(~Image.image_id.in_(dup_subq))
@@ -117,11 +142,8 @@ def images() -> Any:
         ).join(ImageScene, ImageScene.image_id == Image.image_id, isouter=True).where(Image.status == "active")
         if filters:
             query_stmt = query_stmt.where(and_(*filters))
-        if region_label:
-            query_stmt = query_stmt.join(ImageRegion, ImageRegion.image_id == Image.image_id).where(
-                ImageRegion.refined_label == region_label
-            )
-            query_stmt = query_stmt.distinct(Image.image_id)
+        if region_filter_ids is not None and region_filter_ids:
+            query_stmt = query_stmt.where(Image.image_id.in_(region_filter_ids))
         if hide_duplicates and hide_duplicates.lower() in {"1", "true", "yes"}:
             dup_subq = select(ImageNearDuplicate.duplicate_image_id)
             query_stmt = query_stmt.where(~Image.image_id.in_(dup_subq))
@@ -192,16 +214,17 @@ def image_detail(image_id: str) -> Any:
             )
         ).first()
 
-        region_rows = (
-            session.execute(
-                select(ImageRegion).where(ImageRegion.image_id == image_id).order_by(ImageRegion.region_index)
-            )
-            .scalars()
-            .all()
-        )
 
     primary_path_str = image_row.primary_path
     logical_name = Path(primary_path_str).name
+
+    region_rows: List[Region] = []
+    projection_path = _get_projection_db_path()
+    if projection_path.exists():
+        with open_projection_session(projection_path) as projection_session:
+            region_rows = (
+                projection_session.execute(select(Region).where(Region.image_id == image_id)).scalars().all()
+            )
 
     scene_info: Dict[str, Any] | None = None
     if scene_row is not None:
@@ -314,21 +337,23 @@ def image_detail(image_id: str) -> Any:
             if center_weight < 0.0:
                 center_weight = 0.0
 
-            priority = float(region.detector_score) * area_weight * center_weight
+            priority = float(region.raw_score) * area_weight * center_weight
+
+            try:
+                index = int(str(region.id).split("#")[-1])
+            except Exception:
+                index = 0
 
             regions.append(
                 {
-                    "index": region.region_index,
+                    "index": index,
                     "x_min": region.x_min,
                     "y_min": region.y_min,
                     "x_max": region.x_max,
                     "y_max": region.y_max,
-                    "detector_label": region.detector_label,
-                    "detector_score": region.detector_score,
-                    "refined_label": region.refined_label,
-                    "refined_score": region.refined_score,
-                    "backend": region.backend,
-                    "model_name": region.model_name,
+                    "detector_label": region.raw_label or "(raw)",
+                    "detector_score": region.raw_score,
+                    "backend": region.detector,
                     "priority": priority,
                 }
             )

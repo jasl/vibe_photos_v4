@@ -52,8 +52,11 @@ This file tracks high-level implementation tasks and their status for the Phase 
 
 ### M2 — Perception Quality & Labeling
 
+- [x] Introduce M2 label layer schema + seeds (scene/attr/object) and build SigLIP text prototypes (`uv run python -m vibe_photos.labels.build_object_prototypes`).
+- [x] Refactor detection pass to feature-only: write `regions` + `region_embedding` in cache DB, drop in-pass label refinement.
+- [x] Add region zero-shot object label pass (CLI) that writes `label_assignment` for regions and aggregated images with configurable score/margin.
 - [ ] Improve SigLIP label dictionaries and grouping to reduce manual maintenance of `settings.models.siglip_labels` and cover common creator scenarios (electronics, food, documents, screenshots).
-- [ ] Tighten detection + SigLIP re-ranking thresholds and add label blacklist/remapping to suppress low-information or noisy nouns in region and image-level labels.
+- [ ] Tighten detection thresholds and add label blacklist/remapping to suppress low-information or noisy nouns in region and image-level labels.
 - [ ] Run targeted evaluations on a labeled subset (≈1k photos) to measure coarse category accuracy, object/product recall, and failure patterns; capture findings in `blueprints/phase_final/knowledge/lessons_learned.md`.
 - [ ] Add lightweight tools (CLI or notebooks) to inspect per-label distributions and confusion cases, wired against the existing SQLite + cache stack.
 

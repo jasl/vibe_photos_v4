@@ -38,14 +38,6 @@ models:
     # Filter out low-priority secondary regions after sorting.
     secondary_min_priority: 0.03
     secondary_min_relative_to_primary: 0.3
-    # SigLIP-based region re-ranking thresholds for per-region labels.
-    # ``siglip_min_prob`` is the minimum probability required for the
-    # top-1 label within its semantic group. ``siglip_min_margin`` is
-    # the required gap between the best and second-best label within
-    # that group. Regions that do not meet both thresholds keep only
-    # the original detector label (no refined label is written).
-    siglip_min_prob: 0.15
-    siglip_min_margin: 0.05
 
   ocr:
     enabled: false           # M1 MUST work with OCR disabled

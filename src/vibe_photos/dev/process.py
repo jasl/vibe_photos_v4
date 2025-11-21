@@ -16,8 +16,10 @@ from PIL import Image
 from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactManager
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import open_projection_session
+from vibe_photos.db import open_projection_session, open_primary_session
 from vibe_photos.hasher import compute_content_hash
+from vibe_photos.labels.build_object_prototypes import build_object_prototypes
+from vibe_photos.labels.object_label_pass import run_object_label_pass
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.pipeline import PreprocessingPipeline
 from vibe_photos.preprocessing import ensure_preprocessing_artifacts
@@ -113,6 +115,21 @@ def main(
         "--device",
         help="Override the model device from settings.yaml, for example cpu, cuda, or mps.",
     ),
+    run_object_labels: bool = typer.Option(
+        True,
+        "--run-object-labels/--skip-object-labels",
+        help="After preprocessing, run the object label pass (region zero-shot + image aggregation).",
+    ),
+    label_space: Optional[str] = typer.Option(
+        None,
+        "--label-space",
+        help="Label space version for object assignments; defaults to settings.label_spaces.object_current.",
+    ),
+    prototype_name: Optional[str] = typer.Option(
+        None,
+        "--prototype-name",
+        help="Prototype file name (without .npz); defaults to settings.label_spaces.object_current.",
+    ),
 ) -> None:
     """Run the M1 processing pipeline for one or more album roots."""
 
@@ -130,10 +147,58 @@ def main(
             "single_image_process_complete",
             extra={"image_id": resolved_id, "image_path": str(image_path), "projection_db": str(cache_db)},
         )
+
+        if run_object_labels:
+            cache_root = cache_db.parent
+            proto_name = prototype_name or settings.label_spaces.object_current
+            space = label_space or settings.label_spaces.object_current
+            proto_path = cache_root / "label_text_prototypes" / f"{proto_name}.npz"
+
+            with open_primary_session(db) as primary_session, open_projection_session(cache_db) as projection_session:
+                if not proto_path.exists():
+                    build_object_prototypes(
+                        session=primary_session,
+                        settings=settings,
+                        cache_root=cache_root,
+                        output_name=proto_name,
+                    )
+
+                run_object_label_pass(
+                    primary_session=primary_session,
+                    projection_session=projection_session,
+                    settings=settings,
+                    cache_root=cache_root,
+                    label_space_ver=space,
+                    prototype_name=proto_name,
+                )
         return
 
     pipeline = PreprocessingPipeline(settings=settings)
     pipeline.run(roots=root, primary_db_path=db, projection_db_path=cache_db)
+
+    if run_object_labels:
+        cache_root = cache_db.parent
+        proto_name = prototype_name or settings.label_spaces.object_current
+        space = label_space or settings.label_spaces.object_current
+        proto_path = cache_root / "label_text_prototypes" / f"{proto_name}.npz"
+
+        with open_primary_session(db) as primary_session, open_projection_session(cache_db) as projection_session:
+            if not proto_path.exists():
+                build_object_prototypes(
+                    session=primary_session,
+                    settings=settings,
+                    cache_root=cache_root,
+                    output_name=proto_name,
+                )
+
+            run_object_label_pass(
+                primary_session=primary_session,
+                projection_session=projection_session,
+                settings=settings,
+                cache_root=cache_root,
+                label_space_ver=space,
+                prototype_name=proto_name,
+            )
 
 
 if __name__ == "__main__":
@@ -141,4 +206,3 @@ if __name__ == "__main__":
 
 
 __all__ = ["main", "ensure_artifacts_for_image"]
-

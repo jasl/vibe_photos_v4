@@ -19,7 +19,7 @@
               "
             >
               <span class="region-label">
-                {{ region.refined_label or region.detector_label }}
+                {{ region.detector_label }}
               </span>
             </div>
           {% endfor %}
@@ -117,7 +117,6 @@
                 <th>#</th>
                 <th>BBox (x_min, y_min, x_max, y_max)</th>
                 <th>Detector</th>
-                <th>SigLIP refined</th>
                 <th>Priority</th>
               </tr>
             </thead>
@@ -135,15 +134,8 @@
                     <span class="pill">{{ region.detector_label }}</span>
                     <br />
                     score: {{ "%.3f"|format(region.detector_score) }}
-                  </td>
-                  <td>
-                    {% if region.refined_label %}
-                      <span class="pill">{{ region.refined_label }}</span>
-                      <br />
-                      score: {{ "%.3f"|format(region.refined_score or 0.0) }}
-                    {% else %}
-                      <span class="pill">N/A</span>
-                    {% endif %}
+                    <br />
+                    backend: {{ region.backend }}
                   </td>
                   <td>
                     {{ "%.4f"|format(region.priority or 0.0) }}

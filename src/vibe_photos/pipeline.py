@@ -22,8 +22,9 @@ from vibe_photos.db import (
     ImageCaption,
     ImageEmbedding,
     ImageNearDuplicate,
-    ImageRegion,
     ImageScene,
+    Region,
+    RegionEmbedding,
     open_primary_session,
     open_projection_session,
 )
@@ -269,7 +270,11 @@ class PreprocessingPipeline:
             projection_session.execute(delete(ImageEmbedding).where(ImageEmbedding.image_id.in_(ids)))
             projection_session.execute(delete(ImageCaption).where(ImageCaption.image_id.in_(ids)))
             projection_session.execute(delete(ImageScene).where(ImageScene.image_id.in_(ids)))
-            projection_session.execute(delete(ImageRegion).where(ImageRegion.image_id.in_(ids)))
+            projection_session.execute(delete(Region).where(Region.image_id.in_(ids)))
+            for image_id in ids:
+                projection_session.execute(
+                    delete(RegionEmbedding).where(RegionEmbedding.region_id.like(f"{image_id}#%"))
+                )
             projection_session.execute(
                 delete(ImageNearDuplicate).where(
                     or_(ImageNearDuplicate.anchor_image_id.in_(ids), ImageNearDuplicate.duplicate_image_id.in_(ids))
@@ -674,11 +679,7 @@ class PreprocessingPipeline:
     def _run_region_detection_and_reranking(
         self, primary_session, projection_session=None, target_image_ids: Optional[Sequence[str]] = None
     ) -> None:
-        """Run optional object-level detection and prepare region metadata.
-
-        When ``target_image_ids`` is provided, restrict processing to that subset of
-        active images; otherwise, process all active images as in the full pipeline.
-        """
+        """Detection pass (M2): emit regions + region embeddings, no semantic labels."""
 
         if self._cache_root is None:
             raise RuntimeError("cache_root is not initialized")
@@ -708,12 +709,10 @@ class PreprocessingPipeline:
         regions_dir = cache_root / "regions"
         regions_dir.mkdir(parents=True, exist_ok=True)
 
-        if detection_cfg.backend != "owlvit":
-            self._logger.info(
-                "region_detection_backend_unsupported",
-                extra={"backend": detection_cfg.backend},
-            )
-            return
+        embedding_model_name = self._settings.models.embedding.resolved_model_name()
+        embedding_backend = self._settings.models.embedding.backend
+        region_emb_dir = cache_root / "embeddings" / "regions" / embedding_model_name
+        region_emb_dir.mkdir(parents=True, exist_ok=True)
 
         # Fallback: if no projection session is provided (e.g., single-image task),
         # reuse the primary session to avoid crashes, but cache DB is preferred.
@@ -732,15 +731,9 @@ class PreprocessingPipeline:
 
         siglip_labels_cfg = self._settings.models.siglip_labels
         candidate_labels = list(siglip_labels_cfg.candidate_labels)
-        label_groups = siglip_labels_cfg.label_groups
-        canonical_group_map: Dict[str, str] = {}
-        for group_name, members in label_groups.items():
-            for member in members:
-                key = _normalize_siglip_label(member)
-                if key and key not in canonical_group_map:
-                    canonical_group_map[key] = group_name
 
         import numpy as np
+        import torch
         from PIL import Image as _Image
 
         active_rows = primary_session.execute(
@@ -769,22 +762,6 @@ class PreprocessingPipeline:
             duplicate_rows = projection_session.execute(select(ImageNearDuplicate.duplicate_image_id))
             duplicate_ids = {row.duplicate_image_id for row in duplicate_rows}
             process_ids = [image_id for image_id in process_ids if image_id not in duplicate_ids]
-
-        # Pre-compute text embeddings for candidate labels once.
-        import torch
-
-        text_inputs = siglip_processor(text=candidate_labels, padding=True, return_tensors="pt")
-        text_inputs = text_inputs.to(siglip_device)
-        with torch.no_grad():
-            text_emb = siglip_model.get_text_features(**text_inputs)
-        text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
-
-        candidate_label_groups = [
-            _siglip_label_group(label, canonical_map=canonical_group_map) for label in candidate_labels
-        ]
-        num_candidate_labels = len(candidate_labels)
-        base_min_prob = max(0.0, float(detection_cfg.siglip_min_prob))
-        min_margin = max(0.0, float(detection_cfg.siglip_min_margin))
 
         nms_iou_threshold = float(detection_cfg.nms_iou_threshold)
         area_gamma = float(detection_cfg.primary_area_gamma)
@@ -827,10 +804,9 @@ class PreprocessingPipeline:
 
             detections = non_max_suppression(detections, iou_threshold=nms_iou_threshold)
 
-            # Remove any existing regions for this image_id to keep results consistent with the current model.
-            projection_session.execute(delete(ImageRegion).where(ImageRegion.image_id == image_id))
-            if primary_session is not None:
-                primary_session.execute(delete(ImageRegion).where(ImageRegion.image_id == image_id))
+            # Remove any existing regions/embeddings for this image_id to keep results consistent with the current model.
+            projection_session.execute(delete(Region).where(Region.image_id == image_id))
+            projection_session.execute(delete(RegionEmbedding).where(RegionEmbedding.region_id.like(f"{image_id}#%")))
 
             width, height = image.size
 
@@ -929,9 +905,10 @@ class PreprocessingPipeline:
                 region_images.append(crop)
                 region_indices.append(index)
 
-            refined_labels: Dict[int, str] = {}
-            refined_scores: Dict[int, float] = {}
+            region_payloads = []
 
+            # Compute region embeddings in one batch to avoid redundant preprocessing.
+            region_embeddings: List[np.ndarray] = []
             if region_images:
                 region_inputs = siglip_processor(images=region_images, return_tensors="pt")
                 region_inputs = region_inputs.to(siglip_device)
@@ -940,87 +917,39 @@ class PreprocessingPipeline:
                     region_emb = siglip_model.get_image_features(**region_inputs)
 
                 region_emb = region_emb / region_emb.norm(dim=-1, keepdim=True)
-                logits = region_emb @ text_emb.T
-                probs = torch.softmax(logits, dim=-1)
-                probs_cpu = probs.detach().cpu().numpy()
-
-                for idx, region_index in enumerate(region_indices):
-                    row = probs_cpu[idx]
-
-                    det_label = detections[region_index].label
-                    det_group = _siglip_label_group(det_label, canonical_map=canonical_group_map)
-
-                    if det_group is None:
-                        # When the detector label cannot be mapped to a semantic group,
-                        # skip SigLIP refinement to avoid cross-group overrides.
-                        continue
-
-                    group_indices = [
-                        label_index
-                        for label_index, group_name in enumerate(candidate_label_groups)
-                        if group_name == det_group
-                    ]
-
-                    if not group_indices:
-                        # No candidate labels in the same group; keep detector-only result.
-                        continue
-
-                    scores = [(label_index, float(row[label_index])) for label_index in group_indices]
-                    scores.sort(key=lambda item: item[1], reverse=True)
-
-                    best_pos, best_prob = scores[0]
-                    second_prob = scores[1][1] if len(scores) > 1 else 0.0
-
-                    group_size = len(group_indices)
-                    uniform_prob = 1.0 / float(group_size) if group_size > 0 else 0.0
-                    min_prob = max(base_min_prob, uniform_prob + 0.05)
-
-                    if best_prob < min_prob or (best_prob - second_prob) < min_margin:
-                        continue
-
-                    best_label = candidate_labels[best_pos]
-                    refined_labels[region_index] = best_label
-                    refined_scores[region_index] = best_prob
-
-            # Persist regions to SQLite and cache JSON.
-            region_payloads = []
+                region_embeddings = [emb.detach().cpu().numpy().astype(np.float32) for emb in region_emb]
 
             for new_index, det in enumerate(detections):
-                refined_label = refined_labels.get(new_index)
-                refined_score = refined_scores.get(new_index)
-
+                region_id = f"{image_id}#{new_index}"
                 projection_session.add(
-                    ImageRegion(
+                    Region(
+                        id=region_id,
                         image_id=image_id,
-                        region_index=new_index,
                         x_min=float(det.bbox.x_min),
                         y_min=float(det.bbox.y_min),
                         x_max=float(det.bbox.x_max),
                         y_max=float(det.bbox.y_max),
-                        detector_label=det.label,
-                        detector_score=float(det.score),
-                        refined_label=refined_label,
-                        refined_score=refined_score,
-                        backend=det.backend,
-                        model_name=det.model_name,
-                        updated_at=now,
+                        detector=det.backend,
+                        raw_label=det.label,
+                        raw_score=float(det.score),
+                        created_at=now,
                     )
                 )
-                if primary_session is not None:
-                    primary_session.add(
-                        ImageRegion(
-                            image_id=image_id,
-                            region_index=new_index,
-                            x_min=float(det.bbox.x_min),
-                            y_min=float(det.bbox.y_min),
-                            x_max=float(det.bbox.x_max),
-                            y_max=float(det.bbox.y_max),
-                            detector_label=det.label,
-                            detector_score=float(det.score),
-                            refined_label=refined_label,
-                            refined_score=refined_score,
-                            backend=det.backend,
-                            model_name=det.model_name,
+
+                if new_index < len(region_embeddings):
+                    emb_vec = region_embeddings[new_index]
+                    region_rel_path = f"regions/{embedding_model_name}/{region_id}.npy"
+                    emb_path = cache_root / "embeddings" / region_rel_path
+                    emb_path.parent.mkdir(parents=True, exist_ok=True)
+                    np.save(emb_path, emb_vec)
+
+                    projection_session.add(
+                        RegionEmbedding(
+                            region_id=region_id,
+                            model_name=embedding_model_name,
+                            embedding_path=region_rel_path,
+                            embedding_dim=int(emb_vec.shape[-1]),
+                            backend=embedding_backend,
                             updated_at=now,
                         )
                     )
@@ -1035,14 +964,10 @@ class PreprocessingPipeline:
                         },
                         "detector_label": det.label,
                         "detector_score": float(det.score),
-                        "refined_label": refined_label,
-                        "refined_score": refined_score,
                     }
                 )
 
             projection_session.commit()
-            if primary_session is not None:
-                primary_session.commit()
             updated_rows += len(region_payloads)
 
             payload = {

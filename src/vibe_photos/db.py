@@ -160,6 +160,52 @@ class ImageRegion(Base):
     )
 
 
+# --- M2 cache-side region schema -------------------------------------------------
+
+
+class Region(Base):
+    """Detection regions persisted in the cache DB (feature layer only).
+
+    The schema follows the M2 blueprint and is intentionally free of any semantic
+    labels. It records bounding boxes plus detector provenance; label passes add
+    semantics later via :class:`LabelAssignment`.
+    """
+
+    __tablename__ = "regions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)  # e.g., "{image_id}#{idx}"
+    image_id: Mapped[str] = mapped_column(String, nullable=False)
+    x_min: Mapped[float] = mapped_column(Float, nullable=False)
+    y_min: Mapped[float] = mapped_column(Float, nullable=False)
+    x_max: Mapped[float] = mapped_column(Float, nullable=False)
+    y_max: Mapped[float] = mapped_column(Float, nullable=False)
+    detector: Mapped[str] = mapped_column(String, nullable=False)
+    raw_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    raw_score: Mapped[float] = mapped_column(Float, nullable=False)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("idx_regions_image", "image_id"),
+    )
+
+
+class RegionEmbedding(Base):
+    """Region-level embeddings stored in cache for reuse across label passes."""
+
+    __tablename__ = "region_embedding"
+
+    region_id: Mapped[str] = mapped_column(String, primary_key=True)
+    model_name: Mapped[str] = mapped_column(String, primary_key=True)
+    embedding_path: Mapped[str] = mapped_column(String, nullable=False)
+    embedding_dim: Mapped[int] = mapped_column(Integer, nullable=False)
+    backend: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        Index("idx_region_embedding_model", "model_name"),
+    )
+
+
 class ArtifactRecord(Base):
     """Versioned artifact metadata persisted to durable storage."""
 
@@ -399,6 +445,8 @@ __all__ = [
     "ImageNearDuplicate",
     "ImageRegion",
     "ImageScene",
+    "Region",
+    "RegionEmbedding",
     "ArtifactDependency",
     "ArtifactRecord",
     "ProcessResult",

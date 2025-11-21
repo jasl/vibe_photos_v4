@@ -87,8 +87,6 @@ class DetectionModelConfig:
     device: str = "auto"
     max_regions_per_image: int = 10
     score_threshold: float = 0.25
-    siglip_min_prob: float = 0.15
-    siglip_min_margin: float = 0.05
     nms_iou_threshold: float = 0.8
     primary_area_gamma: float = 0.3
     primary_center_penalty: float = 0.6
@@ -277,6 +275,32 @@ class OcrConfig:
 
 
 @dataclass
+class ObjectZeroShotConfig:
+    """Thresholds and knobs for region-based zero-shot object labeling."""
+
+    top_k: int = 5
+    score_min: float = 0.32
+    margin_min: float = 0.08
+    scene_whitelist: List[str] = field(default_factory=lambda: ["scene.product", "scene.food"])
+
+
+@dataclass
+class ObjectAggregationConfig:
+    """Aggregation from regions to image-level object labels."""
+
+    min_regions: int = 1
+    score_min: float = 0.32
+
+
+@dataclass
+class ObjectConfig:
+    """Top-level object labeling config bundle."""
+
+    zero_shot: ObjectZeroShotConfig = field(default_factory=ObjectZeroShotConfig)
+    aggregation: ObjectAggregationConfig = field(default_factory=ObjectAggregationConfig)
+
+
+@dataclass
 class ModelsConfig:
     """Bundle of all model-related configuration."""
 
@@ -336,6 +360,15 @@ class PostProcessConfig:
 
 
 @dataclass
+class LabelSpacesConfig:
+    """Active label space versions for scene/object/cluster labels."""
+
+    scene_current: str = "scene_v1"
+    object_current: str = "object_v1"
+    cluster_current: str = "cluster_v1"
+
+
+@dataclass
 class Settings:
     """Top-level application settings."""
 
@@ -344,6 +377,8 @@ class Settings:
     queues: QueueConfig = field(default_factory=QueueConfig)
     main_processing: MainProcessingConfig = field(default_factory=MainProcessingConfig)
     post_process: PostProcessConfig = field(default_factory=PostProcessConfig)
+    label_spaces: LabelSpacesConfig = field(default_factory=LabelSpacesConfig)
+    object: ObjectConfig = field(default_factory=ObjectConfig)
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -377,6 +412,8 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     detection_raw = _as_dict(models_raw.get("detection"))
     ocr_raw = _as_dict(models_raw.get("ocr"))
     siglip_labels_raw = _as_dict(models_raw.get("siglip_labels"))
+    label_spaces_raw = _as_dict(raw.get("label_spaces"))
+    object_raw = _as_dict(raw.get("object"))
 
     embedding_cfg = settings.models.embedding
     if isinstance(embedding_raw.get("backend"), str):
@@ -415,10 +452,6 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         detection_cfg.max_regions_per_image = detection_raw["max_regions_per_image"]
     if isinstance(detection_raw.get("score_threshold"), (int, float)):
         detection_cfg.score_threshold = float(detection_raw["score_threshold"])
-    if isinstance(detection_raw.get("siglip_min_prob"), (int, float)):
-        detection_cfg.siglip_min_prob = float(detection_raw["siglip_min_prob"])
-    if isinstance(detection_raw.get("siglip_min_margin"), (int, float)):
-        detection_cfg.siglip_min_margin = float(detection_raw["siglip_min_margin"])
     if isinstance(detection_raw.get("nms_iou_threshold"), (int, float)):
         detection_cfg.nms_iou_threshold = float(detection_raw["nms_iou_threshold"])
     if isinstance(detection_raw.get("primary_area_gamma"), (int, float)):
@@ -544,6 +577,31 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         post_process_cfg.queue_name = post_process_raw["queue_name"]
     if isinstance(post_process_raw.get("max_concurrency"), int):
         post_process_cfg.max_concurrency = post_process_raw["max_concurrency"]
+
+    label_spaces_cfg = settings.label_spaces
+    if isinstance(label_spaces_raw.get("scene_current"), str):
+        label_spaces_cfg.scene_current = label_spaces_raw["scene_current"]
+    if isinstance(label_spaces_raw.get("object_current"), str):
+        label_spaces_cfg.object_current = label_spaces_raw["object_current"]
+    if isinstance(label_spaces_raw.get("cluster_current"), str):
+        label_spaces_cfg.cluster_current = label_spaces_raw["cluster_current"]
+
+    object_cfg = settings.object
+    zero_shot_raw = _as_dict(object_raw.get("zero_shot"))
+    aggregation_raw = _as_dict(object_raw.get("aggregation"))
+    if isinstance(zero_shot_raw.get("top_k"), int):
+        object_cfg.zero_shot.top_k = zero_shot_raw["top_k"]
+    if isinstance(zero_shot_raw.get("score_min"), (int, float)):
+        object_cfg.zero_shot.score_min = float(zero_shot_raw["score_min"])
+    if isinstance(zero_shot_raw.get("margin_min"), (int, float)):
+        object_cfg.zero_shot.margin_min = float(zero_shot_raw["margin_min"])
+    if isinstance(zero_shot_raw.get("scene_whitelist"), list):
+        object_cfg.zero_shot.scene_whitelist = [str(item) for item in zero_shot_raw["scene_whitelist"] if str(item)]
+
+    if isinstance(aggregation_raw.get("min_regions"), int):
+        object_cfg.aggregation.min_regions = aggregation_raw["min_regions"]
+    if isinstance(aggregation_raw.get("score_min"), (int, float)):
+        object_cfg.aggregation.score_min = float(aggregation_raw["score_min"])
 
     return settings
 
