@@ -7,6 +7,7 @@ license = "AGPL-3.0-or-later"
 authors = [{ name = "jasl" }]
 
 dependencies = [
+    "celery>=5.5.3",
     "sqlalchemy>=2.0.44",
     "typer>=0.20.0",
     "pillow>=12.0.0",
@@ -59,7 +60,6 @@ phase_final = [
     "psycopg2-binary>=2.9.11",
     "pgvector>=0.4.1",
     "redis>=7.0.1",
-    "celery>=5.5.3",
     "prometheus-client>=0.23.1",
 ]
 

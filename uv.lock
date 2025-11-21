@@ -2391,6 +2391,7 @@ source = { editable = "." }
 dependencies = [
     { name = "accelerate" },
     { name = "aiofiles" },
+    { name = "celery" },
     { name = "datasets" },
     { name = "flask" },
     { name = "inflect" },
@@ -2435,7 +2436,6 @@ dev = [
     { name = "ruff" },
 ]
 phase-final = [
-    { name = "celery" },
     { name = "fastapi" },
     { name = "pgvector" },
     { name = "prometheus-client" },
@@ -2450,7 +2450,7 @@ requires-dist = [
     { name = "accelerate", specifier = ">=1.11.0" },
     { name = "aiofiles", specifier = ">=25.1.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=25.11.0" },
-    { name = "celery", marker = "extra == 'phase-final'", specifier = ">=5.5.3" },
+    { name = "celery", specifier = ">=5.5.3" },
     { name = "datasets", specifier = ">=4.4.1" },
     { name = "fastapi", marker = "extra == 'phase-final'", specifier = ">=0.121.2" },
     { name = "flask", specifier = ">=3.1.2" },
