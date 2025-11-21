@@ -262,6 +262,14 @@ CREATE TABLE label_assignment (
 - `source='cluster'`：聚类得到的 cluster label。
 - `source='manual'`：人工标注或 UI 批量操作。
 
+时间戳与分数约定：
+
+- `created_at` / `updated_at` 统一使用 Unix 时间戳（毫秒，REAL）。
+- `label_assignment.score` 统一用 0–1 的概率/相似度刻度：
+  - classifier / rule / zero_shot / aggregated：概率或余弦相似度；
+  - cluster：固定 1.0，真实距离存放在 `cluster_membership.distance`；
+  - manual / duplicate_propagated：固定 1.0（表示肯定的标签）。
+
 #### 4.1.4 `label_space_ver`：标签空间版本管理
 
 为了支持「同一张图片可以被不同版本的算法多次打标签」而不互相踩踏，M2 引入 `label_space_ver` 概念，对应一套完整的标签空间与算法配置，例如：
@@ -278,8 +286,9 @@ CREATE TABLE label_assignment (
   - 原有记录保留，方便对比、回滚；
   - 新版本写入 `scene_v2` / `object_v2` 等。
 - 默认情况下：
-  - UI 和检索只使用配置中指定的“当前版本”，例如 `scene_current = scene_v1`；
-  - 评估脚本可以同时读取多版本（`scene_v1` vs `scene_v2`），生成对比报告，辅助调参。
+  - 代码侧有常量集：`scene_v1 / object_v1 / cluster_v1`；
+  - 配置侧（如 `label_spaces.scene_current: scene_v1`）指定当前 active 版本，用于写入与查询；
+  - UI 与检索按单一 active 版本运行，评估脚本可同时读取多版本（`scene_v1` vs `scene_v2`）做对比报告。
 - 不同来源可以共存在同一版本空间内，比如：
   - `source='classifier'`：自动模型输出；
   - `source='manual'`：人工修正，UI 查询时可优先使用人工标签覆盖模型标签。
@@ -316,6 +325,12 @@ CREATE TABLE region_embedding (
 );
 ```
 
+命名与关联约定：
+
+- `images.image_id` 始终等于内容哈希，不因 canonical 选择或传播行为增加后缀。
+- `regions.id` 统一使用 `{image_id}#{index}`；`label_assignment.target_id` 对 `image` / `region` 分别对应 `image_id` / `regions.id`。
+- near-duplicate 的传播使用独立来源（如 `source='duplicate_propagated'`），不复用同一 `image_id`。
+
 #### 4.2.1 Detection 阶段输出内容约定（只产特征，不产语义标签）
 
 从 M2 开始，检测阶段被明确归类为「感知层」，**只负责产出几何信息与 embedding，不再承担“命名物体”的职责**，避免 detection 阶段和标签层耦合导致的重算成本和复杂度。
@@ -349,6 +364,10 @@ CREATE TABLE region_embedding (
      - object zero-shot label pass；
      - region-level clustering；
      - 未来的 few-shot 分类头 / 细粒度识别。
+   - `embedding_path` 以 `cache_root/embeddings/` 为基准，命名示例：
+     - image：`images/{model_name}/{image_id}.npy`
+     - region：`regions/{model_name}/{region_id}.npy`
+   - `model_name` 带版本后缀（如 `siglip-base-patch16-224:v1`），换模型或量化方式时更名；`.npy` 一律保存 L2-normalized 的 float32 向量，下游可直接点积做 cosine。
 
 3. **可选 JSON Cache（仅用于 debug / QA）**
 
@@ -400,11 +419,20 @@ CREATE TABLE cluster_membership (
 
 标签层可以简单地把每个 cluster 映射成一个 `labels` 记录（`level='cluster'`），并将簇成员写入 `label_assignment(source='cluster')`。
 
+### 4.4 存储落点与重算策略
+
+遵循「cache 存放预处理/模型特征的可复用缓存，data 存放 process 阶段的语义输出」：
+
+- `cache/index.db`：预处理与模型前向直接产出的特征/中间结果（如 `regions`、`region_embedding` 以及未来的 image embedding 等），来自原图+推理，可长期复用，必要时可全量重建。
+- `data/index.db`：主库，承载 `labels`、`label_aliases`、`label_assignment`（含自动/人工）、聚类结果（`image_similarity_cluster`、`cluster_membership`）、其它 process 计算产物。需要时通过重跑 process（读取 cache 特征）即可再生成。
+- 任务层不做跨库 JOIN；process 任务读取 cache、计算后直接写 data。cache 可随时重建，重建后跑一次 process 可恢复 data（人工标签除外）。
+- 数据库初始化通过 `scripts/` 目录下的独立脚本一次性创建所需表（原型阶段不做向后兼容），并在 `init_project.sh` 中调用，后续可演进到版本化迁移工具。
+
 ---
 
 ## 5. Perception Layer Improvements
 
-M2 在感知层不过度追求全新模型，而是围绕现有 SigLIP / BLIP / OWL‑ViT 做针对性的增强和角色重构。
+M2 在感知层不过度追求全新模型，而是围绕现有 SigLIP / BLIP / OWL‑ViT 做针对性的增强和角色重构。模型与权重版本沿用当前配置（settings 中的默认值），无需更换 checkpoint 名称。
 
 ### 5.1 Scene & Boolean Attributes
 
@@ -470,6 +498,15 @@ M2 在感知层不过度追求全新模型，而是围绕现有 SigLIP / BLIP / 
 
 - 上述 face_count、screenshot_score、document_score 等中间特征可以只在 scene/attribute pass 内存中使用；
 - 如果后续需要更系统地调参与 debug，推荐在 projection DB 中增加轻量的 image-level feature 表（例如 `image_features`），将这些标量以 JSON 形式投影，便于 label pass 与评估脚本复用。
+
+#### 5.1.6 配置与默认值（写入 `config/settings.yaml`）
+
+- `scene.top1_min_score=0.30`：scene classifier 的最低接受置信度，低于则回退 `scene.other`。
+- `attr.has_person.face_score_min=0.35`：人脸/人体 detector 的置信度阈值，满足则置为 True。
+- `attr.has_text.score_min=0.35`：文字覆盖率/文本倾向得分达到阈值即视为有文本（偏 recall）。
+- `attr.is_document.score_min=0.60`：更严格的文档判定阈值（偏 precision）。
+- `attr.is_screenshot.score_min=0.55`：综合规则分数达到该值视为截图。
+- 以上配置需同步写入 `config/settings.example.yaml`，并在 `config/settings.yaml` 提供默认值。
 
 ### 5.2 Region Detection & Region Embedding
 
@@ -592,6 +629,15 @@ Object Label Pass（`run_object_label_pass`）流程示意：
    - 同时在 image 级别聚合：
      - 若某 image 的多个 region 重复给出同一 label，可给 image 写 `source='aggregated'` 的 object label，方便按物体过滤整图。
 
+配置与默认值（写入 `config/settings.yaml`，起步值可迭代）：
+
+- `object.zero_shot.top_k=5`
+- `object.zero_shot.score_min=0.32`（region embedding 与 prototype 的余弦相似度）
+- `object.zero_shot.margin_min=0.08`（top1−top2）
+- `object.zero_shot.scene_whitelist=["scene.product","scene.food"]`（其它 scene 可选跑简化标签子集，如手机/耳机）
+- `object.aggregation.min_regions=1`、`object.aggregation.score_min=0.32`（满足即可在 image 级写 `source='aggregated'`）
+- 以上配置需同步写入 `config/settings.example.yaml`，并在 `config/settings.yaml` 提供默认值。
+
 #### 6.2.4 人工 / VLM 辅助（留给 M4）
 
 M2 只在数据结构层面预留：
@@ -636,14 +682,31 @@ M1 已经通过 pHash（感知哈希）对图片做了“近重复”分组，M2
 1. **pHash 分组**
 
    - 所有内容相似度较高的图片（例如连拍、轻微裁剪/调色版本）被分到同一组；
-   - 表结构（例如 `image_near_duplicate`）记录 exact / near duplicate 关系。
+   - 表结构（例如在 `data/index.db` 中）记录 exact / near duplicate 关系，示意：
+     ```sql
+     CREATE TABLE image_near_duplicate_group (
+       id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+       canonical_image_id  TEXT NOT NULL,
+       method              TEXT NOT NULL,   -- 'phash_v1' 等
+       created_at          REAL NOT NULL
+     );
+ 
+     CREATE TABLE image_near_duplicate_membership (
+       group_id            INTEGER NOT NULL,
+       image_id            TEXT NOT NULL,
+       is_canonical        INTEGER NOT NULL DEFAULT 0,
+       distance            REAL NOT NULL,   -- pHash 距离或相似度
+       PRIMARY KEY(group_id, image_id),
+       FOREIGN KEY(group_id) REFERENCES image_near_duplicate_group(id)
+     );
+     ```
 
 2. **Canonical image 选择**
 
    对于每个 pHash 分组，选定 1 张作为 canonical image（原则可以是：
 
    - 分辨率最高 / 文件体积最大；
-   - 或最新的版本；
+   - 若并列则取 `image_id` 字典序最小；
    - 规则可配置，写在 Blueprint 中即可）。
 
 3. **重模型阶段只跑 canonical**
@@ -659,6 +722,8 @@ M1 已经通过 pHash（感知哈希）对图片做了“近重复”分组，M2
    - 聚类（cluster）阶段推荐：
      - 只对 canonical image 做聚类，得到一组 cluster；
      - 将 cluster label 同步到该 pHash 组内所有图片上，保证“同一物体的所有版本”都被纳入簇。
+   - region 级标签默认不传播，可通过配置决定是否覆盖近重复。
+   - `images.image_id` 始终为内容哈希，不因 canonical 标记或传播而改变；`regions.id` 统一使用 `{image_id}#{index}`。
 
 这样设计的好处：
 
@@ -678,10 +743,16 @@ M1 已经通过 pHash（感知哈希）对图片做了“近重复”分组，M2
    - 分量大小 ≥ 3 视为有效 cluster。
 5. 对每个 cluster：
    - 计算 cluster center（平均 embedding）；
-   - 写入 `image_similarity_cluster` + `cluster_membership`；
-   - 在 `labels` 中插入 `level='cluster'` 的记录（`key = "cluster.siglip_image_knn_v1.<id>"`）；
+   - 写入 `image_similarity_cluster` + `cluster_membership`（`id` 自增，`key` 同 `labels.key` 采用 `cluster.{method}.{id}`，如 `cluster.siglip_image_knn_v1.17`）；
+   - 在 `labels` 中插入 `level='cluster'` 的记录（沿用相同 `key`）；
    - 对每个成员 image 写入 `label_assignment`：
-     - `target_type='image'`, `source='cluster'`, `label_space_ver='cluster_v1'`, `score=1.0`。
+     - `target_type='image'`, `source='cluster'`, `label_space_ver='cluster_v1'`, `score=1.0`（真实距离保留在 `cluster_membership.distance`，排序时再转换）。
+
+配置与默认值（写入 `config/settings.yaml`，可按评估调优）：
+
+- `cluster.image.k=20`、`cluster.image.sim_threshold=0.78`、`cluster.image.min_size=3`
+- `cluster.region.k=20`、`cluster.region.sim_threshold=0.82`、`cluster.region.min_size=3`
+- 以上配置需同步写入 `config/settings.example.yaml`，并在 `config/settings.yaml` 提供默认值。
 
 ### 7.3 Region‑Level Clustering
 
@@ -701,8 +772,8 @@ M1 已经通过 pHash（感知哈希）对图片做了“近重复”分组，M2
 2. 构建 kNN 图并保留相似度 ≥ τ 的边（region embedding 更「聚焦」，阈值可以更高，如 0.8）。
 3. 找连通分量，size ≥ 3 为 cluster。
 4. 对每个 cluster：
-   - 写入 `image_similarity_cluster` 与 `cluster_membership`（`target_type='region'`）；
-   - 在 `labels` 中插入 `level='cluster'`；
+   - 写入 `image_similarity_cluster` 与 `cluster_membership`（`target_type='region'`，`key = cluster.{method}.{id}`，如 `cluster.siglip_region_knn_v1.8`）；
+   - 在 `labels` 中插入 `level='cluster'`（沿用相同 `key`），`label_assignment.score` 固定 1.0，距离存于 `cluster_membership.distance`；
    - 给所有 region 成员写 `label_assignment(source='cluster')`；
    - 同时给 region 所在的 image 写 `label_assignment(target_type='image', source='cluster')`，方便 UI。
 
@@ -783,6 +854,8 @@ M2 不要求完整交互 UI，但结构上预留：
 ## 9. Recommended Implementation Plan (M2 Roadmap)
 
 本节将 M2 拆成可以逐步落地的几个阶段，尽量保持每一步「增量」「可回滚」。
+
+主流程建议：process 任务直接读取 `cache/index.db` 的特征/中间结果，计算后写入 `data/index.db`（不跨库 JOIN）；若重建 cache，仅需重跑 preprocess + process，即可恢复 data（人工标签除外）。
 
 ### 9.1 M2‑A: 统一标签层（Label Layer Foundation）
 
@@ -900,5 +973,3 @@ M2 的设计核心是三点：
 - 迁移到 PostgreSQL + pgvector（搜索与 API）；
 - 引入线性 scene 头与小分类器；
 - 加入 UI 级的标注与 few‑shot 学习，而无需再重构底层感知与标签系统。
-
-

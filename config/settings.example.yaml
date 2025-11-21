@@ -142,6 +142,46 @@ pipeline:
   # "iso" normalizes to an ISO-8601-like "YYYY-MM-DDTHH:MM:SS" format when parsing succeeds.
   exif_datetime_format: "iso"
 
+label_spaces:
+  scene_current: "scene_v1"
+  object_current: "object_v1"
+  cluster_current: "cluster_v1"
+
+scene:
+  top1_min_score: 0.30
+
+attributes:
+  has_person:
+    face_score_min: 0.35
+  has_text:
+    score_min: 0.35
+  is_document:
+    score_min: 0.60
+  is_screenshot:
+    score_min: 0.55
+
+object:
+  zero_shot:
+    top_k: 5
+    score_min: 0.32
+    margin_min: 0.08
+    scene_whitelist:
+      - "scene.product"
+      - "scene.food"
+  aggregation:
+    min_regions: 1
+    score_min: 0.32
+
+cluster:
+  image:
+    k: 20
+    sim_threshold: 0.78
+    min_size: 3
+  region:
+    k: 20
+    sim_threshold: 0.82
+    min_size: 3
+
 queues:
   broker_url: "redis://localhost:6379/0"
   result_backend: "redis://localhost:6379/1"
