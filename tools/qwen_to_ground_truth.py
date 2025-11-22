@@ -15,6 +15,7 @@ Input JSONL (one record per line), as produced by qwen_vl_annotate_batch:
   "annotation": {
     "scene": "product",
     "has_person": false,
+    "has_text": false,
     "is_document": false,
     "is_screenshot": false,
     "objects": [
@@ -36,6 +37,7 @@ Output JSONL (one ground-truth record per line) matching the expectations of
   "scene": ["scene.product"],
   "attributes": {
     "attr.has_person": false,
+    "attr.has_text": false,
     "attr.is_document": false,
     "attr.is_screenshot": false
   },
