@@ -42,6 +42,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
@@ -251,10 +252,10 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="If set, skip images whose image_id already exists in the output JSONL.",
     )
     parser.add_argument(
-        "--sleep",
-        type=float,
-        default=0.0,
-        help="Optional sleep in seconds between requests to avoid overloading the server.",
+        "--workers",
+        type=int,
+        default=4,
+        help="Number of concurrent worker threads for Qwen calls (default: 4).",
     )
     return parser.parse_args(list(argv) if argv is not None else None)
 
@@ -278,48 +279,71 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"[INFO] Resume enabled; {len(processed_ids)} image_ids already present in {output}\n")
 
     total_seen = 0
+    tasks: List[tuple[str, Path]] = []
+
+    for image_path in iter_images(root):
+        total_seen += 1
+        image_id = compute_content_hash(image_path)
+        if image_id in processed_ids:
+            continue
+        tasks.append((image_id, image_path))
+        if args.limit is not None and len(tasks) >= args.limit:
+            break
+
+    if not tasks:
+        sys.stderr.write("[INFO] No new images to annotate (all already present in output).\n")
+        return 0
+
+    workers = max(1, int(args.workers))
+    sys.stderr.write(f"[INFO] Starting Qwen annotation with {workers} worker threads over {len(tasks)} images.\n")
+
     total_new = 0
 
-    with output.open("a", encoding="utf-8") as f_out:
-        for image_path in iter_images(root):
-            total_seen += 1
-            image_id = compute_content_hash(image_path)
+    def _worker(image_id: str, image_path: Path) -> tuple[str, Path, Dict[str, Any]]:
+        annotation = annotator.annotate_image(image_path)
+        return image_id, image_path, annotation
 
-            if image_id in processed_ids:
-                continue
+    with output.open("a", encoding="utf-8") as f_out, ThreadPoolExecutor(max_workers=workers) as executor:
+        total_tasks = len(tasks)
+        completed = 0
 
-            if args.limit is not None and total_new >= args.limit:
-                break
-
-            try:
-                annotation = annotator.annotate_image(image_path)
-            except Exception as exc:  # pragma: no cover - defensive
-                sys.stderr.write(f"[WARN] Annotation failed for {image_path}: {exc}\n")
-                continue
-
-            record = {
-                "image_id": image_id,
-                "server_path": str(image_path.resolve()),
-                "image_path": str(image_path.resolve()),
-                "rel_path": str(image_path.relative_to(root)),
-                "annotation": annotation,
+        for batch_start in range(0, total_tasks, workers):
+            batch = tasks[batch_start : batch_start + workers]
+            future_to_task = {
+                executor.submit(_worker, image_id, image_path): (image_id, image_path) for image_id, image_path in batch
             }
-            f_out.write(json.dumps(record, ensure_ascii=False) + "\n")
-            f_out.flush()
 
-            processed_ids.add(image_id)
-            total_new += 1
+            for future in as_completed(future_to_task):
+                image_id, image_path = future_to_task[future]
+                try:
+                    _, resolved_path, annotation = future.result()
+                except Exception as exc:  # pragma: no cover - defensive
+                    sys.stderr.write(f"[WARN] Annotation failed for {image_path}: {exc}\n")
+                    continue
 
-            if total_new and total_new % 50 == 0:
-                sys.stderr.write(
-                    f"[INFO] New annotations: {total_new} images (total visited {total_seen})\n"
-                )
+                record = {
+                    "image_id": image_id,
+                    "server_path": str(resolved_path.resolve()),
+                    "image_path": str(resolved_path.resolve()),
+                    "rel_path": str(resolved_path.relative_to(root)),
+                    "annotation": annotation,
+                }
+                f_out.write(json.dumps(record, ensure_ascii=False) + "\n")
+                f_out.flush()
 
-            if args.sleep > 0.0:
-                time.sleep(float(args.sleep))
+                processed_ids.add(image_id)
+                total_new += 1
+                completed += 1
+
+                if total_new and total_new % 50 == 0:
+                    sys.stderr.write(
+                        f"[INFO] New annotations: {total_new} images "
+                        f"(total visited {total_seen}, completed {completed}/{total_tasks})\n"
+                    )
 
     sys.stderr.write(
-        f"[DONE] Visited {total_seen} images, wrote {total_new} new records to {output}\n"
+        f"[DONE] Visited {total_seen} images, submitted {len(tasks)} for annotation, "
+        f"wrote {total_new} new records to {output}\n"
     )
     return 0
 
