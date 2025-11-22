@@ -636,6 +636,7 @@ Label 层是 M2 的核心，负责把各种来源的信号统一成「可重算�
 
 - Scene labels：
   - `scene.landscape`
+  - `scene.snapshot`
   - `scene.people`
   - `scene.food`
   - `scene.product`
@@ -1134,7 +1135,7 @@ M2 不要求完整交互 UI，但结构上预留：
     - `ensure_aliases(label, aliases, language)`；
     - `upsert_label_assignment(...)`。
   - [ ] 初始化基础 label 集：
-    - Scene：`scene.landscape / scene.people / scene.food / scene.product / scene.document / scene.screenshot / scene.other`；
+    - Scene：`scene.landscape / scene.snapshot / scene.people / scene.food / scene.product / scene.document / scene.screenshot / scene.other`；
     - Attributes：`attr.has_person / attr.has_text / attr.is_document / attr.is_screenshot`；
     - Object：选一小批高优先级物体（MacBook / iPhone / AirPods / pizza / burger 等）起步。
 

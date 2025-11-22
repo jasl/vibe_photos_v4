@@ -59,6 +59,7 @@ ObjectMapping = Dict[str, str]
 def _default_scene_mapping() -> SceneMapping:
     return {
         "landscape": "scene.landscape",
+        "snapshot": "scene.snapshot",
         "people": "scene.people",
         "selfie": "scene.people",
         "food": "scene.food",

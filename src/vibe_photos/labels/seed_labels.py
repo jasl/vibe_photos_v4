@@ -33,6 +33,7 @@ class BaseLabelSpec:
 SCENE_LABEL_SPECS: tuple[BaseLabelSpec, ...] = (
     BaseLabelSpec(key="scene", display_name="Scene", level="scene"),
     BaseLabelSpec(key="scene.landscape", display_name="Landscape", level="scene", parent="scene"),
+    BaseLabelSpec(key="scene.snapshot", display_name="Snapshot", level="scene", parent="scene"),
     BaseLabelSpec(key="scene.people", display_name="People", level="scene", parent="scene"),
     BaseLabelSpec(key="scene.food", display_name="Food", level="scene", parent="scene"),
     BaseLabelSpec(key="scene.product", display_name="Product", level="scene", parent="scene"),

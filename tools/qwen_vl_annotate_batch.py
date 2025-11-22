@@ -72,12 +72,13 @@ SYSTEM_PROMPT = r"""
 - 输出必须是**合法的 JSON 对象**，不要包含任何多余文字。
 
 scene 字段只能从下面的枚举中选择一个：
-["landscape", "people", "selfie", "food", "product", "document", "screenshot", "other"]
+["landscape", "snapshot", "people", "selfie", "food", "product", "document", "screenshot", "other"]
 
 coarse_type 字段只能从下面的枚举中选择一个：
 [
-  "electronics", "phone", "laptop", "tablet", "computer_case",
-  "monitor", "keyboard", "mouse", "earphones", "headphones",
+  "electronics", "circuit_board“, "drive", "charger",
+  "phone", "laptop", "tablet", "mini_pc", "computer_case"
+  "monitor", "keyboard", "mouse", "earphones", "headphones", "hub", "usb"
   "camera", "game_console", "controller",
   "food", "drink", "dessert",
   "paper_document", "screen", "packaging",

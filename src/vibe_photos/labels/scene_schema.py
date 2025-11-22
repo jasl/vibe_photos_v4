@@ -7,6 +7,7 @@ from typing import Dict
 # Scene classifier emits uppercase coarse categories. Map them to label keys.
 SCENE_KEY_BY_TYPE: Dict[str, str] = {
     "LANDSCAPE": "scene.landscape",
+    "SNAPSHOT": "scene.snapshot",
     "PEOPLE": "scene.people",
     "FOOD": "scene.food",
     "PRODUCT": "scene.product",
