@@ -73,6 +73,7 @@ def _default_scene_mapping() -> SceneMapping:
 def _default_attr_mapping() -> AttrMapping:
     return {
         "has_person": "attr.has_person",
+        "has_text": "attr.has_text",
         "is_document": "attr.is_document",
         "is_screenshot": "attr.is_screenshot",
     }

@@ -106,6 +106,7 @@ coarse_type 字段只能从下面的枚举中选择一个：
 {
   "scene": "<one of scene enums>",
   "has_person": true or false,
+  "has_text": true or false,
   "is_document": true or false,
   "is_screenshot": true or false,
   "objects": [
