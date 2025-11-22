@@ -59,7 +59,7 @@ class QwenConfig:
 
     base_url: str = os.environ.get("QWEN_BASE_URL", "http://localhost:8000/v1")
     api_key: str = os.environ.get("QWEN_API_KEY", "qwen-placeholder-key")
-    model: str = os.environ.get("QWEN_MODEL", "Qwen/Qwen3-VL-32B-Instruct")
+    model: str = os.environ.get("QWEN_MODEL", "Qwen/Qwen3-VL-32B-Instruct-FP8")
 
     request_timeout: float = float(os.environ.get("QWEN_REQUEST_TIMEOUT", "120"))
     max_retries: int = int(os.environ.get("QWEN_MAX_RETRIES", "3"))
