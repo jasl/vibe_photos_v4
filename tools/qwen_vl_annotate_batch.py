@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
 import os
 import sys
@@ -47,6 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
+from PIL import Image, ImageOps
 from openai import OpenAI
 from vibe_photos.hasher import compute_content_hash
 
@@ -62,6 +64,19 @@ class QwenConfig:
     request_timeout: float = float(os.environ.get("QWEN_REQUEST_TIMEOUT", "120"))
     max_retries: int = int(os.environ.get("QWEN_MAX_RETRIES", "3"))
     retry_backoff: float = float(os.environ.get("QWEN_RETRY_BACKOFF", "5.0"))
+
+
+@dataclass(frozen=True)
+class ImagePayloadOptions:
+    """Controls how images are resized/compressed before hitting Qwen."""
+
+    max_edge_px: int | None = 2048
+    target_format: str | None = "PNG"
+    jpeg_quality: int = 88
+    strip_metadata: bool = True
+
+    def requires_processing(self) -> bool:
+        return any((self.max_edge_px is not None, self.target_format is not None, self.strip_metadata))
 
 
 SYSTEM_PROMPT = r"""
@@ -123,23 +138,58 @@ def iter_images(root: Path, exts: Optional[Sequence[str]] = None) -> Iterable[Pa
             yield path
 
 
-def encode_image_to_data_url(path: Path) -> str:
+def _guess_mime_from_suffix(suffix: str) -> str:
+    if suffix == ".png":
+        return "image/png"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix in (".bmp", ".dib"):
+        return "image/bmp"
+    if suffix in (".tiff", ".tif"):
+        return "image/tiff"
+    if suffix == ".gif":
+        return "image/gif"
+    return "image/jpeg"
+
+
+def _prepare_image_payload_bytes(path: Path, opts: ImagePayloadOptions) -> tuple[bytes, str]:
+    """Resize/compress an image and return (bytes, mime-type)."""
+
+    with Image.open(path) as img:
+        image = ImageOps.exif_transpose(img)
+        target_format = (opts.target_format or (image.format or "JPEG")).upper()
+        working = image.copy()
+
+        if opts.max_edge_px is not None and max(working.size) > opts.max_edge_px:
+            resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+            working.thumbnail((opts.max_edge_px, opts.max_edge_px), resample=resample)
+
+        if target_format in {"JPEG", "WEBP"} and working.mode not in ("RGB", "L"):
+            working = working.convert("RGB")
+
+        buffer = io.BytesIO()
+        save_kwargs: Dict[str, Any] = {}
+        if target_format == "JPEG":
+            save_kwargs["quality"] = opts.jpeg_quality
+            save_kwargs["optimize"] = True
+            save_kwargs["progressive"] = True
+        if opts.strip_metadata:
+            working.info.pop("exif", None)
+        working.save(buffer, format=target_format, **save_kwargs)
+        mime = Image.MIME.get(target_format, f"image/{target_format.lower()}")
+    return buffer.getvalue(), mime
+
+
+def encode_image_to_data_url(path: Path, payload_opts: ImagePayloadOptions | None = None) -> str:
     """Encode an image file as a data URL suitable for OpenAI image_url content."""
 
-    data = path.read_bytes()
+    if payload_opts is None or not payload_opts.requires_processing():
+        data = path.read_bytes()
+        mime = _guess_mime_from_suffix(path.suffix.lower())
+    else:
+        data, mime = _prepare_image_payload_bytes(path, payload_opts)
+
     b64 = base64.b64encode(data).decode("ascii")
-
-    ext = path.suffix.lower()
-    mime = "image/jpeg"
-    if ext == ".png":
-        mime = "image/png"
-    elif ext == ".webp":
-        mime = "image/webp"
-    elif ext in (".bmp", ".dib"):
-        mime = "image/bmp"
-    elif ext in (".tiff", ".tif"):
-        mime = "image/tiff"
-
     return f"data:{mime};base64,{b64}"
 
 
@@ -168,8 +218,9 @@ def load_processed_ids(output: Path) -> Set[str]:
 class QwenVLAnnotator:
     """Thin wrapper around an OpenAI-compatible Qwen3-VL endpoint."""
 
-    def __init__(self, cfg: QwenConfig) -> None:
+    def __init__(self, cfg: QwenConfig, image_opts: ImagePayloadOptions | None = None) -> None:
         self._cfg = cfg
+        self._image_opts = image_opts or ImagePayloadOptions()
         self._client = OpenAI(base_url=cfg.base_url, api_key=cfg.api_key)
 
     def _build_messages(self, image_data_url: str) -> List[Dict[str, Any]]:
@@ -196,7 +247,7 @@ class QwenVLAnnotator:
     def annotate_image(self, image_path: Path) -> Dict[str, Any]:
         """Call Qwen3-VL to obtain a JSON annotation for a single image."""
 
-        data_url = encode_image_to_data_url(image_path)
+        data_url = encode_image_to_data_url(image_path, self._image_opts)
         messages = self._build_messages(data_url)
 
         last_err: BaseException | None = None
@@ -257,13 +308,45 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=4,
         help="Number of concurrent worker threads for Qwen calls (default: 4).",
     )
+    parser.add_argument(
+        "--max-edge-px",
+        type=int,
+        default=2048,
+        help="Resize images so the longest edge is at most this many pixels before encoding (0 disables).",
+    )
+    parser.add_argument(
+        "--payload-format",
+        choices=("jpeg", "png", "webp", "keep"),
+        default="png",
+        help="Image format used for payloads (use 'keep' to preserve original format, default: png).",
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        default=88,
+        help="JPEG quality (1-95) when --payload-format=jpeg (default: 88).",
+    )
+    parser.add_argument(
+        "--keep-metadata",
+        action="store_true",
+        help="Preserve EXIF metadata in payloads (default strips metadata).",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     cfg = QwenConfig()
-    annotator = QwenVLAnnotator(cfg)
+    max_edge = args.max_edge_px if args.max_edge_px > 0 else None
+    target_format = None if args.payload_format == "keep" else args.payload_format.upper()
+    jpeg_quality = max(1, min(95, args.jpeg_quality))
+    image_opts = ImagePayloadOptions(
+        max_edge_px=max_edge,
+        target_format=target_format,
+        jpeg_quality=jpeg_quality,
+        strip_metadata=not args.keep_metadata,
+    )
+    annotator = QwenVLAnnotator(cfg, image_opts=image_opts)
 
     root = args.root
     output = args.output
