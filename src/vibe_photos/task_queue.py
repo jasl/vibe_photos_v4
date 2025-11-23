@@ -28,9 +28,8 @@ from vibe_photos.db import (
     open_projection_session,
 )
 from vibe_photos.db import Image as ImageRow
-from vibe_photos.hasher import PHASH_ALGO
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
-from vibe_photos.pipeline import PreprocessingPipeline, _extract_exif_and_gps
+from vibe_photos.pipeline import PreprocessingPipeline
 from vibe_photos.preprocessing import ensure_preprocessing_artifacts
 
 LOGGER = get_logger(__name__, extra={"component": "task_queue"})
@@ -170,78 +169,6 @@ def pre_process(image_id: str) -> str:
             builder=_write_detections,
             dependencies=[content_artifact.id, phash_artifact.id],
         )
-
-        # --- Sync basic metadata + pHash back into the primary Image row so the UI can display it. ---
-        from pathlib import (
-            Path as _Path,  # Local import to avoid polluting module namespace
-        )
-
-        width, height = image.size
-        now = time.time()
-
-        try:
-            exif_datetime, camera_model, gps_payload = _extract_exif_and_gps(
-                image, datetime_format=settings.pipeline.exif_datetime_format
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.error(
-                "preprocess_exif_parse_error",
-                extra={"image_id": image_id, "path": str(image_path), "error": str(exc)},
-            )
-            exif_datetime = None
-            camera_model = None
-            gps_payload = None
-
-        try:
-            phash_path = _Path(phash_artifact.storage_path)
-            if not phash_path.is_absolute():
-                phash_path = _artifact_root().parent.parent / phash_path
-            phash_hex = phash_path.read_text(encoding="utf-8").strip() or None
-        except Exception as exc:  # pragma: no cover - defensive
-            LOGGER.error(
-                "preprocess_phash_read_error",
-                extra={"image_id": image_id, "path": str(phash_artifact.storage_path), "error": str(exc)},
-            )
-            phash_hex = None
-
-        row.width = int(width)
-        row.height = int(height)
-        row.exif_datetime = exif_datetime
-        row.camera_model = camera_model
-        row.updated_at = now
-
-        if phash_hex is not None:
-            row.phash = phash_hex
-            row.phash_algo = PHASH_ALGO
-            row.phash_updated_at = now
-
-        primary_session.add(row)
-
-        # Persist EXIF + GPS sidecar under cache/images/metadata for Web UI consumption.
-        cache_root = projection_path.parent
-        metadata_dir = cache_root / "images" / "metadata"
-        metadata_dir.mkdir(parents=True, exist_ok=True)
-
-        metadata_payload: dict[str, object] = {
-            "image_id": image_id,
-            "primary_path": str(image_path),
-            "exif_datetime": exif_datetime,
-            "camera_model": camera_model,
-            "updated_at": now,
-        }
-        if gps_payload:
-            metadata_payload["gps"] = gps_payload
-
-        try:
-            metadata_path = metadata_dir / f"{image_id}.json"
-            metadata_path.write_text(json.dumps(metadata_payload), encoding="utf-8")
-        except OSError as exc:  # pragma: no cover - defensive
-            LOGGER.error(
-                "preprocess_metadata_write_error",
-                extra={"image_id": image_id, "path": str(metadata_dir), "error": str(exc)},
-            )
-
-        primary_session.commit()
 
         LOGGER.info(
             "preprocess_artifacts_ready",
