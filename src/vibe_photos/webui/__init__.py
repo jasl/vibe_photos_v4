@@ -6,7 +6,7 @@ import json
 import math
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from flask import Flask, abort, redirect, render_template, request, send_file, url_for
 from sqlalchemy import and_, exists, func, or_, select

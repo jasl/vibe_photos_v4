@@ -222,7 +222,7 @@ def run_scene_label_pass(
 
         attributes_list: Iterable[SceneAttributes] = classifier.classify_batch(embeddings)
 
-        for image_id, attrs in zip(valid_ids, attributes_list):
+        for image_id, attrs in zip(valid_ids, attributes_list, strict=True):
             _write_scene_assignment(
                 repo=repo,
                 scene_labels=scene_labels,
@@ -271,4 +271,3 @@ def run_scene_label_pass(
 
 
 __all__ = ["run_scene_label_pass"]
-

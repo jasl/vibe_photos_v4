@@ -145,7 +145,7 @@ class SiglipBlipDetector:
         probs = torch.softmax(logits[0], dim=-1)
         probs_cpu = probs.detach().cpu().numpy().tolist()
 
-        return {label: float(prob) for label, prob in zip(labels, probs_cpu)}
+        return {label: float(prob) for label, prob in zip(labels, probs_cpu, strict=True)}
 
     def _generate_caption_with_blip(self, image: Image.Image) -> str:
         """Generate a natural language caption using BLIP."""

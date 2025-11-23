@@ -895,9 +895,9 @@ class PreprocessingPipeline:
                     )
 
             if detections:
-                pairs = list(zip(detections, priorities))
+                pairs = list(zip(detections, priorities, strict=True))
                 pairs.sort(key=lambda pair: pair[1], reverse=True)
-                detections, priorities = zip(*pairs)
+                detections, priorities = zip(*pairs, strict=True)
                 detections = list(detections)
                 priorities = list(priorities)
 

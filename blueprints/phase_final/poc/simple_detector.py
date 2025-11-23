@@ -45,7 +45,7 @@ class SimpleDetector:
             probs = logits_per_image.softmax(dim=1)
 
         confidences = probs[0].tolist()
-        results = sorted(zip(categories, confidences), key=lambda item: item[1], reverse=True)
+        results = sorted(zip(categories, confidences, strict=True), key=lambda item: item[1], reverse=True)
 
         main_category, main_confidence = results[0]
         alternatives = [

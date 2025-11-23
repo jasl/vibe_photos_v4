@@ -198,7 +198,7 @@ def run_object_label_pass(
         second_score = float(top_scores[1]) if top_scores.size > 1 else 0.0
         margin = top1_score - second_score
 
-        accepted_indices = [i for i, score in zip(top_indices, top_scores) if score >= score_min and score >= 0.0]
+        accepted_indices = [i for i, score in zip(top_indices, top_scores, strict=True) if score >= score_min and score >= 0.0]
         if not accepted_indices or margin < margin_min:
             continue
 

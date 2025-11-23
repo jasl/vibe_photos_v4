@@ -127,7 +127,7 @@ def classify_images(
             emb = emb / emb.norm()
             sims = emb @ raw_label_embeddings.T  # shape: (num_labels,)
             raw_scores: dict[str, float] = {
-                label: float(score) for label, score in zip(labels_for_raw, sims.tolist())
+                label: float(score) for label, score in zip(labels_for_raw, sims.tolist(), strict=True)
             }
             top_raw = sorted(raw_scores.items(), key=lambda pair: pair[1], reverse=True)[:5]
             print("  raw SigLIP top-5:")

@@ -1,13 +1,7 @@
 from __future__ import annotations
 
-import sys
 from contextlib import contextmanager
 from pathlib import Path
-
-site_packages = Path(__file__).resolve().parents[1] / ".venv" / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-sys.path.append(str(site_packages))
-
-sys.path.append(str(Path(__file__).resolve().parents[1] / "src"))
 
 from vibe_photos.config import Settings
 from vibe_photos.pipeline import PreprocessingPipeline, RunJournalRecord, save_run_journal

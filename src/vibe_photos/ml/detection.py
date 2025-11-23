@@ -159,7 +159,7 @@ def filter_secondary_regions_by_priority(
     if max_regions <= 1:
         return kept_detections, kept_priorities
 
-    for det, priority in zip(detections[1:], priorities[1:]):
+    for det, priority in zip(detections[1:], priorities[1:], strict=True):
         if len(kept_detections) >= max_regions:
             break
 
@@ -279,7 +279,7 @@ class OwlVitDetector:
 
         detections: list[Detection] = []
 
-        for box, score, label_idx in zip(boxes, scores, labels):
+        for box, score, label_idx in zip(boxes, scores, labels, strict=True):
             x_min, y_min, x_max, y_max = box.tolist()
 
             x_min_norm = max(0.0, min(1.0, x_min / float(width)))

@@ -79,7 +79,7 @@ def run_image_cluster_pass(
         target_type="image",
         label_space=settings.label_spaces.cluster_current,
         components=components,
-        vector_by_id={image_id: vector for image_id, vector in zip(valid_ids, vectors)},
+        vector_by_id={image_id: vector for image_id, vector in zip(valid_ids, vectors, strict=True)},
         parent_lookup=None,
         params={
             "k": int(params.k),
@@ -107,7 +107,6 @@ def run_region_cluster_pass(
     method = "siglip_region_knn_v1"
     params = settings.cluster.region
 
-    embedding_model = settings.models.embedding.resolved_model_name()
     region_rows = projection_session.execute(
         select(
             RegionEmbedding.region_id,
@@ -144,7 +143,7 @@ def run_region_cluster_pass(
         target_type="region",
         label_space=settings.label_spaces.cluster_current,
         components=components,
-        vector_by_id={region_id: vector for region_id, vector in zip(valid_ids, vectors)},
+        vector_by_id={region_id: vector for region_id, vector in zip(valid_ids, vectors, strict=True)},
         parent_lookup=parent_lookup,
         params={
             "k": int(params.k),
@@ -386,4 +385,3 @@ def _select_cluster_center(component: Sequence[str], vector_by_id: dict[str, np.
 
 
 __all__ = ["run_image_cluster_pass", "run_region_cluster_pass"]
-

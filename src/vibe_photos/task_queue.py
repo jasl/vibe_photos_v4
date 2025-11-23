@@ -110,7 +110,7 @@ def pre_process(image_id: str) -> str:
             out_dir.mkdir(parents=True, exist_ok=True)
             detections: list[dict] = []
             if settings.models.detection.enabled:
-                from vibe_photos.ml.detection import (  # noqa: WPS433
+                from vibe_photos.ml.detection import (
                     Detector,
                     build_owlvit_detector,
                     detection_priority,
@@ -150,7 +150,7 @@ def pre_process(image_id: str) -> str:
             out_path.write_text(json.dumps(detections), encoding="utf-8")
             return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path))
 
-        detection_artifact = manager.ensure_artifact(
+        manager.ensure_artifact(
             image_id=image_id,
             spec=detection_spec,
             builder=_write_detections,
