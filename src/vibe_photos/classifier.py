@@ -10,7 +10,10 @@ from torch import Tensor
 
 from utils.logging import get_logger
 from vibe_photos.config import Settings
-from vibe_photos.ml.coarse_categories import CoarseCategoryClassifier, build_siglip_coarse_classifier
+from vibe_photos.ml.coarse_categories import (
+    CoarseCategoryClassifier,
+    build_siglip_coarse_classifier,
+)
 from vibe_photos.ml.models import get_siglip_embedding_model
 
 LOGGER = get_logger(__name__)

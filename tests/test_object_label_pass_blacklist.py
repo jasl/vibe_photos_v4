@@ -6,7 +6,14 @@ import numpy as np
 from sqlalchemy import select
 
 from vibe_photos.config import Settings
-from vibe_photos.db import Label, LabelAssignment, Region, RegionEmbedding, open_primary_session, open_projection_session
+from vibe_photos.db import (
+    Label,
+    LabelAssignment,
+    Region,
+    RegionEmbedding,
+    open_primary_session,
+    open_projection_session,
+)
 from vibe_photos.labels.object_label_pass import run_object_label_pass
 from vibe_photos.labels.repository import LabelRepository
 from vibe_photos.labels.seed_labels import seed_labels

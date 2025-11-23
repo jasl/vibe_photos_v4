@@ -8,7 +8,12 @@ from collections import defaultdict
 from sqlalchemy import delete, select
 
 from utils.logging import get_logger
-from vibe_photos.db import ImageNearDuplicateGroup, ImageNearDuplicateMembership, Label, LabelAssignment
+from vibe_photos.db import (
+    ImageNearDuplicateGroup,
+    ImageNearDuplicateMembership,
+    Label,
+    LabelAssignment,
+)
 from vibe_photos.labels.repository import LabelRepository
 
 LOGGER = get_logger(__name__, extra={"component": "duplicate_propagation"})

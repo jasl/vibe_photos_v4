@@ -7,10 +7,19 @@ from pathlib import Path
 
 from PIL import Image
 
-from vibe_photos.artifact_store import ArtifactManager, ArtifactResult, ArtifactSpec, hash_file
+from vibe_photos.artifact_store import (
+    ArtifactManager,
+    ArtifactResult,
+    ArtifactSpec,
+    hash_file,
+)
 from vibe_photos.config import Settings
 from vibe_photos.db import ArtifactRecord
-from vibe_photos.hasher import CONTENT_HASH_ALGO, compute_content_hash, compute_perceptual_hash
+from vibe_photos.hasher import (
+    CONTENT_HASH_ALGO,
+    compute_content_hash,
+    compute_perceptual_hash,
+)
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.thumbnailing import save_thumbnail
 

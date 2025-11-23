@@ -37,7 +37,10 @@ from vibe_photos.hasher import (
     compute_perceptual_hash,
 )
 from vibe_photos.labels.build_object_prototypes import build_object_prototypes
-from vibe_photos.labels.cluster_pass import run_image_cluster_pass, run_region_cluster_pass
+from vibe_photos.labels.cluster_pass import (
+    run_image_cluster_pass,
+    run_region_cluster_pass,
+)
 from vibe_photos.labels.duplicate_propagation import propagate_duplicate_labels
 from vibe_photos.labels.object_label_pass import run_object_label_pass
 from vibe_photos.labels.scene_label_pass import run_scene_label_pass

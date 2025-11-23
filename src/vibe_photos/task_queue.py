@@ -10,13 +10,27 @@ from typing import cast
 
 from celery import Celery
 from PIL import Image
+from sqlalchemy import select
 
 from utils.logging import get_logger
-from vibe_photos.artifact_store import ArtifactManager, ArtifactResult, ArtifactSpec, hash_file
+from vibe_photos.artifact_store import (
+    ArtifactManager,
+    ArtifactResult,
+    ArtifactSpec,
+    hash_file,
+)
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import ArtifactRecord, PostProcessResult, ProcessResult, open_primary_session, open_projection_session
+from vibe_photos.db import (
+    ArtifactRecord,
+    PostProcessResult,
+    ProcessResult,
+    open_primary_session,
+    open_projection_session,
+)
 from vibe_photos.db import Image as ImageRow
+from vibe_photos.hasher import PHASH_ALGO
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
+from vibe_photos.pipeline import PreprocessingPipeline, _extract_exif_and_gps
 from vibe_photos.preprocessing import ensure_preprocessing_artifacts
 
 LOGGER = get_logger(__name__, extra={"component": "task_queue"})
@@ -157,6 +171,78 @@ def pre_process(image_id: str) -> str:
             dependencies=[content_artifact.id, phash_artifact.id],
         )
 
+        # --- Sync basic metadata + pHash back into the primary Image row so the UI can display it. ---
+        from pathlib import (
+            Path as _Path,  # Local import to avoid polluting module namespace
+        )
+
+        width, height = image.size
+        now = time.time()
+
+        try:
+            exif_datetime, camera_model, gps_payload = _extract_exif_and_gps(
+                image, datetime_format=settings.pipeline.exif_datetime_format
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.error(
+                "preprocess_exif_parse_error",
+                extra={"image_id": image_id, "path": str(image_path), "error": str(exc)},
+            )
+            exif_datetime = None
+            camera_model = None
+            gps_payload = None
+
+        try:
+            phash_path = _Path(phash_artifact.storage_path)
+            if not phash_path.is_absolute():
+                phash_path = _artifact_root().parent.parent / phash_path
+            phash_hex = phash_path.read_text(encoding="utf-8").strip() or None
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.error(
+                "preprocess_phash_read_error",
+                extra={"image_id": image_id, "path": str(phash_artifact.storage_path), "error": str(exc)},
+            )
+            phash_hex = None
+
+        row.width = int(width)
+        row.height = int(height)
+        row.exif_datetime = exif_datetime
+        row.camera_model = camera_model
+        row.updated_at = now
+
+        if phash_hex is not None:
+            row.phash = phash_hex
+            row.phash_algo = PHASH_ALGO
+            row.phash_updated_at = now
+
+        primary_session.add(row)
+
+        # Persist EXIF + GPS sidecar under cache/images/metadata for Web UI consumption.
+        cache_root = projection_path.parent
+        metadata_dir = cache_root / "images" / "metadata"
+        metadata_dir.mkdir(parents=True, exist_ok=True)
+
+        metadata_payload: dict[str, object] = {
+            "image_id": image_id,
+            "primary_path": str(image_path),
+            "exif_datetime": exif_datetime,
+            "camera_model": camera_model,
+            "updated_at": now,
+        }
+        if gps_payload:
+            metadata_payload["gps"] = gps_payload
+
+        try:
+            metadata_path = metadata_dir / f"{image_id}.json"
+            metadata_path.write_text(json.dumps(metadata_payload), encoding="utf-8")
+        except OSError as exc:  # pragma: no cover - defensive
+            LOGGER.error(
+                "preprocess_metadata_write_error",
+                extra={"image_id": image_id, "path": str(metadata_dir), "error": str(exc)},
+            )
+
+        primary_session.commit()
+
         LOGGER.info(
             "preprocess_artifacts_ready",
             extra={
@@ -233,6 +319,33 @@ def process(image_id: str) -> str:
             "process_complete",
             extra={"image_id": image_id, "version_key": result.version_key},
         )
+
+    # Run the label + duplicate pipeline. The underlying implementation is
+    # defensive and only recomputes embeddings, captions, scenes, and
+    # duplicates when they are missing or configuration has changed, so it is
+    # safe (though potentially heavy) to call from each process() invocation.
+    settings = _load_settings()
+    primary_path = _default_primary_db()
+    projection_path = _default_projection_db()
+
+    LOGGER.info(
+        "label_pipeline_start",
+        extra={"primary_db": str(primary_path), "projection_db": str(projection_path)},
+    )
+
+    pipeline = PreprocessingPipeline(settings=settings)
+    # Mark the current image as "dirty" for near-duplicate recomputation. The
+    # underlying pHash stage will fall back to a full rebuild when no pairs
+    # exist yet, and will otherwise only refresh pairs involving this image.
+    with open_primary_session(primary_path) as primary_session:
+        row = primary_session.get(ImageRow, image_id)
+        if row is not None and row.status == "active":
+            pipeline._near_duplicate_dirty.add(image_id)  # type: ignore[attr-defined]
+
+    pipeline.run(roots=[], primary_db_path=primary_path, projection_db_path=projection_path)
+
+    LOGGER.info("label_pipeline_complete", extra={})
+
     return image_id
 
 

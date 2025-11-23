@@ -4,7 +4,11 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from vibe_photos.config import Settings
-from vibe_photos.pipeline import PreprocessingPipeline, RunJournalRecord, save_run_journal
+from vibe_photos.pipeline import (
+    PreprocessingPipeline,
+    RunJournalRecord,
+    save_run_journal,
+)
 
 
 @contextmanager

@@ -8,9 +8,19 @@ from __future__ import annotations
 
 import torch
 from torch import device as TorchDevice
-from transformers import AutoModel, AutoModelForImageTextToText, AutoProcessor, PreTrainedModel
+from transformers import (
+    AutoModel,
+    AutoModelForImageTextToText,
+    AutoProcessor,
+    PreTrainedModel,
+)
 
-from vibe_photos.config import CaptionModelConfig, EmbeddingModelConfig, Settings, load_settings
+from vibe_photos.config import (
+    CaptionModelConfig,
+    EmbeddingModelConfig,
+    Settings,
+    load_settings,
+)
 
 
 def _select_device(config_device: str = "auto") -> TorchDevice:

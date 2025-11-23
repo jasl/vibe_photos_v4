@@ -14,11 +14,19 @@ from sqlalchemy import Select, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from utils.logging import get_logger
-from vibe_photos.classifier import SceneAttributes, SceneClassifierWithAttributes, build_scene_classifier
+from vibe_photos.classifier import (
+    SceneAttributes,
+    SceneClassifierWithAttributes,
+    build_scene_classifier,
+)
 from vibe_photos.config import Settings
 from vibe_photos.db import Image, ImageEmbedding, ImageScene, Label
 from vibe_photos.labels.repository import LabelRepository
-from vibe_photos.labels.scene_schema import ALL_SCENE_LABEL_KEYS, ATTRIBUTE_LABEL_KEYS, scene_label_key_from_type
+from vibe_photos.labels.scene_schema import (
+    ALL_SCENE_LABEL_KEYS,
+    ATTRIBUTE_LABEL_KEYS,
+    scene_label_key_from_type,
+)
 
 LOGGER = get_logger(__name__, extra={"component": "scene_label_pass"})
 

@@ -25,7 +25,11 @@ from vibe_photos.db import (
     open_primary_session,
     open_projection_session,
 )
-from vibe_photos.labels.scene_schema import ATTRIBUTE_LABEL_KEYS, normalize_scene_filter, scene_type_from_label_key
+from vibe_photos.labels.scene_schema import (
+    ATTRIBUTE_LABEL_KEYS,
+    normalize_scene_filter,
+    scene_type_from_label_key,
+)
 
 LOGGER = get_logger(__name__)
 
