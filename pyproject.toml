@@ -116,9 +116,6 @@ plugins = ["sqlalchemy.ext.mypy.plugin"]
 module = ["celery", "celery.*"]
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-module = ["vibe_photos.pipeline"]
-ignore_errors = true
 
 [tool.pytest.ini_options]
 minversion = "8.4.2"

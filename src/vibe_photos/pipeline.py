@@ -10,9 +10,9 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
-from PIL import Image
+from PIL import Image as PILImage
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
@@ -63,8 +63,17 @@ class RunJournalRecord:
     updated_at: float
 
 
+class ImageMeta(TypedDict):
+    image_id: str
+    phash_int: int
+    mtime: float
+    width: int
+    height: int
+    size_bytes: int
+
+
 def _extract_exif_and_gps(
-    image: Image.Image, datetime_format: str = "raw"
+    image: PILImage.Image, datetime_format: str = "raw"
 ) -> tuple[str | None, str | None, dict[str, object] | None]:
     """Extract EXIF datetime, camera model, and GPS coordinates from a PIL image.
 
@@ -131,10 +140,11 @@ def _extract_exif_and_gps(
     lon_ref = gps_tags.get("GPSLongitudeRef")
 
     def _to_degrees(value: object) -> float | None:
-        try:
-            d, m, s = value
-        except Exception:
+        if not isinstance(value, Sequence):
             return None
+        if len(value) < 3:
+            return None
+        d, m, s = value[0], value[1], value[2]
         try:
             d_val = float(d)
             m_val = float(m)
@@ -431,7 +441,9 @@ class PreprocessingPipeline:
 
         self._logger.info("pipeline_complete", extra={})
 
-    def _run_scan_and_hash(self, roots: Sequence[Path], primary_session, projection_session) -> None:
+    def _run_scan_and_hash(
+        self, roots: Sequence[Path], primary_session: Session, projection_session: Session
+    ) -> None:
         """Scan album roots and populate the images table with content hashes."""
 
         self._logger.info("scan_and_hash_start", extra={})
@@ -612,7 +624,7 @@ class PreprocessingPipeline:
             projection_session.commit()
         self._logger.info("scan_and_hash_complete", extra={"file_count": total_files})
 
-    def _run_thumbnails(self, primary_session) -> None:
+    def _run_thumbnails(self, primary_session: Session) -> None:
         """Generate web-friendly thumbnails for active images under cache/images/thumbnails/."""
 
         if self._cache_root is None:
@@ -705,7 +717,10 @@ class PreprocessingPipeline:
         )
 
     def _run_region_detection_and_reranking(
-        self, primary_session, projection_session=None, target_image_ids: Sequence[str] | None = None
+        self,
+        primary_session: Session,
+        projection_session: Session | None = None,
+        target_image_ids: Sequence[str] | None = None,
     ) -> None:
         """Detection pass (M2): emit regions + region embeddings, no semantic labels."""
 
@@ -905,9 +920,9 @@ class PreprocessingPipeline:
             if detections:
                 pairs = list(zip(detections, priorities, strict=True))
                 pairs.sort(key=lambda pair: pair[1], reverse=True)
-                detections, priorities = zip(*pairs, strict=True)
-                detections = list(detections)
-                priorities = list(priorities)
+                sorted_detections, sorted_priorities = zip(*pairs, strict=True)
+                detections = list(sorted_detections)
+                priorities = list(sorted_priorities)
 
                 if max_regions > 0:
                     detections, priorities = filter_secondary_regions_by_priority(
@@ -1031,7 +1046,7 @@ class PreprocessingPipeline:
             extra={"regions_created": updated_rows},
         )
 
-    def _run_object_label_pass_stage(self, primary_session, projection_session) -> None:
+    def _run_object_label_pass_stage(self, primary_session: Session, projection_session: Session) -> None:
         """Run object label pass based on cached region embeddings."""
 
         if self._cache_root is None:
@@ -1069,7 +1084,7 @@ class PreprocessingPipeline:
             extra={"duplicate_labels_propagated": propagated},
         )
 
-    def _run_cluster_pass(self, primary_session, projection_session) -> None:
+    def _run_cluster_pass(self, primary_session: Session, projection_session: Session) -> None:
         """Run image + region clustering passes."""
 
         if self._cache_root is None:
@@ -1106,7 +1121,7 @@ class PreprocessingPipeline:
             },
         )
 
-    def _run_scene_classification(self, primary_session, projection_session) -> None:
+    def _run_scene_classification(self, primary_session: Session, projection_session: Session) -> None:
         """Run scene label pass that mirrors outputs into the label layer."""
 
         if self._cache_root is None:
@@ -1154,7 +1169,7 @@ class PreprocessingPipeline:
                 extra={"processed": processed, "duplicate_labels_propagated": propagated},
             )
 
-    def _run_embeddings_and_captions(self, primary_session, projection_session) -> None:
+    def _run_embeddings_and_captions(self, primary_session: Session, projection_session: Session) -> None:
         """Compute SigLIP embeddings and BLIP captions for canonical images."""
 
         if self._cache_root is None:
@@ -1233,7 +1248,7 @@ class PreprocessingPipeline:
 
         for batch_start in range(0, embedding_total, embedding_batch_size):
             batch_ids = embedding_targets[batch_start : batch_start + embedding_batch_size]
-            images: list[Image.Image] = []
+            embedding_images: list[PILImage.Image] = []
             valid_ids: list[str] = []
 
             from PIL import Image as _Image
@@ -1249,11 +1264,11 @@ class PreprocessingPipeline:
                     )
                     continue
 
-                images.append(img)
+                embedding_images.append(img)
                 valid_ids.append(image_id)
 
-            if images:
-                inputs = siglip_processor(images=images, return_tensors="pt")
+            if embedding_images:
+                inputs = siglip_processor(images=embedding_images, return_tensors="pt")
                 inputs = inputs.to(siglip_device)
 
                 with torch.no_grad():
@@ -1288,7 +1303,7 @@ class PreprocessingPipeline:
                         "updated_at": now,
                     }
 
-                    def _upsert_embedding(target_session, payload=values) -> None:
+                    def _upsert_embedding(target_session: Session, payload: dict[str, object] = values) -> None:
                         stmt = dialect_insert(target_session, ImageEmbedding).values(**payload)
                         stmt = stmt.on_conflict_do_update(
                             index_elements=[ImageEmbedding.image_id, ImageEmbedding.model_name],
@@ -1341,8 +1356,8 @@ class PreprocessingPipeline:
 
         for batch_start in range(0, caption_total, caption_batch_size):
             batch_ids = caption_targets[batch_start : batch_start + caption_batch_size]
-            images: list[_ImageCaption.Image] = []
-            valid_ids: list[str] = []
+            caption_images: list[_ImageCaption.Image] = []
+            caption_valid_ids: list[str] = []
 
             for image_id in batch_ids:
                 path_str = paths_by_id[image_id]
@@ -1355,17 +1370,17 @@ class PreprocessingPipeline:
                     )
                     continue
 
-                images.append(img)
-                valid_ids.append(image_id)
+                caption_images.append(img)
+                caption_valid_ids.append(image_id)
 
-            if images:
-                inputs = blip_processor(images=images, return_tensors="pt")
+            if caption_images:
+                inputs = blip_processor(images=caption_images, return_tensors="pt")
                 inputs = inputs.to(blip_device)
 
                 with torch.no_grad():
                     generated_ids = blip_model.generate(**inputs)
 
-                for idx, image_id in enumerate(valid_ids):
+                for idx, image_id in enumerate(caption_valid_ids):
                     token_ids = generated_ids[idx]
                     caption_text = blip_processor.decode(token_ids, skip_special_tokens=True)
 
@@ -1389,7 +1404,7 @@ class PreprocessingPipeline:
                         "updated_at": now,
                     }
 
-                    def _upsert_caption(target_session, payload=values) -> None:
+                    def _upsert_caption(target_session: Session, payload: dict[str, object] = values) -> None:
                         stmt = dialect_insert(target_session, ImageCaption).values(**payload)
                         stmt = stmt.on_conflict_do_update(
                             index_elements=[ImageCaption.image_id, ImageCaption.model_name],
@@ -1440,7 +1455,7 @@ class PreprocessingPipeline:
             extra={"embeddings_created": total_embeddings, "captions_created": total_captions},
         )
 
-    def process_embedding_task(self, primary_session, image_id: str) -> None:
+    def process_embedding_task(self, primary_session: Session, image_id: str) -> None:
         """Compute SigLIP embedding for a single image and persist it."""
 
         if self._cache_root is None:
@@ -1529,7 +1544,7 @@ class PreprocessingPipeline:
         primary_session.execute(stmt)
         primary_session.commit()
 
-    def process_caption_task(self, primary_session, image_id: str) -> None:
+    def process_caption_task(self, primary_session: Session, image_id: str) -> None:
         """Compute a BLIP caption for a single image and persist it."""
 
         if self._cache_root is None:
@@ -1610,7 +1625,7 @@ class PreprocessingPipeline:
         primary_session.execute(stmt)
         primary_session.commit()
 
-    def process_region_detection_task(self, primary_session, image_id: str) -> None:
+    def process_region_detection_task(self, primary_session: Session, image_id: str) -> None:
         """Run region detection for a single image via the detection pipeline."""
 
         if not self._settings.pipeline.run_detection or not self._settings.models.detection.enabled:
@@ -1621,7 +1636,7 @@ class PreprocessingPipeline:
 
         self._run_region_detection_and_reranking(primary_session, target_image_ids=[image_id])
 
-    def _run_perceptual_hashing_and_duplicates(self, primary_session, projection_session) -> None:
+    def _run_perceptual_hashing_and_duplicates(self, primary_session: Session, projection_session: Session) -> None:
         """Compute perceptual hashes and rebuild near-duplicate groups."""
 
         self._logger.info("phash_and_duplicates_start", extra={})
@@ -1743,8 +1758,8 @@ class PreprocessingPipeline:
         if threshold <= 0:
             threshold = 12
 
-        items: list[dict[str, object]] = []
-        image_meta: dict[str, dict[str, object]] = {}
+        items: list[ImageMeta] = []
+        image_meta: dict[str, ImageMeta] = {}
         for row in rows:
             if not row.phash:
                 continue
@@ -1752,23 +1767,23 @@ class PreprocessingPipeline:
                 ph_int = int(row.phash, 16)
             except (TypeError, ValueError):
                 continue
-            record = {
-                    "image_id": row.image_id,
-                    "phash_int": ph_int,
-                    "mtime": float(row.mtime or 0.0),
+            record: ImageMeta = {
+                "image_id": str(row.image_id),
+                "phash_int": int(ph_int),
+                "mtime": float(row.mtime or 0.0),
                 "width": int(row.width or 0),
                 "height": int(row.height or 0),
                 "size_bytes": int(row.size_bytes or 0),
-                }
+            }
             items.append(record)
-            image_meta[row.image_id] = record
+            image_meta[str(row.image_id)] = record
 
         if not items:
             self._logger.info("phash_and_duplicates_noop", extra={})
             return
 
         items.sort(key=lambda item: item["mtime"], reverse=True)
-        phash_map: dict[str, dict[str, object]] = {str(item["image_id"]): item for item in items}
+        phash_map: dict[str, ImageMeta] = {str(item["image_id"]): item for item in items}
 
         dirty_ids = {image_id for image_id in self._near_duplicate_dirty if image_id in phash_map}
 
@@ -1863,7 +1878,7 @@ class PreprocessingPipeline:
             },
         )
 
-    def _rebuild_duplicate_groups(self, primary_session, image_meta: dict[str, dict[str, object]]) -> tuple[int, int]:
+    def _rebuild_duplicate_groups(self, primary_session: Session, image_meta: dict[str, ImageMeta]) -> tuple[int, int]:
         primary_session.execute(delete(ImageNearDuplicateMembership))
         primary_session.execute(delete(ImageNearDuplicateGroup))
         pair_rows = primary_session.execute(
@@ -1943,7 +1958,7 @@ class PreprocessingPipeline:
         return groups_created, memberships_created
 
     @staticmethod
-    def _select_canonical_image(members: Sequence[str], image_meta: dict[str, dict[str, object]]) -> str | None:
+    def _select_canonical_image(members: Sequence[str], image_meta: dict[str, ImageMeta]) -> str | None:
         best_id: str | None = None
         best_key: tuple[int, int, str] | None = None
         for image_id in members:
@@ -1964,7 +1979,7 @@ class PreprocessingPipeline:
     def _phash_distance(lhs: int, rhs: int) -> int:
         return int((int(lhs) ^ int(rhs)).bit_count())
 
-    def _load_non_canonical_image_ids(self, primary_session) -> set[str]:
+    def _load_non_canonical_image_ids(self, primary_session: Session) -> set[str]:
         if not self._settings.pipeline.skip_duplicates_for_heavy_models:
             return set()
         rows = primary_session.execute(
