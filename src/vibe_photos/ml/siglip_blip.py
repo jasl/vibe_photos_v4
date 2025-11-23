@@ -7,9 +7,9 @@ classification and captioning on full images.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import torch
@@ -21,7 +21,6 @@ from utils.logging import get_logger
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.ml.models import get_blip_caption_model, get_siglip_embedding_model
 
-
 LOGGER = get_logger(__name__, extra={"component": "siglip_blip"})
 
 
@@ -30,9 +29,9 @@ class SiglipBlipDetectionResult:
     """Structured result for SigLIP + BLIP analysis of a single image."""
 
     image_path: Path
-    label_scores: Dict[str, float]
-    detected_labels: List[str]
-    caption: Optional[str]
+    label_scores: dict[str, float]
+    detected_labels: list[str]
+    caption: str | None
     confidence: float
 
 
@@ -49,7 +48,7 @@ class SiglipBlipDetector:
     :class:`vibe_photos.config.Settings` to avoid repeated model loads.
     """
 
-    def __init__(self, settings: Optional[Settings] = None) -> None:
+    def __init__(self, settings: Settings | None = None) -> None:
         """Initialize the detector from application settings.
 
         Args:
@@ -96,7 +95,7 @@ class SiglipBlipDetector:
         image = Image.open(image_path).convert("RGB")
 
         scores = self._classify_with_siglip(image=image, labels=list(candidate_labels))
-        caption: Optional[str] = self._generate_caption_with_blip(image=image) if generate_caption else None
+        caption: str | None = self._generate_caption_with_blip(image=image) if generate_caption else None
 
         detected = [label for label, score in scores.items() if score >= confidence_threshold]
         top_scores = sorted(scores.values(), reverse=True)[:3]
@@ -123,7 +122,7 @@ class SiglipBlipDetector:
         emb = emb / emb.norm(dim=-1, keepdim=True)
         return emb.detach().cpu().numpy().astype(np.float32)
 
-    def _classify_with_siglip(self, image: Image.Image, labels: List[str]) -> Dict[str, float]:
+    def _classify_with_siglip(self, image: Image.Image, labels: list[str]) -> dict[str, float]:
         """Compute zero-shot classification scores via SigLIP."""
 
         if not labels:

@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import List
 
 site_packages = Path(__file__).resolve().parents[1] / ".venv" / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
 sys.path.append(str(site_packages))
@@ -19,7 +18,7 @@ def _dummy_session(*_args, **_kwargs):
     yield object()
 
 
-def _stub_stage(recorder: List[str], name: str):
+def _stub_stage(recorder: list[str], name: str):
     def _stage(*_args, **_kwargs):
         recorder.append(name)
 
@@ -40,7 +39,7 @@ def test_pipeline_skips_completed_and_resumes_next_stage(monkeypatch, tmp_path):
     monkeypatch.setattr("vibe_photos.pipeline.open_primary_session", _dummy_session)
     monkeypatch.setattr("vibe_photos.pipeline.open_projection_session", _dummy_session)
 
-    executed: List[str] = []
+    executed: list[str] = []
     pipeline._run_scan_and_hash = _stub_stage(executed, "scan_and_hash")  # type: ignore[assignment]
     pipeline._run_perceptual_hashing_and_duplicates = _stub_stage(executed, "phash_and_duplicates")  # type: ignore[assignment]
     pipeline._run_thumbnails = _stub_stage(executed, "thumbnails")  # type: ignore[assignment]
@@ -68,7 +67,7 @@ def test_pipeline_resumes_stage_from_cursor(monkeypatch, tmp_path):
     monkeypatch.setattr("vibe_photos.pipeline.open_primary_session", _dummy_session)
     monkeypatch.setattr("vibe_photos.pipeline.open_projection_session", _dummy_session)
 
-    executed: List[str] = []
+    executed: list[str] = []
     pipeline._run_scan_and_hash = _stub_stage(executed, "scan_and_hash")  # type: ignore[assignment]
     pipeline._run_perceptual_hashing_and_duplicates = _stub_stage(executed, "phash_and_duplicates")  # type: ignore[assignment]
     pipeline._run_thumbnails = _stub_stage(executed, "thumbnails")  # type: ignore[assignment]

@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Sequence, Tuple
+from typing import Any
 
 import torch
 from torch import Tensor
 
 from utils.logging import get_logger
-
 
 LOGGER = get_logger(__name__)
 
@@ -62,12 +62,12 @@ class CoarseCategoryClassifier:
         if score_min < 0.0:
             raise ValueError("score_min must be non-negative")
 
-        self._categories: List[CoarseCategory] = list(categories)
+        self._categories: list[CoarseCategory] = list(categories)
         self._encode_text: Callable[[Sequence[str]], Tensor] = encode_text
         self._threshold: float = threshold
         self._score_min: float = score_min
         self._fallback_category_id: str = fallback_category_id
-        self._text_embeddings: Dict[str, Tensor] = {}
+        self._text_embeddings: dict[str, Tensor] = {}
 
         self._prepare_text_embeddings()
 
@@ -107,7 +107,7 @@ class CoarseCategoryClassifier:
 
             self._text_embeddings[category.id] = normalized
 
-    def classify_from_image_embedding(self, image_embedding: Tensor) -> Tuple[str, Dict[str, float]]:
+    def classify_from_image_embedding(self, image_embedding: Tensor) -> tuple[str, dict[str, float]]:
         """Classify an image embedding into a primary coarse category.
 
         Args:
@@ -133,8 +133,8 @@ class CoarseCategoryClassifier:
 
         normalized_image = image_embedding / norm
 
-        scores: Dict[str, float] = {}
-        scored_category_ids: List[str] = []
+        scores: dict[str, float] = {}
+        scored_category_ids: list[str] = []
 
         for category in self._categories:
             text_embeddings = self._text_embeddings.get(category.id)
@@ -195,7 +195,7 @@ class CoarseCategoryClassifier:
         return primary_category_id, scores
 
 
-DEFAULT_COARSE_CATEGORIES: List[CoarseCategory] = [
+DEFAULT_COARSE_CATEGORIES: list[CoarseCategory] = [
     CoarseCategory(
         id="food",
         display_name="Food",

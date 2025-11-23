@@ -5,17 +5,16 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
+
 from utils.logging import get_logger
-
 from vibe_photos.db import ArtifactDependency, ArtifactRecord
-
 
 LOGGER = get_logger(__name__, extra={"component": "artifact_store"})
 
@@ -26,7 +25,7 @@ class ArtifactSpec:
 
     artifact_type: str
     model_name: str
-    params: Dict[str, object]
+    params: dict[str, object]
 
     @property
     def params_hash(self) -> str:
@@ -44,7 +43,7 @@ class ArtifactResult:
 
     storage_path: Path
     checksum: str
-    payload_path: Optional[Path] = None
+    payload_path: Path | None = None
 
 
 class ArtifactManager:
@@ -61,7 +60,7 @@ class ArtifactManager:
         image_id: str,
         spec: ArtifactSpec,
         builder: Callable[[Path], ArtifactResult],
-        dependencies: Optional[Iterable[int]] = None,
+        dependencies: Iterable[int] | None = None,
     ) -> ArtifactRecord:
         """Return an existing artifact or build and persist a new one."""
 

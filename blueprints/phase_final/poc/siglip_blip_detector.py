@@ -4,9 +4,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 from vibe_photos.ml.siglip_blip import SiglipBlipDetectionResult, SiglipBlipDetector
 
@@ -90,7 +88,7 @@ def demo() -> None:
             "pet",
         ]
 
-        results: List[SiglipBlipDetectionResult] = []
+        results: list[SiglipBlipDetectionResult] = []
         for image_path in test_images:
             try:
                 result = detector.detect(image_path=image_path, candidate_labels=default_labels, confidence_threshold=0.3)

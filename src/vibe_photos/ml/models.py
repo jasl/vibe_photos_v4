@@ -6,13 +6,11 @@ configured according to :mod:`vibe_photos.config` settings.
 
 from __future__ import annotations
 
-from typing import Tuple
-
 import torch
 from torch import device as TorchDevice
 from transformers import AutoModel, AutoModelForImageTextToText, AutoProcessor, PreTrainedModel
 
-from vibe_photos.config import EmbeddingModelConfig, CaptionModelConfig, Settings, load_settings
+from vibe_photos.config import CaptionModelConfig, EmbeddingModelConfig, Settings, load_settings
 
 
 def _select_device(config_device: str = "auto") -> TorchDevice:
@@ -55,7 +53,7 @@ _BLIP_DEVICE: TorchDevice | None = None
 _BLIP_MODEL_NAME: str | None = None
 
 
-def _load_siglip(config: EmbeddingModelConfig) -> Tuple[AutoProcessor, PreTrainedModel, TorchDevice]:
+def _load_siglip(config: EmbeddingModelConfig) -> tuple[AutoProcessor, PreTrainedModel, TorchDevice]:
     model_name = config.resolved_model_name()
     device = _select_device(config.device)
 
@@ -81,7 +79,7 @@ def _load_siglip(config: EmbeddingModelConfig) -> Tuple[AutoProcessor, PreTraine
     return processor, model, device
 
 
-def _load_blip_caption(config: CaptionModelConfig) -> Tuple[AutoProcessor, PreTrainedModel, TorchDevice]:
+def _load_blip_caption(config: CaptionModelConfig) -> tuple[AutoProcessor, PreTrainedModel, TorchDevice]:
     model_name = config.resolved_model_name()
     device = _select_device(config.device)
 
@@ -107,7 +105,7 @@ def _load_blip_caption(config: CaptionModelConfig) -> Tuple[AutoProcessor, PreTr
     return processor, model, device
 
 
-def get_siglip_embedding_model(settings: Settings | None = None) -> Tuple[AutoProcessor, PreTrainedModel, TorchDevice]:
+def get_siglip_embedding_model(settings: Settings | None = None) -> tuple[AutoProcessor, PreTrainedModel, TorchDevice]:
     """Return the shared SigLIP processor, model, and device for embeddings.
 
     The ``settings`` argument is optional; when omitted, configuration is
@@ -120,7 +118,7 @@ def get_siglip_embedding_model(settings: Settings | None = None) -> Tuple[AutoPr
 
 def get_blip_caption_model(
     settings: Settings | None = None,
-) -> Tuple[AutoProcessor, PreTrainedModel, TorchDevice]:
+) -> tuple[AutoProcessor, PreTrainedModel, TorchDevice]:
     """Return the shared BLIP processor, model, and device for captioning."""
 
     cfg = (settings or load_settings()).models.caption

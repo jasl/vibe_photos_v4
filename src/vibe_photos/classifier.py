@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence, Tuple
 
 import torch
 from torch import Tensor
@@ -12,7 +12,6 @@ from utils.logging import get_logger
 from vibe_photos.config import Settings
 from vibe_photos.ml.coarse_categories import CoarseCategoryClassifier, build_siglip_coarse_classifier
 from vibe_photos.ml.models import get_siglip_embedding_model
-
 
 LOGGER = get_logger(__name__)
 
@@ -61,8 +60,8 @@ class SceneClassifierWithAttributes:
     """
 
     coarse_classifier: CoarseCategoryClassifier
-    attribute_embeddings: Dict[str, Tuple[Tensor, Tensor]]
-    attribute_thresholds: Dict[str, float]
+    attribute_embeddings: dict[str, tuple[Tensor, Tensor]]
+    attribute_thresholds: dict[str, float]
     classifier_name: str
     classifier_version: str
 
@@ -82,7 +81,7 @@ class SceneClassifierWithAttributes:
 
         return emb / norm
 
-    def _predict_boolean_with_margin(self, attribute_id: str, image_embedding: Tensor) -> Tuple[bool, float]:
+    def _predict_boolean_with_margin(self, attribute_id: str, image_embedding: Tensor) -> tuple[bool, float]:
         """Predict a boolean attribute and return its value and margin.
 
         The margin is defined as::
@@ -109,10 +108,10 @@ class SceneClassifierWithAttributes:
         return value, margin
 
     @torch.no_grad()
-    def classify_batch(self, embeddings: Iterable[Tensor]) -> List[SceneAttributes]:
+    def classify_batch(self, embeddings: Iterable[Tensor]) -> list[SceneAttributes]:
         """Classify a batch of image embeddings into scene attributes."""
 
-        results: List[SceneAttributes] = []
+        results: list[SceneAttributes] = []
 
         for embedding in embeddings:
             img_emb = self._normalize_embedding(embedding)
@@ -219,8 +218,8 @@ def build_scene_classifier(settings: Settings) -> SceneClassifierWithAttributes:
         ),
     ]
 
-    attribute_embeddings: Dict[str, Tuple[Tensor, Tensor]] = {}
-    attribute_thresholds: Dict[str, float] = {}
+    attribute_embeddings: dict[str, tuple[Tensor, Tensor]] = {}
+    attribute_thresholds: dict[str, float] = {}
 
     for config in attribute_configs:
         inputs = processor(

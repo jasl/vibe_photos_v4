@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Literal
 
 import typer
 from sqlalchemy import select
@@ -18,7 +19,6 @@ from vibe_photos.db import (
     open_primary_session,
     open_projection_session,
 )
-
 
 LOGGER = get_logger(__name__)
 

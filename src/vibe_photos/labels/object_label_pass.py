@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 from sqlalchemy import delete, select
@@ -19,7 +19,7 @@ from vibe_photos.labels.repository import LabelRepository
 LOGGER = get_logger(__name__, extra={"command": "object_label_pass"})
 
 
-def _load_prototypes(cache_root: Path, prototype_name: str) -> Tuple[np.ndarray, np.ndarray]:
+def _load_prototypes(cache_root: Path, prototype_name: str) -> tuple[np.ndarray, np.ndarray]:
     path = cache_root / "label_text_prototypes" / f"{prototype_name}.npz"
     if not path.exists():
         raise FileNotFoundError(f"Prototype file not found: {path}")
@@ -28,7 +28,7 @@ def _load_prototypes(cache_root: Path, prototype_name: str) -> Tuple[np.ndarray,
     return data["label_ids"], data["prototypes"]
 
 
-def _load_region_rows(projection_session, embedding_model_name: str) -> Iterable[Tuple[str, str, str]]:
+def _load_region_rows(projection_session, embedding_model_name: str) -> Iterable[tuple[str, str, str]]:
     rows = projection_session.execute(
         select(RegionEmbedding.region_id, RegionEmbedding.embedding_path, Region.image_id)
         .join(Region, Region.id == RegionEmbedding.region_id)
@@ -37,7 +37,7 @@ def _load_region_rows(projection_session, embedding_model_name: str) -> Iterable
     return rows.all()
 
 
-def _load_scene_labels(primary_session, settings: Settings) -> Dict[str, str]:
+def _load_scene_labels(primary_session, settings: Settings) -> dict[str, str]:
     """Return best scene label key per image_id for the active scene space."""
 
     stmt = (
@@ -49,7 +49,7 @@ def _load_scene_labels(primary_session, settings: Settings) -> Dict[str, str]:
             Label.level == "scene",
         )
     )
-    best: Dict[str, Tuple[str, float]] = {}
+    best: dict[str, tuple[str, float]] = {}
     for row in primary_session.execute(stmt):
         current = best.get(row.target_id)
         if current is None or float(row.score or 0.0) > current[1]:
@@ -99,7 +99,7 @@ def run_object_label_pass(
     label_idx_by_key = {label_by_id[lid].key: label_idx_by_id[lid] for lid in label_by_id if lid in label_idx_by_id}
 
     blacklist_keys = {key.strip() for key in settings.object.blacklist if key}
-    remap_targets: Dict[str, Label] = {}
+    remap_targets: dict[str, Label] = {}
     for src_key, dst_key in (settings.object.remap or {}).items():
         if not src_key or not dst_key:
             continue
@@ -143,8 +143,8 @@ def run_object_label_pass(
     scene_fallback = {k: list(v) for k, v in (settings.object.zero_shot.scene_fallback_labels or {}).items()}
 
     label_matrix = prototypes.astype(np.float32)
-    image_best: Dict[str, Dict[int, float]] = defaultdict(dict)
-    image_label_counts: Dict[str, Dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    image_best: dict[str, dict[int, float]] = defaultdict(dict)
+    image_label_counts: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
 
     total_regions = len(emb_rows)
     progress_interval = max(1, total_regions // 20) if total_regions else 0
@@ -155,7 +155,7 @@ def run_object_label_pass(
         image_id = row.image_id
 
         scene_label = scene_by_image.get(image_id)
-        allowed_indices: List[int] | None = None
+        allowed_indices: list[int] | None = None
         if scene_label and scene_label in scene_whitelist:
             allowed_indices = None  # use all labels
         elif scene_label and scene_label in scene_fallback:

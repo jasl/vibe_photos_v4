@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import math
 import time
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List
 
 import numpy as np
 import torch
@@ -29,7 +29,7 @@ def _margin_to_probability(margin: float) -> float:
     return float(1.0 / (1.0 + math.exp(-margin)))
 
 
-def _load_embedding_rows(projection_session, model_name: str) -> Dict[str, str]:
+def _load_embedding_rows(projection_session, model_name: str) -> dict[str, str]:
     stmt: Select[tuple[str, str]] = select(ImageEmbedding.image_id, ImageEmbedding.embedding_path).where(
         ImageEmbedding.model_name == model_name
     )
@@ -37,7 +37,7 @@ def _load_embedding_rows(projection_session, model_name: str) -> Dict[str, str]:
     return {row.image_id: row.embedding_path for row in rows}
 
 
-def _load_active_image_ids(primary_session) -> List[str]:
+def _load_active_image_ids(primary_session) -> list[str]:
     stmt: Select[str] = select(Image.image_id).where(Image.status == "active").order_by(Image.image_id)
     return [row.image_id for row in primary_session.execute(stmt)]
 
@@ -83,7 +83,7 @@ def _upsert_image_scene(
 def _write_scene_assignment(
     *,
     repo: LabelRepository,
-    scene_labels: Dict[str, Label],
+    scene_labels: dict[str, Label],
     attributes: SceneAttributes,
     image_id: str,
     label_space_ver: str,
@@ -112,7 +112,7 @@ def _write_scene_assignment(
 def _write_attribute_assignments(
     *,
     repo: LabelRepository,
-    attribute_labels: Dict[str, Label],
+    attribute_labels: dict[str, Label],
     attributes: SceneAttributes,
     image_id: str,
     label_space_ver: str,
@@ -190,8 +190,8 @@ def run_scene_label_pass(
 
     for batch_start in range(0, total, batch_size):
         batch_ids = target_ids[batch_start : batch_start + batch_size]
-        embeddings: List[torch.Tensor] = []
-        valid_ids: List[str] = []
+        embeddings: list[torch.Tensor] = []
+        valid_ids: list[str] = []
 
         for image_id in batch_ids:
             rel_path = embedding_paths.get(image_id)

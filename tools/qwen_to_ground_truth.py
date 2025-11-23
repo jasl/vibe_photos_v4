@@ -49,13 +49,13 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any
 
-
-SceneMapping = Dict[str, str]
-AttrMapping = Dict[str, str]
-ObjectMapping = Dict[str, str]
+SceneMapping = dict[str, str]
+AttrMapping = dict[str, str]
+ObjectMapping = dict[str, str]
 
 
 def _default_scene_mapping() -> SceneMapping:
@@ -110,7 +110,7 @@ def _default_object_mapping() -> ObjectMapping:
     }
 
 
-def _iter_input_records(path: Path) -> Iterable[Dict[str, Any]]:
+def _iter_input_records(path: Path) -> Iterable[dict[str, Any]]:
     with path.open("r", encoding="utf-8") as handle:
         for line in handle:
             line_stripped = line.strip()
@@ -124,7 +124,7 @@ def _iter_input_records(path: Path) -> Iterable[Dict[str, Any]]:
                 yield rec
 
 
-def _map_scene(scene_raw: Any, scene_map: SceneMapping) -> List[str]:
+def _map_scene(scene_raw: Any, scene_map: SceneMapping) -> list[str]:
     if not isinstance(scene_raw, str):
         return []
     key = scene_map.get(scene_raw.strip().lower())
@@ -133,8 +133,8 @@ def _map_scene(scene_raw: Any, scene_map: SceneMapping) -> List[str]:
     return [key]
 
 
-def _map_attributes(annotation: Dict[str, Any], attr_map: AttrMapping) -> Dict[str, bool]:
-    result: Dict[str, bool] = {}
+def _map_attributes(annotation: dict[str, Any], attr_map: AttrMapping) -> dict[str, bool]:
+    result: dict[str, bool] = {}
     for src_key, dst_key in attr_map.items():
         value = annotation.get(src_key)
         if isinstance(value, bool):
@@ -148,11 +148,11 @@ def _map_objects(
     *,
     min_confidence: float,
     only_main: bool,
-) -> List[str]:
+) -> list[str]:
     if not isinstance(objects, list):
         return []
 
-    labels: Set[str] = set()
+    labels: set[str] = set()
     for obj in objects:
         if not isinstance(obj, dict):
             continue
@@ -224,7 +224,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    seen_ids: Set[str] = set()
+    seen_ids: set[str] = set()
     converted = 0
 
     with output_path.open("w", encoding="utf-8") as out:
@@ -248,7 +248,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 only_main=not bool(args.include_non_main),
             )
 
-            gt_entry: Dict[str, Any] = {
+            gt_entry: dict[str, Any] = {
                 "image_id": image_id,
                 "scene": scene_labels,
                 "attributes": attr_payload,
@@ -264,6 +264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 

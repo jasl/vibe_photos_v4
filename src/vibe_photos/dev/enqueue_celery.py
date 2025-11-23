@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import List, Sequence
 
 import typer
 from sqlalchemy import select
@@ -16,7 +16,6 @@ from vibe_photos.db import Image, open_primary_session
 from vibe_photos.hasher import CONTENT_HASH_ALGO, compute_content_hash
 from vibe_photos.scanner import FileInfo, scan_roots
 from vibe_photos.task_queue import post_process, pre_process, process
-
 
 LOGGER = get_logger(__name__, extra={"component": "enqueue_celery"})
 
@@ -172,7 +171,7 @@ def _enqueue_targets(image_ids: Sequence[str], task: str) -> None:
 
 
 def main(
-    roots: List[Path] = typer.Argument(..., help="One or more directories to scan for images."),
+    roots: list[Path] = typer.Argument(..., help="One or more directories to scan for images."),
     db: Path = typer.Option(Path("data/index.db"), help="Path to the primary SQLite database."),
     task: str = typer.Option(
         "process",

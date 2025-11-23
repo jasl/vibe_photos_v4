@@ -2,19 +2,16 @@
 
 from __future__ import annotations
 
-from typing import List
-
 import typer
 from huggingface_hub import snapshot_download
 
 from utils.logging import get_logger
 from vibe_photos.config import Settings, load_settings
 
-
 LOGGER = get_logger(__name__)
 
 
-def _resolve_models(settings: Settings, include_detection: bool) -> List[str]:
+def _resolve_models(settings: Settings, include_detection: bool) -> list[str]:
     """Return a sorted list of unique model identifiers to download."""
 
     model_names = {

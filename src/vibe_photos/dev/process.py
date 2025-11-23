@@ -8,7 +8,6 @@ for local runs.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import typer
 from PIL import Image
@@ -16,7 +15,7 @@ from PIL import Image
 from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactManager
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import open_projection_session, open_primary_session
+from vibe_photos.db import open_primary_session, open_projection_session
 from vibe_photos.hasher import compute_content_hash
 from vibe_photos.labels.build_object_prototypes import build_object_prototypes
 from vibe_photos.labels.object_label_pass import run_object_label_pass
@@ -24,11 +23,10 @@ from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.pipeline import PreprocessingPipeline
 from vibe_photos.preprocessing import ensure_preprocessing_artifacts
 
-
 LOGGER = get_logger(__name__)
 
 
-def _apply_cli_overrides(settings: Settings, batch_size: Optional[int], device: Optional[str]) -> Settings:
+def _apply_cli_overrides(settings: Settings, batch_size: int | None, device: str | None) -> Settings:
     """Apply CLI overrides for batch size and device to the settings."""
 
     if batch_size is not None and batch_size > 0:
@@ -47,8 +45,8 @@ def ensure_artifacts_for_image(
     projection_db: Path,
     settings: Settings,
     *,
-    image_id: Optional[str] = None,
-    artifact_root: Optional[Path] = None,
+    image_id: str | None = None,
+    artifact_root: Path | None = None,
 ) -> str:
     """Create preprocessing artifacts for a single image using shared steps."""
 
@@ -91,7 +89,7 @@ def main(
         "--cache-db",
         help="Path to the projection SQLite database for model outputs.",
     ),
-    image_path: Optional[Path] = typer.Option(
+    image_path: Path | None = typer.Option(
         None,
         "--image-path",
         file_okay=True,
@@ -100,17 +98,17 @@ def main(
         readable=True,
         help="Process a single image into the projection cache using shared preprocessing steps.",
     ),
-    image_id: Optional[str] = typer.Option(
+    image_id: str | None = typer.Option(
         None,
         "--image-id",
         help="Optional image_id to use when --image-path is set; defaults to the content hash.",
     ),
-    batch_size: Optional[int] = typer.Option(
+    batch_size: int | None = typer.Option(
         None,
         "--batch-size",
         help="Override the model batch size configured in settings.yaml.",
     ),
-    device: Optional[str] = typer.Option(
+    device: str | None = typer.Option(
         None,
         "--device",
         help="Override the model device from settings.yaml, for example cpu, cuda, or mps.",
@@ -120,12 +118,12 @@ def main(
         "--run-object-labels/--skip-object-labels",
         help="Run the object label pass after preprocessing (the main pipeline already does this automatically).",
     ),
-    label_space: Optional[str] = typer.Option(
+    label_space: str | None = typer.Option(
         None,
         "--label-space",
         help="Label space version for object assignments; defaults to settings.label_spaces.object_current.",
     ),
-    prototype_name: Optional[str] = typer.Option(
+    prototype_name: str | None = typer.Option(
         None,
         "--prototype-name",
         help="Prototype file name (without .npz); defaults to settings.label_spaces.object_current.",

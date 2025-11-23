@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import time
 from collections import defaultdict
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
 from sqlalchemy import delete, select
@@ -15,7 +15,6 @@ from utils.logging import get_logger
 from vibe_photos.config import Settings
 from vibe_photos.db import (
     ClusterMembership,
-    Image,
     ImageEmbedding,
     ImageNearDuplicateMembership,
     ImageSimilarityCluster,
@@ -117,7 +116,7 @@ def run_region_cluster_pass(
         ).join(Region, Region.id == RegionEmbedding.region_id)
     )
 
-    path_by_id: Dict[str, Tuple[str, str]] = {}
+    path_by_id: dict[str, tuple[str, str]] = {}
     for row in region_rows:
         path_by_id[row.region_id] = (row.embedding_path, row.image_id)
 
@@ -161,7 +160,7 @@ def run_region_cluster_pass(
     return cluster_count, member_count
 
 
-def _load_scene_filtered_images(primary_session, settings: Settings, scene_keys: Sequence[str]) -> List[str]:
+def _load_scene_filtered_images(primary_session, settings: Settings, scene_keys: Sequence[str]) -> list[str]:
     scene_labels = {
         row.key: row.id
         for row in primary_session.execute(select(Label.id, Label.key).where(Label.key.in_(tuple(scene_keys))))
@@ -180,20 +179,20 @@ def _load_scene_filtered_images(primary_session, settings: Settings, scene_keys:
     return [row.target_id for row in rows]
 
 
-def _load_image_embedding_paths(projection_session, model_name: str, target_ids: Sequence[str]) -> Dict[str, str]:
+def _load_image_embedding_paths(projection_session, model_name: str, target_ids: Sequence[str]) -> dict[str, str]:
     rows = projection_session.execute(
         select(ImageEmbedding.image_id, ImageEmbedding.embedding_path).where(ImageEmbedding.model_name == model_name)
     )
-    mapping: Dict[str, str] = {}
+    mapping: dict[str, str] = {}
     for row in rows:
         if row.image_id in target_ids:
             mapping[row.image_id] = row.embedding_path
     return mapping
 
 
-def _load_vectors(cache_root: Path, path_map: Dict[str, str]) -> Tuple[List[np.ndarray], List[str]]:
-    vectors: List[np.ndarray] = []
-    valid_ids: List[str] = []
+def _load_vectors(cache_root: Path, path_map: dict[str, str]) -> tuple[list[np.ndarray], list[str]]:
+    vectors: list[np.ndarray] = []
+    valid_ids: list[str] = []
     for key, rel_path in path_map.items():
         emb_path = cache_root / "embeddings" / rel_path
         try:
@@ -214,7 +213,7 @@ def _build_knn_graph(
     vectors: Sequence[np.ndarray],
     k: int,
     sim_threshold: float,
-) -> Dict[str, set[str]]:
+) -> dict[str, set[str]]:
     if not vectors:
         return {}
 
@@ -222,7 +221,7 @@ def _build_knn_graph(
     sim_matrix = matrix @ matrix.T
     np.fill_diagonal(sim_matrix, 0.0)
 
-    graph: Dict[str, set[str]] = defaultdict(set)
+    graph: dict[str, set[str]] = defaultdict(set)
     for idx, sims in enumerate(sim_matrix):
         neighbors = np.argsort(sims)[::-1]
         added = 0
@@ -241,17 +240,17 @@ def _build_knn_graph(
 
 def _extract_components(
     node_ids: Sequence[str],
-    graph: Dict[str, set[str]],
+    graph: dict[str, set[str]],
     min_size: int,
-) -> List[List[str]]:
+) -> list[list[str]]:
     visited: set[str] = set()
-    components: List[List[str]] = []
+    components: list[list[str]] = []
 
     for node in node_ids:
         if node in visited:
             continue
         stack = [node]
-        component: List[str] = []
+        component: list[str] = []
         while stack:
             current = stack.pop()
             if current in visited:
@@ -295,9 +294,9 @@ def _write_clusters(
     target_type: str,
     label_space: str,
     components: Sequence[Sequence[str]],
-    vector_by_id: Dict[str, np.ndarray],
-    parent_lookup: Dict[str, str] | None,
-    params: Dict[str, object],
+    vector_by_id: dict[str, np.ndarray],
+    parent_lookup: dict[str, str] | None,
+    params: dict[str, object],
 ) -> tuple[int, int]:
     cluster_count = 0
     member_count = 0
@@ -367,7 +366,7 @@ def _write_clusters(
     return cluster_count, member_count
 
 
-def _select_cluster_center(component: Sequence[str], vector_by_id: Dict[str, np.ndarray]) -> str | None:
+def _select_cluster_center(component: Sequence[str], vector_by_id: dict[str, np.ndarray]) -> str | None:
     best_id: str | None = None
     best_score: float = -1.0
     for member_id in component:

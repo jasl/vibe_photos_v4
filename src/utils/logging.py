@@ -6,8 +6,7 @@ import json
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Dict
-
+from typing import Any
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _LOG_ROOT = _PROJECT_ROOT / "log"
@@ -19,11 +18,11 @@ class _StructuredFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         # Compute non-standard attributes added via ``extra=``.
         standard_keys = logging.makeLogRecord({}).__dict__.keys()
-        extras: Dict[str, Any] = {
+        extras: dict[str, Any] = {
             key: value for key, value in record.__dict__.items() if key not in standard_keys and key != "stack_info"
         }
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "timestamp": self.formatTime(record, self.datefmt),
             "level": record.levelname,
             "logger": record.name,
@@ -38,7 +37,7 @@ class _StructuredFormatter(logging.Formatter):
             return json.dumps(payload, ensure_ascii=False, sort_keys=True)
         except TypeError:
             # Fallback to string representation when an extra field is not JSON-serializable.
-            safe_payload: Dict[str, Any] = {
+            safe_payload: dict[str, Any] = {
                 key: (str(value) if not isinstance(value, (str, int, float, bool, type(None))) else value)
                 for key, value in payload.items()
             }
@@ -52,7 +51,7 @@ class _ConsoleFormatter(logging.Formatter):
         base = super().format(record)
         standard_keys = logging.makeLogRecord({}).__dict__.keys()
         ignore_keys = set(standard_keys) | {"stack_info", "asctime", "message"}
-        extras: Dict[str, Any] = {key: value for key, value in record.__dict__.items() if key not in ignore_keys}
+        extras: dict[str, Any] = {key: value for key, value in record.__dict__.items() if key not in ignore_keys}
 
         if not extras:
             return base
@@ -93,7 +92,7 @@ def _configure_root_logger() -> None:
         pass
 
 
-def get_logger(name: str, extra: Dict[str, Any] | None = None) -> logging.LoggerAdapter:
+def get_logger(name: str, extra: dict[str, Any] | None = None) -> logging.LoggerAdapter:
     """Return a structured logger adapter for the given name.
 
     The first call configures a simple root handler. Callers can pass a base

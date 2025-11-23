@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence
+from typing import Any
 
 import typer
 from sqlalchemy import select
@@ -35,7 +36,7 @@ def main(
     _print_metrics(metrics)
 
 
-def _load_ground_truth(path: Path) -> List[Dict[str, Any]]:
+def _load_ground_truth(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     text = path.read_text(encoding="utf-8")
@@ -47,7 +48,7 @@ def _load_ground_truth(path: Path) -> List[Dict[str, Any]]:
             return [entry for entry in data if isinstance(entry, dict)]
     except json.JSONDecodeError:
         # Try JSONL
-        lines: List[Dict[str, Any]] = []
+        lines: list[dict[str, Any]] = []
         for line in text.splitlines():
             line = line.strip()
             if not line:
@@ -62,11 +63,11 @@ def _load_ground_truth(path: Path) -> List[Dict[str, Any]]:
     return []
 
 
-def _compute_metrics(session, settings, records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+def _compute_metrics(session, settings, records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     scene_total = 0
     scene_correct = 0
 
-    attr_metrics: Dict[str, Dict[str, int]] = {
+    attr_metrics: dict[str, dict[str, int]] = {
         key: {"tp": 0, "fp": 0, "fn": 0, "tn": 0} for key in ATTRIBUTE_LABEL_KEYS.values()
     }
 
@@ -154,7 +155,7 @@ def _predict_attributes(session, image_id: str, settings) -> set[str]:
     return {row.key for row in rows}
 
 
-def _predict_objects(session, image_id: str, settings) -> List[str]:
+def _predict_objects(session, image_id: str, settings) -> list[str]:
     rows = session.execute(
         select(Label.key, LabelAssignment.score)
         .join(Label, Label.id == LabelAssignment.label_id)
@@ -169,7 +170,7 @@ def _predict_objects(session, image_id: str, settings) -> List[str]:
     return [row.key for row in rows]
 
 
-def _as_list(value: Any) -> List[str]:
+def _as_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     if isinstance(value, str):
@@ -187,7 +188,7 @@ def _recall(tp: int, fn: int) -> float:
     return tp / denom if denom else 0.0
 
 
-def _print_metrics(metrics: Dict[str, Any]) -> None:
+def _print_metrics(metrics: dict[str, Any]) -> None:
     scene = metrics["scene"]
     scene_total = max(1, scene["total"])
     scene_acc = scene["correct"] / scene_total

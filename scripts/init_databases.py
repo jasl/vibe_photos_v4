@@ -12,8 +12,8 @@ from __future__ import annotations
 import argparse
 import sqlite3
 import sys
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Iterable, Sequence
 
 # Ensure src/ is on sys.path so we can import shared logging and DB helpers.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +22,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.append(str(SRC_ROOT))
 
 from utils.logging import get_logger  # noqa: E402
-from vibe_photos.db import Base, open_primary_session, open_projection_session  # noqa: E402
+from vibe_photos.db import open_primary_session, open_projection_session  # noqa: E402
 
 LOGGER = get_logger(__name__)
 

@@ -6,11 +6,10 @@ from pathlib import Path
 from typing import Final
 
 import numpy as np
-from PIL import Image
 import xxhash
+from PIL import Image
 
 from utils.logging import get_logger
-
 
 LOGGER = get_logger(__name__)
 

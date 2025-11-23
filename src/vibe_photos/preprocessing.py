@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Iterable
 
 from PIL import Image
 
@@ -41,7 +40,7 @@ def extract_exif_payload(image: Image.Image) -> dict:
     except Exception:
         return {}
 
-    payload: Dict[str, object] = {}
+    payload: dict[str, object] = {}
     for tag_id, value in dict(exif).items():
         payload[str(tag_id)] = value if isinstance(value, (int, float, str)) else str(value)
     return payload

@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
 
-from PIL import Image
 import torch
+from PIL import Image
 from transformers import AutoModel, AutoProcessor
 
 from vibe_photos.config import load_settings
@@ -114,7 +114,7 @@ def classify_images(
             image_embedding = model.get_image_features(**inputs)
 
         primary_category, scores = classifier.classify_from_image_embedding(image_embedding)
-        top_scores: List[Tuple[str, float]] = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)[:3]
+        top_scores: list[tuple[str, float]] = sorted(scores.items(), key=lambda pair: pair[1], reverse=True)[:3]
 
         print(f"{image_path}:")
         print(f"  primary: {primary_category}")
@@ -126,7 +126,7 @@ def classify_images(
             emb = image_embedding[0] if image_embedding.ndim == 2 else image_embedding
             emb = emb / emb.norm()
             sims = emb @ raw_label_embeddings.T  # shape: (num_labels,)
-            raw_scores: Dict[str, float] = {
+            raw_scores: dict[str, float] = {
                 label: float(score) for label, score in zip(labels_for_raw, sims.tolist())
             }
             top_raw = sorted(raw_scores.items(), key=lambda pair: pair[1], reverse=True)[:5]
@@ -155,7 +155,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     image_paths = list(iter_image_paths(images_dir))
-    raw_labels: List[str] = list(settings.models.siglip_labels.candidate_labels)
+    raw_labels: list[str] = list(settings.models.siglip_labels.candidate_labels)
     classify_images(
         image_paths=image_paths,
         model_name=model_name,

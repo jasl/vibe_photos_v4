@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Dict, List, Sequence
 
 import numpy as np
 import torch
@@ -18,11 +17,11 @@ from vibe_photos.ml.models import get_siglip_embedding_model
 LOGGER = get_logger(__name__, extra={"command": "build_object_prototypes"})
 
 
-def _collect_alias_texts(session, label_id: int) -> Dict[str | None, List[str]]:
+def _collect_alias_texts(session, label_id: int) -> dict[str | None, list[str]]:
     rows = session.execute(
         select(LabelAlias.alias_text, LabelAlias.language).where(LabelAlias.label_id == label_id)
     ).all()
-    grouped: Dict[str | None, List[str]] = {}
+    grouped: dict[str | None, list[str]] = {}
     for alias_text, language in rows:
         grouped.setdefault(language, []).append(alias_text)
     return grouped
@@ -43,13 +42,13 @@ def build_object_prototypes(
         select(Label).where(Label.level == "object", Label.is_active.is_(True)).order_by(Label.id)
     ).scalars()
 
-    label_ids: List[int] = []
-    label_keys: List[str] = []
-    prototype_vecs: List[np.ndarray] = []
+    label_ids: list[int] = []
+    label_keys: list[str] = []
+    prototype_vecs: list[np.ndarray] = []
 
     for label in label_rows:
         alias_map = _collect_alias_texts(session, label.id)
-        candidates: List[str] = []
+        candidates: list[str] = []
         candidates.extend(alias_map.get("en", []))
         candidates.extend(alias_map.get("zh", []))
         candidates.extend(alias_map.get(None, []))

@@ -7,7 +7,6 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
 
 
 class ConfidenceLevel(Enum):
@@ -25,19 +24,19 @@ class RecognitionResult:
     image_path: str
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
-    ai_category: Optional[str] = None
-    ai_confidence: Optional[float] = None
-    ai_suggestions: List[Dict[str, object]] = field(default_factory=list)
+    ai_category: str | None = None
+    ai_confidence: float | None = None
+    ai_suggestions: list[dict[str, object]] = field(default_factory=list)
 
-    human_label: Optional[str] = None
+    human_label: str | None = None
     human_verified: bool = False
 
-    confidence_level: Optional[ConfidenceLevel] = None
-    action_taken: Optional[str] = None
+    confidence_level: ConfidenceLevel | None = None
+    action_taken: str | None = None
     needs_review: bool = True
 
     used_for_training: bool = False
-    similar_images: List[str] = field(default_factory=list)
+    similar_images: list[str] = field(default_factory=list)
 
 
 class HybridRecognizer:
@@ -50,8 +49,8 @@ class HybridRecognizer:
             "reject": 0.3,
         }
 
-        self.learned_patterns: Dict[str, int] = {}
-        self.annotation_history: List[Dict[str, object]] = []
+        self.learned_patterns: dict[str, int] = {}
+        self.annotation_history: list[dict[str, object]] = []
         self.user_preferences = {
             "common_labels": ["iPhone", "MacBook", "Pizza", "Screenshot"],
             "recent_labels": [],
@@ -63,7 +62,7 @@ class HybridRecognizer:
             },
         }
 
-    def recognize(self, image_path: str, ai_prediction: Tuple[str, float]) -> RecognitionResult:
+    def recognize(self, image_path: str, ai_prediction: tuple[str, float]) -> RecognitionResult:
         """Run the hybrid recognition flow for a single image."""
         category, confidence = ai_prediction
 
@@ -122,13 +121,13 @@ class HybridRecognizer:
         print(f"✏️ Human label applied: {human_label}")
         return result
 
-    def batch_apply(self, primary_result: RecognitionResult, similar_images: List[str]) -> List[RecognitionResult]:
+    def batch_apply(self, primary_result: RecognitionResult, similar_images: list[str]) -> list[RecognitionResult]:
         """Propagate a confirmed label to similar assets."""
         if not primary_result.human_verified:
             print("⚠️ Primary image is not verified; skip batch propagation.")
             return []
 
-        results: List[RecognitionResult] = []
+        results: list[RecognitionResult] = []
         for image in similar_images:
             batch_result = RecognitionResult(
                 image_path=image,
@@ -144,9 +143,9 @@ class HybridRecognizer:
         print(f"🎯 Applied label '{primary_result.human_label}' to {len(results)} similar images")
         return results
 
-    def generate_annotation_ui(self, result: RecognitionResult) -> Dict[str, object]:
+    def generate_annotation_ui(self, result: RecognitionResult) -> dict[str, object]:
         """Produce UI hints for a hypothetical annotation console."""
-        ui_data: Dict[str, object] = {
+        ui_data: dict[str, object] = {
             "image": result.image_path,
             "ai_prediction": {
                 "category": result.ai_category,
@@ -206,9 +205,9 @@ class HybridRecognizer:
             return ConfidenceLevel.MEDIUM
         return ConfidenceLevel.LOW
 
-    def _generate_suggestions(self, image_path: str, primary_category: str) -> List[Dict[str, object]]:
+    def _generate_suggestions(self, image_path: str, primary_category: str) -> list[dict[str, object]]:
         """Craft alternate suggestions for human review."""
-        suggestions: List[Dict[str, object]] = []
+        suggestions: list[dict[str, object]] = []
 
         if self.user_preferences["recent_labels"]:
             suggestions.append(
@@ -231,7 +230,7 @@ class HybridRecognizer:
 
         return suggestions
 
-    def _find_similar_images(self, image_path: str) -> List[str]:
+    def _find_similar_images(self, image_path: str) -> list[str]:
         """Mock similar-image lookup using randomness."""
         import random
 
@@ -251,7 +250,7 @@ class HybridRecognizer:
         if self.learned_patterns[key] >= 5:
             print("💡 Frequent correction detected. Consider retraining the model.")
 
-    def get_statistics(self) -> Dict[str, object]:
+    def get_statistics(self) -> dict[str, object]:
         """Summarize annotation metrics."""
         total = len(self.annotation_history)
         if total == 0:
@@ -285,7 +284,7 @@ def demo() -> None:
         ("photo5.jpg", ("Laptop", 0.55)),
     ]
 
-    results: List[RecognitionResult] = []
+    results: list[RecognitionResult] = []
 
     for image_path, ai_prediction in test_cases:
         print(f"\n--- Processing: {image_path} ---")

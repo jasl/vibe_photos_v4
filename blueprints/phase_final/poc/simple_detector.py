@@ -3,7 +3,6 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List
 
 import torch
 from PIL import Image
@@ -18,8 +17,8 @@ class DetectionResult:
 
     category: str
     confidence: float
-    alternatives: List[Dict[str, float]]
-    metadata: Dict[str, object]
+    alternatives: list[dict[str, float]]
+    metadata: dict[str, object]
 
 
 class SimpleDetector:
@@ -68,11 +67,11 @@ class SimpleDetector:
             metadata=metadata,
         )
 
-    def detect_hierarchical(self, image_path: Path) -> Dict[str, Dict[str, float]]:
+    def detect_hierarchical(self, image_path: Path) -> dict[str, dict[str, float]]:
         """Perform hierarchical classification from coarse to fine labels."""
         general_result = self.detect(image_path, "general")
 
-        results: Dict[str, Dict[str, float]] = {
+        results: dict[str, dict[str, float]] = {
             "level1": {
                 "category": general_result.category,
                 "confidence": general_result.confidence,

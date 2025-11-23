@@ -14,18 +14,19 @@ from __future__ import annotations
 import argparse
 import json
 import random
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any
 
 
-def _load_records(path: Path) -> List[Dict[str, Any]]:
+def _load_records(path: Path) -> list[dict[str, Any]]:
     text = path.read_text(encoding="utf-8")
 
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
         # Fallback: treat as JSONL.
-        records: List[Dict[str, Any]] = []
+        records: list[dict[str, Any]] = []
         for line in text.splitlines():
             line_stripped = line.strip()
             if not line_stripped:
@@ -104,6 +105,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
 
 

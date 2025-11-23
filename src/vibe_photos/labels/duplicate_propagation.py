@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from typing import Dict, List
 
 from sqlalchemy import delete, select
 
@@ -15,7 +14,7 @@ from vibe_photos.labels.repository import LabelRepository
 LOGGER = get_logger(__name__, extra={"component": "duplicate_propagation"})
 
 
-def _load_duplicate_map(primary_session) -> Dict[str, List[str]]:
+def _load_duplicate_map(primary_session) -> dict[str, list[str]]:
     groups = {
         row.id: row.canonical_image_id
         for row in primary_session.execute(
@@ -33,7 +32,7 @@ def _load_duplicate_map(primary_session) -> Dict[str, List[str]]:
         )
     ).all()
 
-    duplicates: Dict[str, List[str]] = defaultdict(list)
+    duplicates: dict[str, list[str]] = defaultdict(list)
     for row in rows:
         canonical_id = groups.get(row.group_id)
         if canonical_id is None or row.is_canonical:

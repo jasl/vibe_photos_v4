@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Iterable, Sequence
+from collections.abc import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session

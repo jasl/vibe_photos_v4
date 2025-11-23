@@ -43,13 +43,15 @@ import json
 import os
 import sys
 import time
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
+from typing import Any
 
-from PIL import Image, ImageOps
 from openai import OpenAI
+from PIL import Image, ImageOps
+
 from vibe_photos.hasher import compute_content_hash
 
 
@@ -126,7 +128,7 @@ coarse_type 字段只能从下面的枚举中选择一个：
 """
 
 
-def iter_images(root: Path, exts: Optional[Sequence[str]] = None) -> Iterable[Path]:
+def iter_images(root: Path, exts: Sequence[str] | None = None) -> Iterable[Path]:
     """Yield image files under a root directory."""
 
     if exts is None:
@@ -169,7 +171,7 @@ def _prepare_image_payload_bytes(path: Path, opts: ImagePayloadOptions) -> tuple
             working = working.convert("RGB")
 
         buffer = io.BytesIO()
-        save_kwargs: Dict[str, Any] = {}
+        save_kwargs: dict[str, Any] = {}
         if target_format == "JPEG":
             save_kwargs["quality"] = opts.jpeg_quality
             save_kwargs["optimize"] = True
@@ -194,10 +196,10 @@ def encode_image_to_data_url(path: Path, payload_opts: ImagePayloadOptions | Non
     return f"data:{mime};base64,{b64}"
 
 
-def load_processed_ids(output: Path) -> Set[str]:
+def load_processed_ids(output: Path) -> set[str]:
     """Load already processed image_ids from an existing JSONL file."""
 
-    processed: Set[str] = set()
+    processed: set[str] = set()
     if not output.exists():
         return processed
 
@@ -224,7 +226,7 @@ class QwenVLAnnotator:
         self._image_opts = image_opts or ImagePayloadOptions()
         self._client = OpenAI(base_url=cfg.base_url, api_key=cfg.api_key)
 
-    def _build_messages(self, image_data_url: str) -> List[Dict[str, Any]]:
+    def _build_messages(self, image_data_url: str) -> list[dict[str, Any]]:
         return [
             {
                 "role": "system",
@@ -245,7 +247,7 @@ class QwenVLAnnotator:
             },
         ]
 
-    def annotate_image(self, image_path: Path) -> Dict[str, Any]:
+    def annotate_image(self, image_path: Path) -> dict[str, Any]:
         """Call Qwen3-VL to obtain a JSON annotation for a single image."""
 
         data_url = encode_image_to_data_url(image_path, self._image_opts)
@@ -357,13 +359,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"[ERROR] Image root does not exist: {root}\n")
         return 1
 
-    processed_ids: Set[str] = set()
+    processed_ids: set[str] = set()
     if args.resume:
         processed_ids = load_processed_ids(output)
         sys.stderr.write(f"[INFO] Resume enabled; {len(processed_ids)} image_ids already present in {output}\n")
 
     total_seen = 0
-    tasks: List[tuple[str, Path]] = []
+    tasks: list[tuple[str, Path]] = []
 
     for image_path in iter_images(root):
         total_seen += 1
@@ -383,7 +385,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     total_new = 0
 
-    def _worker(image_id: str, image_path: Path) -> tuple[str, Path, Dict[str, Any]]:
+    def _worker(image_id: str, image_path: Path) -> tuple[str, Path, dict[str, Any]]:
         annotation = annotator.annotate_image(image_path)
         return image_id, image_path, annotation
 

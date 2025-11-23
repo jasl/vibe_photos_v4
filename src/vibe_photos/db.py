@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Lock
-from typing import Dict
 
 from sqlalchemy import (
     Boolean,
@@ -24,7 +23,6 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from utils.logging import get_logger
-
 
 LOGGER = get_logger(__name__)
 
@@ -367,7 +365,7 @@ class LabelAssignment(Base):
     )
 
 
-_ENGINE_CACHE: Dict[Path, Engine] = {}
+_ENGINE_CACHE: dict[Path, Engine] = {}
 _ENGINE_LOCK = Lock()
 
 

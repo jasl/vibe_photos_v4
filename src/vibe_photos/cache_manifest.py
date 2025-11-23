@@ -7,11 +7,10 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from utils.logging import get_logger
 from vibe_photos.config import Settings
-
 
 LOGGER = get_logger(__name__)
 
@@ -35,15 +34,15 @@ class CacheManifest:
 
     cache_format_version: int
     created_at: float
-    models: Dict[str, Any]
-    pipeline: Dict[str, Any]
+    models: dict[str, Any]
+    pipeline: dict[str, Any]
 
 
 def _manifest_path(cache_root: Path) -> Path:
     return cache_root / "manifest.json"
 
 
-def _build_manifest_payload(settings: Settings, created_at: float | None = None) -> Dict[str, Any]:
+def _build_manifest_payload(settings: Settings, created_at: float | None = None) -> dict[str, Any]:
     return {
         "cache_format_version": CACHE_FORMAT_VERSION,
         "created_at": created_at or time.time(),
@@ -75,11 +74,11 @@ def _build_manifest_payload(settings: Settings, created_at: float | None = None)
     }
 
 
-def _payloads_match(existing: CacheManifest, expected: Dict[str, Any]) -> bool:
+def _payloads_match(existing: CacheManifest, expected: dict[str, Any]) -> bool:
     if existing.cache_format_version != expected.get("cache_format_version"):
         return False
 
-    def _normalize(block: Dict[str, Any]) -> Dict[str, Any]:
+    def _normalize(block: dict[str, Any]) -> dict[str, Any]:
         return json.loads(json.dumps(block, sort_keys=True))
 
     existing_models = _normalize(existing.models)
@@ -89,7 +88,7 @@ def _payloads_match(existing: CacheManifest, expected: Dict[str, Any]) -> bool:
     return existing_models == expected_models and existing_pipeline == expected_pipeline
 
 
-def load_cache_manifest(cache_root: Path) -> Optional[CacheManifest]:
+def load_cache_manifest(cache_root: Path) -> CacheManifest | None:
     """Load the cache manifest from ``cache/manifest.json`` if present."""
 
     path = _manifest_path(cache_root)

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Literal
 
 import typer
 from sqlalchemy import delete
@@ -20,7 +21,6 @@ from vibe_photos.db import (
     RegionEmbedding,
     open_projection_session,
 )
-
 
 LOGGER = get_logger(__name__)
 

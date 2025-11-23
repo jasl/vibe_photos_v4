@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import json
 import math
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-from collections import defaultdict
 
 from flask import Flask, abort, redirect, render_template, request, send_file, url_for
 from sqlalchemy import and_, exists, func, or_, select
@@ -15,10 +14,18 @@ from sqlalchemy import and_, exists, func, or_, select
 from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactSpec
 from vibe_photos.config import load_settings
-from vibe_photos.db import ArtifactRecord, Image, ImageCaption, ImageNearDuplicate, Label, LabelAssignment, Region
+from vibe_photos.db import (
+    ArtifactRecord,
+    Image,
+    ImageCaption,
+    ImageNearDuplicate,
+    Label,
+    LabelAssignment,
+    Region,
+    open_primary_session,
+    open_projection_session,
+)
 from vibe_photos.labels.scene_schema import ATTRIBUTE_LABEL_KEYS, normalize_scene_filter, scene_type_from_label_key
-from vibe_photos.db import open_primary_session, open_projection_session
-
 
 LOGGER = get_logger(__name__)
 
@@ -44,7 +51,7 @@ def _is_checked(value: str | None) -> bool:
     return lowered in {"1", "true", "yes", "on"}
 
 
-def _load_label_ids(session, keys) -> Dict[str, int]:
+def _load_label_ids(session, keys) -> dict[str, int]:
     key_list = [key for key in keys if key]
     if not key_list:
         return {}
@@ -92,7 +99,7 @@ def images() -> Any:
     page_size = max(1, min(64, int(request.args.get("page_size", "24"))))
     offset = (page - 1) * page_size
 
-    region_filter_ids: Optional[set[str]] = None
+    region_filter_ids: set[str] | None = None
 
     primary_path = _get_primary_db_path()
 
@@ -180,10 +187,10 @@ def images() -> Any:
         }
 
         image_ids = [row.image_id for row in rows]
-        scenes_by_image: Dict[str, Dict[str, Any]] = {}
-        attributes_by_image: Dict[str, Dict[str, bool]] = defaultdict(dict)
-        objects_by_image: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-        clusters_by_image: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        scenes_by_image: dict[str, dict[str, Any]] = {}
+        attributes_by_image: dict[str, dict[str, bool]] = defaultdict(dict)
+        objects_by_image: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        clusters_by_image: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
         if image_ids:
             label_rows = session.execute(
@@ -246,25 +253,25 @@ def images() -> Any:
                         }
                     )
 
-    items: List[Dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
     for row in rows:
         image_id = row.image_id
         scene_entry = scenes_by_image.get(image_id)
         scene_label = scene_type_from_label_key(scene_entry["key"]) if scene_entry else None
         attr_flags = attributes_by_image.get(image_id, {})
-            items.append(
-                {
-                    "image_id": image_id,
-                    "scene_type": scene_label,
-                    "has_text": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_text"])),
-                    "has_person": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_person"])),
-                    "is_screenshot": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_screenshot"])),
-                    "is_document": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_document"])),
-                    "is_duplicate": image_id in dup_ids,
-                    "objects": sorted(objects_by_image.get(image_id, []), key=lambda entry: entry.get("score", 0.0), reverse=True)[:4],
-                    "clusters": sorted(clusters_by_image.get(image_id, []), key=lambda entry: entry.get("score", 0.0), reverse=True)[:3],
-                }
-            )
+        items.append(
+            {
+                "image_id": image_id,
+                "scene_type": scene_label,
+                "has_text": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_text"])),
+                "has_person": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["has_person"])),
+                "is_screenshot": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_screenshot"])),
+                "is_document": bool(attr_flags.get(ATTRIBUTE_LABEL_KEYS["is_document"])),
+                "is_duplicate": image_id in dup_ids,
+                "objects": sorted(objects_by_image.get(image_id, []), key=lambda entry: entry.get("score", 0.0), reverse=True)[:4],
+                "clusters": sorted(clusters_by_image.get(image_id, []), key=lambda entry: entry.get("score", 0.0), reverse=True)[:3],
+            }
+        )
 
     return render_template(
         "images.html",
@@ -306,7 +313,7 @@ def image_detail(image_id: str) -> Any:
     primary_path_str = image_row.primary_path
     logical_name = Path(primary_path_str).name
 
-    region_rows: List[Region] = []
+    region_rows: list[Region] = []
     projection_path = _get_projection_db_path()
     if projection_path.exists():
         with open_projection_session(projection_path) as projection_session:
@@ -400,9 +407,9 @@ def image_detail(image_id: str) -> Any:
                 )
             ).all()
 
-    scene_entry: Dict[str, Any] | None = None
-    attr_flags: Dict[str, bool] = {}
-    object_labels: List[Dict[str, Any]] = [
+    scene_entry: dict[str, Any] | None = None
+    attr_flags: dict[str, bool] = {}
+    object_labels: list[dict[str, Any]] = [
         {
             "display_name": row.display_name,
             "key": row.key,
@@ -411,7 +418,7 @@ def image_detail(image_id: str) -> Any:
         }
         for row in image_object_rows
     ]
-    cluster_labels: List[Dict[str, Any]] = [
+    cluster_labels: list[dict[str, Any]] = [
         {
             "display_name": row.display_name,
             "key": row.key,
@@ -420,8 +427,8 @@ def image_detail(image_id: str) -> Any:
         }
         for row in cluster_image_rows
     ]
-    region_object_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    region_cluster_map: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    region_object_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    region_cluster_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
     for row in region_object_rows:
         region_object_map[row.target_id].append(
@@ -444,9 +451,9 @@ def image_detail(image_id: str) -> Any:
             continue
         attr_flags[row.key] = True
 
-    scene_info: Dict[str, Any] | None = None
+    scene_info: dict[str, Any] | None = None
     if scene_entry is not None:
-        extra_payload: Dict[str, Any] = {}
+        extra_payload: dict[str, Any] = {}
         if scene_entry.get("extra"):
             try:
                 extra_payload = json.loads(scene_entry["extra"])
@@ -463,14 +470,14 @@ def image_detail(image_id: str) -> Any:
             "classifier_name": extra_payload.get("classifier_name"),
             "classifier_version": extra_payload.get("classifier_version"),
         }
-    caption_text: Optional[str] = None
-    caption_model: Optional[str] = None
+    caption_text: str | None = None
+    caption_model: str | None = None
     if caption_row is not None:
         caption_text = caption_row.caption
         caption_model = caption_row.model_name
 
     # Near-duplicate images (both as anchor and as duplicate).
-    near_duplicates: List[Dict[str, Any]] = []
+    near_duplicates: list[dict[str, Any]] = []
     with open_primary_session(primary_path) as session:
         anchor_rows = (
             session.execute(
@@ -487,7 +494,7 @@ def image_detail(image_id: str) -> Any:
             .all()
         )
 
-        related_ids: Dict[str, Dict[str, Any]] = {}
+        related_ids: dict[str, dict[str, Any]] = {}
 
         for row in anchor_rows:
             other_id = row.duplicate_image_id
@@ -540,7 +547,7 @@ def image_detail(image_id: str) -> Any:
                 extra={"image_id": image_id, "path": str(metadata_path), "error": str(exc)},
             )
 
-    regions: List[Dict[str, Any]] = []
+    regions: list[dict[str, Any]] = []
     if region_rows:
         detection_cfg = settings.models.detection
         area_gamma = float(detection_cfg.primary_area_gamma)

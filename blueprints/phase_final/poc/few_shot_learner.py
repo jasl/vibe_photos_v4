@@ -8,7 +8,6 @@ import pickle
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -23,9 +22,9 @@ class ProductPrototype:
     sample_count: int
     threshold: float
     created_at: str
-    accuracy: Optional[float] = None
+    accuracy: float | None = None
 
-    def to_dict(self) -> Dict[str, object]:
+    def to_dict(self) -> dict[str, object]:
         """Serialize metadata for reporting."""
         return {
             "name": self.name,
@@ -42,13 +41,13 @@ class FewShotLearner:
 
     def __init__(self, feature_dim: int = 512) -> None:
         self.feature_dim = feature_dim
-        self.prototypes: Dict[str, ProductPrototype] = {}
+        self.prototypes: dict[str, ProductPrototype] = {}
         self.min_samples = 3
         self.max_samples = 20
         self.feature_extractor = self._mock_feature_extractor
         print(f"Few-shot learner ready (feature dimension: {feature_dim})")
 
-    def learn_new_product(self, product_name: str, category: str, sample_images: List[str]) -> ProductPrototype:
+    def learn_new_product(self, product_name: str, category: str, sample_images: list[str]) -> ProductPrototype:
         """Create a prototype from a handful of labeled samples."""
         n_samples = len(sample_images)
         if n_samples < self.min_samples:
@@ -92,14 +91,14 @@ class FewShotLearner:
         print(f"✅ Learned product: {product_name}")
         return prototype
 
-    def recognize(self, image_path: str, top_k: int = 3) -> List[Tuple[str, float]]:
+    def recognize(self, image_path: str, top_k: int = 3) -> list[tuple[str, float]]:
         """Recognize the most likely learned products in an image."""
         if not self.prototypes:
             return [("No learned products", 0.0)]
 
         feature = self.feature_extractor(image_path)
 
-        similarities: List[Tuple[str, float]] = []
+        similarities: list[tuple[str, float]] = []
         for product_name, prototype in self.prototypes.items():
             similarity = self._compute_similarity(feature, prototype.feature_vector)
             if similarity >= prototype.threshold:
@@ -111,7 +110,7 @@ class FewShotLearner:
 
         return similarities[:top_k]
 
-    def update_product(self, product_name: str, new_samples: List[str]) -> None:
+    def update_product(self, product_name: str, new_samples: list[str]) -> None:
         """Incrementally update an existing prototype with new samples."""
         if product_name not in self.prototypes:
             raise ValueError(f"Product {product_name} is not trained yet.")
@@ -149,9 +148,9 @@ class FewShotLearner:
         else:
             print(f"Product not found: {product_name}")
 
-    def list_products(self) -> List[Dict[str, object]]:
+    def list_products(self) -> list[dict[str, object]]:
         """List all learned products."""
-        items: List[Dict[str, object]] = []
+        items: list[dict[str, object]] = []
         for name, prototype in self.prototypes.items():
             items.append(
                 {

@@ -5,14 +5,15 @@ from __future__ import annotations
 import json
 import shutil
 import time
+from collections import defaultdict
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from collections import defaultdict
-from typing import Callable, Dict, List, Optional, Sequence
 
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
 from utils.logging import get_logger
 from vibe_photos.cache_manifest import CACHE_FORMAT_VERSION, ensure_cache_manifest
 from vibe_photos.config import Settings, _normalize_siglip_label, load_settings
@@ -34,7 +35,6 @@ from vibe_photos.hasher import (
     PHASH_ALGO,
     compute_content_hash,
     compute_perceptual_hash,
-    hamming_distance_phash,
 )
 from vibe_photos.labels.build_object_prototypes import build_object_prototypes
 from vibe_photos.labels.cluster_pass import run_image_cluster_pass, run_region_cluster_pass
@@ -45,7 +45,6 @@ from vibe_photos.ml.models import get_blip_caption_model, get_siglip_embedding_m
 from vibe_photos.scanner import FileInfo, scan_roots
 from vibe_photos.thumbnailing import save_thumbnail
 
-
 LOGGER = get_logger(__name__)
 
 
@@ -54,11 +53,11 @@ class RunJournalRecord:
     """Lightweight checkpoint for resumable pipeline execution."""
 
     stage: str
-    cursor_image_id: Optional[str]
+    cursor_image_id: str | None
     updated_at: float
 
 
-def _extract_exif_and_gps(image, datetime_format: str = "raw") -> tuple[Optional[str], Optional[str], Optional[Dict[str, object]]]:
+def _extract_exif_and_gps(image, datetime_format: str = "raw") -> tuple[str | None, str | None, dict[str, object] | None]:
     """Extract EXIF datetime, camera model, and GPS coordinates from a PIL image.
 
     Returns a tuple of ``(exif_datetime, camera_model, gps_payload)`` where the GPS payload,
@@ -80,13 +79,13 @@ def _extract_exif_and_gps(image, datetime_format: str = "raw") -> tuple[Optional
         return None, None, None
 
     exif_dict = dict(exif)
-    exif_by_name: Dict[str, object] = {}
+    exif_by_name: dict[str, object] = {}
     for tag_id, value in exif_dict.items():
         name = _ExifTags.TAGS.get(tag_id, str(tag_id))
         exif_by_name[name] = value
 
-    exif_datetime: Optional[str] = None
-    camera_model: Optional[str] = None
+    exif_datetime: str | None = None
+    camera_model: str | None = None
 
     raw_dt = exif_by_name.get("DateTimeOriginal") or exif_by_name.get("DateTime")
     if isinstance(raw_dt, str):
@@ -113,7 +112,7 @@ def _extract_exif_and_gps(image, datetime_format: str = "raw") -> tuple[Optional
     if not gps_info or not isinstance(gps_info, dict):
         return exif_datetime, camera_model, None
 
-    gps_tags: Dict[str, object] = {}
+    gps_tags: dict[str, object] = {}
     for key, value in gps_info.items():
         name = _ExifTags.GPSTAGS.get(key, str(key))
         gps_tags[name] = value
@@ -123,7 +122,7 @@ def _extract_exif_and_gps(image, datetime_format: str = "raw") -> tuple[Optional
     lon = gps_tags.get("GPSLongitude")
     lon_ref = gps_tags.get("GPSLongitudeRef")
 
-    def _to_degrees(value) -> Optional[float]:
+    def _to_degrees(value) -> float | None:
         try:
             d, m, s = value
         except Exception:
@@ -149,7 +148,7 @@ def _extract_exif_and_gps(image, datetime_format: str = "raw") -> tuple[Optional
     if lon_ref.upper() == "W":
         lon_deg = -lon_deg
 
-    gps_payload: Dict[str, object] = {
+    gps_payload: dict[str, object] = {
         "latitude": lat_deg,
         "longitude": lon_deg,
         "latitude_ref": lat_ref,
@@ -160,9 +159,9 @@ def _extract_exif_and_gps(image, datetime_format: str = "raw") -> tuple[Optional
 
 def _siglip_label_group(
     label: str,
-    label_groups: Dict[str, Sequence[str]] | None = None,
-    canonical_map: Dict[str, str] | None = None,
-) -> Optional[str]:
+    label_groups: dict[str, Sequence[str]] | None = None,
+    canonical_map: dict[str, str] | None = None,
+) -> str | None:
     """Return a coarse semantic group name for a SigLIP label."""
 
     if canonical_map is not None:
@@ -180,7 +179,7 @@ def _siglip_label_group(
     return None
 
 
-def load_run_journal(cache_root: Path) -> Optional[RunJournalRecord]:
+def load_run_journal(cache_root: Path) -> RunJournalRecord | None:
     """Load the run journal from ``cache/run_journal.json`` if it exists."""
 
     journal_path = cache_root / "run_journal.json"
@@ -244,8 +243,8 @@ class PreprocessingPipeline:
 
         self._settings = settings or load_settings()
         self._logger = get_logger(__name__, extra={"component": "preprocess"})
-        self._cache_root: Optional[Path] = None
-        self._journal: Optional[RunJournalRecord] = None
+        self._cache_root: Path | None = None
+        self._journal: RunJournalRecord | None = None
         self._near_duplicate_dirty: set[str] = set()
         self._force_near_duplicate_rebuild: bool = False
 
@@ -340,7 +339,7 @@ class PreprocessingPipeline:
             )
 
         with open_primary_session(primary_db_path) as primary_session, open_projection_session(projection_db_path) as projection_session:
-            stage_plan: List[tuple[str, Callable[[], None], bool]] = [
+            stage_plan: list[tuple[str, Callable[[], None], bool]] = [
                 (
                     "scan_and_hash",
                     lambda: self._run_scan_and_hash(roots, primary_session, projection_session),
@@ -428,13 +427,13 @@ class PreprocessingPipeline:
         """Scan album roots and populate the images table with content hashes."""
 
         self._logger.info("scan_and_hash_start", extra={})
-        files: List[FileInfo] = list(scan_roots(roots))
+        files: list[FileInfo] = list(scan_roots(roots))
         total_files = len(files)
         self._logger.info("scan_and_hash_files_discovered", extra={"file_count": total_files})
 
         progress_interval = max(1, total_files // 20) if total_files else 0
 
-        path_to_image_id: Dict[str, str] = {}
+        path_to_image_id: dict[str, str] = {}
         existing_rows = primary_session.execute(select(Image.image_id, Image.all_paths)).mappings()
         for row in existing_rows:
             raw_paths = row["all_paths"]
@@ -448,7 +447,7 @@ class PreprocessingPipeline:
         now = time.time()
         processed_files = 0
 
-        invalidated_ids: List[str] = []
+        invalidated_ids: list[str] = []
 
         for file_info in files:
             path = file_info.path.resolve()
@@ -571,7 +570,7 @@ class PreprocessingPipeline:
             if not paths:
                 continue
 
-            existing_paths: List[str] = []
+            existing_paths: list[str] = []
             for stored_path in paths:
                 stored_path_str = str(stored_path)
                 try:
@@ -698,7 +697,7 @@ class PreprocessingPipeline:
         )
 
     def _run_region_detection_and_reranking(
-        self, primary_session, projection_session=None, target_image_ids: Optional[Sequence[str]] = None
+        self, primary_session, projection_session=None, target_image_ids: Sequence[str] | None = None
     ) -> None:
         """Detection pass (M2): emit regions + region embeddings, no semantic labels."""
 
@@ -717,12 +716,14 @@ class PreprocessingPipeline:
 
         from vibe_photos.ml.detection import (
             BoundingBox,
-            Detection as RegionDetection,
             OwlVitDetector,
             build_owlvit_detector,
             detection_priority,
             filter_secondary_regions_by_priority,
             non_max_suppression,
+        )
+        from vibe_photos.ml.detection import (
+            Detection as RegionDetection,
         )
         from vibe_photos.ml.models import get_siglip_embedding_model
 
@@ -760,7 +761,7 @@ class PreprocessingPipeline:
         active_rows = primary_session.execute(
             select(Image.image_id, Image.primary_path).where(Image.status == "active").order_by(Image.image_id)
         )
-        paths_by_id: Dict[str, str] = {row.image_id: row.primary_path for row in active_rows}
+        paths_by_id: dict[str, str] = {row.image_id: row.primary_path for row in active_rows}
 
         if target_image_ids is not None:
             allowed_ids = {str(image_id) for image_id in target_image_ids}
@@ -771,7 +772,7 @@ class PreprocessingPipeline:
         caption_rows = projection_session.execute(
             select(ImageCaption.image_id, ImageCaption.caption).where(ImageCaption.model_name == caption_model_name)
         )
-        captions_by_id: Dict[str, str] = {row.image_id: row.caption for row in caption_rows}
+        captions_by_id: dict[str, str] = {row.image_id: row.caption for row in caption_rows}
 
         if not paths_by_id:
             self._logger.info("region_detection_noop", extra={})
@@ -814,7 +815,7 @@ class PreprocessingPipeline:
                 continue
 
             try:
-                detections: List[RegionDetection] = detector.detect(image=image, prompts=candidate_labels)
+                detections: list[RegionDetection] = detector.detect(image=image, prompts=candidate_labels)
             except Exception as exc:  # pragma: no cover - defensive
                 self._logger.error(
                     "region_detection_backend_error",
@@ -831,9 +832,9 @@ class PreprocessingPipeline:
             width, height = image.size
 
             # Prepare SigLIP inputs for region crops.
-            region_images: List["_Image.Image"] = []
-            region_indices: List[int] = []
-            priorities: List[float] = []
+            region_images: list[_Image.Image] = []
+            region_indices: list[int] = []
+            priorities: list[float] = []
 
             for detection in detections:
                 priorities.append(
@@ -928,7 +929,7 @@ class PreprocessingPipeline:
             region_payloads = []
 
             # Compute region embeddings in one batch to avoid redundant preprocessing.
-            region_embeddings: List[np.ndarray] = []
+            region_embeddings: list[np.ndarray] = []
             if region_images:
                 region_inputs = siglip_processor(images=region_images, return_tensors="pt")
                 region_inputs = region_inputs.to(siglip_device)
@@ -1167,7 +1168,7 @@ class PreprocessingPipeline:
         active_rows = primary_session.execute(
             select(Image.image_id, Image.primary_path).where(Image.status == "active").order_by(Image.image_id)
         )
-        paths_by_id: Dict[str, str] = {row.image_id: row.primary_path for row in active_rows}
+        paths_by_id: dict[str, str] = {row.image_id: row.primary_path for row in active_rows}
 
         if not paths_by_id:
             self._logger.info("embeddings_and_captions_noop", extra={})
@@ -1224,8 +1225,8 @@ class PreprocessingPipeline:
 
         for batch_start in range(0, embedding_total, embedding_batch_size):
             batch_ids = embedding_targets[batch_start : batch_start + embedding_batch_size]
-            images: List["Image.Image"] = []
-            valid_ids: List[str] = []
+            images: list[Image.Image] = []
+            valid_ids: list[str] = []
 
             from PIL import Image as _Image
 
@@ -1327,8 +1328,8 @@ class PreprocessingPipeline:
 
         for batch_start in range(0, caption_total, caption_batch_size):
             batch_ids = caption_targets[batch_start : batch_start + caption_batch_size]
-            images: List["_ImageCaption.Image"] = []
-            valid_ids: List[str] = []
+            images: list[_ImageCaption.Image] = []
+            valid_ids: list[str] = []
 
             for image_id in batch_ids:
                 path_str = paths_by_id[image_id]
@@ -1445,9 +1446,9 @@ class PreprocessingPipeline:
         if existing is not None:
             return
 
-        from PIL import Image as _Image
         import numpy as np
         import torch
+        from PIL import Image as _Image
 
         try:
             img = _Image.open(path_str).convert("RGB")
@@ -1534,8 +1535,8 @@ class PreprocessingPipeline:
 
         path_str = row.primary_path
 
-        from PIL import Image as _ImageCaption
         import torch
+        from PIL import Image as _ImageCaption
 
         try:
             img = _ImageCaption.open(path_str).convert("RGB")
@@ -1651,9 +1652,9 @@ class PreprocessingPipeline:
                 )
                 continue
 
-            exif_datetime: Optional[str]
-            camera_model: Optional[str]
-            gps_payload: Optional[Dict[str, object]]
+            exif_datetime: str | None
+            camera_model: str | None
+            gps_payload: dict[str, object] | None
 
             try:
                 exif_datetime, camera_model, gps_payload = _extract_exif_and_gps(
@@ -1724,8 +1725,8 @@ class PreprocessingPipeline:
         if threshold <= 0:
             threshold = 12
 
-        items: List[Dict[str, object]] = []
-        image_meta: Dict[str, Dict[str, object]] = {}
+        items: list[dict[str, object]] = []
+        image_meta: dict[str, dict[str, object]] = {}
         for row in rows:
             if not row.phash:
                 continue
@@ -1749,7 +1750,7 @@ class PreprocessingPipeline:
             return
 
         items.sort(key=lambda item: item["mtime"], reverse=True)
-        phash_map: Dict[str, Dict[str, object]] = {str(item["image_id"]): item for item in items}
+        phash_map: dict[str, dict[str, object]] = {str(item["image_id"]): item for item in items}
 
         dirty_ids = {image_id for image_id in self._near_duplicate_dirty if image_id in phash_map}
 
@@ -1844,7 +1845,7 @@ class PreprocessingPipeline:
             },
         )
 
-    def _rebuild_duplicate_groups(self, primary_session, image_meta: Dict[str, Dict[str, object]]) -> tuple[int, int]:
+    def _rebuild_duplicate_groups(self, primary_session, image_meta: dict[str, dict[str, object]]) -> tuple[int, int]:
         primary_session.execute(delete(ImageNearDuplicateMembership))
         primary_session.execute(delete(ImageNearDuplicateGroup))
         pair_rows = primary_session.execute(
@@ -1854,7 +1855,7 @@ class PreprocessingPipeline:
             primary_session.commit()
             return 0, 0
 
-        graph: Dict[str, set[str]] = defaultdict(set)
+        graph: dict[str, set[str]] = defaultdict(set)
         for row in pair_rows:
             anchor_id = row.anchor_image_id
             duplicate_id = row.duplicate_image_id
@@ -1871,7 +1872,7 @@ class PreprocessingPipeline:
             if node in visited:
                 continue
 
-            component: List[str] = []
+            component: list[str] = []
             stack = [node]
             while stack:
                 current = stack.pop()
@@ -1924,7 +1925,7 @@ class PreprocessingPipeline:
         return groups_created, memberships_created
 
     @staticmethod
-    def _select_canonical_image(members: Sequence[str], image_meta: Dict[str, Dict[str, object]]) -> str | None:
+    def _select_canonical_image(members: Sequence[str], image_meta: dict[str, dict[str, object]]) -> str | None:
         best_id: str | None = None
         best_key: tuple[int, int, str] | None = None
         for image_id in members:

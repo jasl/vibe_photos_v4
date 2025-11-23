@@ -6,19 +6,18 @@ import json
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable, List, cast
+from typing import cast
 
 from celery import Celery
 from PIL import Image
-from utils.logging import get_logger
 
+from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactManager, ArtifactResult, ArtifactSpec, hash_file
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import Image as ImageRow
 from vibe_photos.db import ArtifactRecord, PostProcessResult, ProcessResult, open_primary_session, open_projection_session
+from vibe_photos.db import Image as ImageRow
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.preprocessing import ensure_preprocessing_artifacts
-
 
 LOGGER = get_logger(__name__, extra={"component": "task_queue"})
 
@@ -109,7 +108,7 @@ def pre_process(image_id: str) -> str:
 
         def _write_detections(out_dir: Path) -> ArtifactResult:
             out_dir.mkdir(parents=True, exist_ok=True)
-            detections: List[dict] = []
+            detections: list[dict] = []
             if settings.models.detection.enabled:
                 from vibe_photos.ml.detection import (  # noqa: WPS433
                     Detector,

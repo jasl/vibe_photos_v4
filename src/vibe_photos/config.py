@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import inflect
 import yaml
 
 from vibe_photos.ml.model_presets import (
     BLIP_IMAGE_CAPTIONING_BASE,
-    SIGLIP2_BASE_PATCH16_224,
     BLIP_PRESETS,
+    SIGLIP2_BASE_PATCH16_224,
     SIGLIP_PRESETS,
 )
 
@@ -23,7 +23,7 @@ class EmbeddingModelConfig:
 
     backend: str = "siglip"
     model_name: str = SIGLIP2_BASE_PATCH16_224
-    preset: Optional[str] = None
+    preset: str | None = None
     device: str = "auto"
     batch_size: int = 16
 
@@ -53,7 +53,7 @@ class CaptionModelConfig:
 
     backend: str = "blip"
     model_name: str = BLIP_IMAGE_CAPTIONING_BASE
-    preset: Optional[str] = None
+    preset: str | None = None
     device: str = "auto"
     batch_size: int = 4
 
@@ -94,7 +94,7 @@ class DetectionModelConfig:
     caption_primary_min_priority: float = 0.02
     caption_primary_box_margin_x: float = 0.2
     caption_primary_box_margin_y: float = 0.1
-    caption_primary_keywords: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    caption_primary_keywords: dict[str, dict[str, Any]] = field(default_factory=dict)
     caption_primary_use_label_groups: bool = True
     secondary_min_priority: float = 0.03
     secondary_min_relative_to_primary: float = 0.3
@@ -125,14 +125,14 @@ def _normalize_siglip_label(label: str) -> str:
     return text
 
 
-def _derive_caption_keywords_from_label_groups(label_groups: Dict[str, List[str]]) -> Dict[str, Dict[str, Any]]:
+def _derive_caption_keywords_from_label_groups(label_groups: dict[str, list[str]]) -> dict[str, dict[str, Any]]:
     """Build caption fallback keywords from SigLIP label groups.
 
     Each label becomes its own keyword-driven entry so captions can fall back to the
     most specific token that SigLIP already knows about.
     """
 
-    derived: Dict[str, Dict[str, Any]] = {}
+    derived: dict[str, dict[str, Any]] = {}
     seen_labels: set[str] = set()
 
     for labels in label_groups.values():
@@ -153,7 +153,7 @@ def _derive_caption_keywords_from_label_groups(label_groups: Dict[str, List[str]
 class SiglipLabelConfig:
     """Configuration for SigLIP label and category prompts."""
 
-    label_groups: Dict[str, List[str]] = field(
+    label_groups: dict[str, list[str]] = field(
         default_factory=lambda: {
             "food": [
                 "food",
@@ -210,10 +210,10 @@ class SiglipLabelConfig:
     )
 
     @property
-    def candidate_labels(self) -> List[str]:
+    def candidate_labels(self) -> list[str]:
         """Flatten label groups into a unique list of candidate labels."""
 
-        labels: List[str] = []
+        labels: list[str] = []
         seen: set[str] = set()
 
         for group_labels in self.label_groups.values():
@@ -229,22 +229,22 @@ class SiglipLabelConfig:
         return labels
 
     @property
-    def simple_detector_categories(self) -> Dict[str, List[str]]:
+    def simple_detector_categories(self) -> dict[str, list[str]]:
         """Derive SimpleDetector label sets from label groups.
 
         - ``general``: pluralized, human-friendly group names + ``Other``.
         - per-group sets: title-cased labels for each group key.
         """
 
-        categories: Dict[str, List[str]] = {}
-        general: List[str] = []
+        categories: dict[str, list[str]] = {}
+        general: list[str] = []
 
         for raw_group_name, group_labels in self.label_groups.items():
             key = str(raw_group_name)
             base_name = key.replace("_", " ")
             general.append(base_name.title())
 
-            fine_labels: List[str] = []
+            fine_labels: list[str] = []
             for label in group_labels:
                 fine_labels.append(self._format_label_for_display(str(label)))
             categories[key] = fine_labels
@@ -281,8 +281,8 @@ class ObjectZeroShotConfig:
     top_k: int = 5
     score_min: float = 0.32
     margin_min: float = 0.08
-    scene_whitelist: List[str] = field(default_factory=lambda: ["scene.product", "scene.food"])
-    scene_fallback_labels: Dict[str, List[str]] = field(default_factory=dict)
+    scene_whitelist: list[str] = field(default_factory=lambda: ["scene.product", "scene.food"])
+    scene_fallback_labels: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -299,8 +299,8 @@ class ObjectConfig:
 
     zero_shot: ObjectZeroShotConfig = field(default_factory=ObjectZeroShotConfig)
     aggregation: ObjectAggregationConfig = field(default_factory=ObjectAggregationConfig)
-    blacklist: List[str] = field(default_factory=list)
-    remap: Dict[str, str] = field(default_factory=dict)
+    blacklist: list[str] = field(default_factory=list)
+    remap: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -403,7 +403,7 @@ class Settings:
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
 
 
-def _as_dict(value: Any) -> Dict[str, Any]:
+def _as_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     return {}
@@ -493,11 +493,11 @@ def load_settings(settings_path: Path | None = None) -> Settings:
 
     caption_keywords_raw = _as_dict(detection_raw.get("caption_primary_keywords"))
     if caption_keywords_raw:
-        parsed_keywords: Dict[str, Dict[str, Any]] = {}
+        parsed_keywords: dict[str, dict[str, Any]] = {}
         for group_name, group_cfg in caption_keywords_raw.items():
             if not isinstance(group_cfg, dict):
                 continue
-            entry: Dict[str, Any] = {}
+            entry: dict[str, Any] = {}
             label_value = group_cfg.get("label")
             if isinstance(label_value, str):
                 entry["label"] = label_value
@@ -522,7 +522,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     siglip_labels_cfg = settings.models.siglip_labels
     label_groups_raw = _as_dict(siglip_labels_raw.get("label_groups"))
     if label_groups_raw:
-        parsed_label_groups: Dict[str, List[str]] = {}
+        parsed_label_groups: dict[str, list[str]] = {}
         for group_name, labels in label_groups_raw.items():
             if isinstance(labels, list):
                 parsed_label_groups[str(group_name)] = [str(label) for label in labels]
@@ -623,7 +623,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         object_cfg.zero_shot.scene_whitelist = [str(item) for item in zero_shot_raw["scene_whitelist"] if str(item)]
     scene_fallback_raw = _as_dict(zero_shot_raw.get("scene_fallback_labels"))
     if scene_fallback_raw:
-        parsed: Dict[str, List[str]] = {}
+        parsed: dict[str, list[str]] = {}
         for scene_key, label_list in scene_fallback_raw.items():
             if not isinstance(label_list, list):
                 continue

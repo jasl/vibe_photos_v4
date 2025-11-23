@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Protocol, Sequence, Tuple
+from typing import Protocol
 
 import torch
 from PIL import Image
-from torch import Tensor, device as TorchDevice
+from torch import Tensor
+from torch import device as TorchDevice
 from transformers import OwlViTForObjectDetection, OwlViTProcessor
 
 from utils.logging import get_logger
 from vibe_photos.config import DetectionModelConfig, Settings, load_settings
 from vibe_photos.ml.models import _select_device
-
 
 LOGGER = get_logger(__name__, extra={"component": "detection"})
 
@@ -49,7 +50,7 @@ class Detection:
 class Detector(Protocol):
     """Protocol for open-vocabulary detectors."""
 
-    def detect(self, image: Image.Image, prompts: Sequence[str]) -> List[Detection]:
+    def detect(self, image: Image.Image, prompts: Sequence[str]) -> list[Detection]:
         """Run detection on a single image given text prompts."""
 
 
@@ -79,7 +80,7 @@ def iou(a: BoundingBox, b: BoundingBox) -> float:
     return inter_area / union
 
 
-def non_max_suppression(detections: Sequence[Detection], iou_threshold: float) -> List[Detection]:
+def non_max_suppression(detections: Sequence[Detection], iou_threshold: float) -> list[Detection]:
     """Class-agnostic non-max suppression.
 
     For highly overlapping boxes, keep only the highest-score detection.
@@ -92,7 +93,7 @@ def non_max_suppression(detections: Sequence[Detection], iou_threshold: float) -
         return list(detections)
 
     sorted_dets = sorted(detections, key=lambda det: det.score, reverse=True)
-    kept: List[Detection] = []
+    kept: list[Detection] = []
 
     for det in sorted_dets:
         duplicate = False
@@ -136,7 +137,7 @@ def filter_secondary_regions_by_priority(
     max_regions: int,
     secondary_min_priority: float,
     secondary_min_relative_to_primary: float,
-) -> Tuple[List[Detection], List[float]]:
+) -> tuple[list[Detection], list[float]]:
     """Filter low-priority secondary regions after sorting by priority.
 
     Assumes detections and priorities are aligned and already sorted from highest to lowest priority.
@@ -152,8 +153,8 @@ def filter_secondary_regions_by_priority(
 
     primary_priority = float(priorities[0])
 
-    kept_detections: List[Detection] = [detections[0]]
-    kept_priorities: List[float] = [primary_priority]
+    kept_detections: list[Detection] = [detections[0]]
+    kept_priorities: list[float] = [primary_priority]
 
     if max_regions <= 1:
         return kept_detections, kept_priorities
@@ -247,7 +248,7 @@ class OwlVitDetector:
             },
         )
 
-    def detect(self, image: Image.Image, prompts: Sequence[str]) -> List[Detection]:
+    def detect(self, image: Image.Image, prompts: Sequence[str]) -> list[Detection]:
         """Run OWL-ViT detection for a single image."""
 
         if not prompts:
@@ -276,7 +277,7 @@ class OwlVitDetector:
         scores: Tensor = result["scores"]
         labels: Tensor = result["labels"]
 
-        detections: List[Detection] = []
+        detections: list[Detection] = []
 
         for box, score, label_idx in zip(boxes, scores, labels):
             x_min, y_min, x_max, y_max = box.tolist()

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Dict
-
 # Scene classifier emits uppercase coarse categories. Map them to label keys.
-SCENE_KEY_BY_TYPE: Dict[str, str] = {
+SCENE_KEY_BY_TYPE: dict[str, str] = {
     "LANDSCAPE": "scene.landscape",
     "SNAPSHOT": "scene.snapshot",
     "PEOPLE": "scene.people",
@@ -17,14 +15,14 @@ SCENE_KEY_BY_TYPE: Dict[str, str] = {
 }
 
 # Attribute identifiers → label keys.
-ATTRIBUTE_LABEL_KEYS: Dict[str, str] = {
+ATTRIBUTE_LABEL_KEYS: dict[str, str] = {
     "has_person": "attr.has_person",
     "has_text": "attr.has_text",
     "is_document": "attr.is_document",
     "is_screenshot": "attr.is_screenshot",
 }
 
-SCENE_TYPE_BY_KEY: Dict[str, str] = {value: key for key, value in SCENE_KEY_BY_TYPE.items()}
+SCENE_TYPE_BY_KEY: dict[str, str] = {value: key for key, value in SCENE_KEY_BY_TYPE.items()}
 ALL_SCENE_LABEL_KEYS = tuple(SCENE_TYPE_BY_KEY.keys())
 ALL_ATTRIBUTE_LABEL_KEYS = tuple(ATTRIBUTE_LABEL_KEYS.values())
 
