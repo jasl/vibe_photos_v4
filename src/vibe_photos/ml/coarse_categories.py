@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import Tensor
@@ -298,7 +298,7 @@ def build_siglip_coarse_classifier(
             inputs = inputs.to(device)
 
         with torch.no_grad():
-            text_embeddings = siglip_model.get_text_features(**inputs).detach().cpu()
+            text_embeddings = cast(Tensor, siglip_model.get_text_features(**inputs).detach().cpu())
 
         return text_embeddings
 

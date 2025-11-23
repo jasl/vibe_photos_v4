@@ -9,6 +9,7 @@ from pathlib import Path
 
 import typer
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.config import Settings, load_settings
@@ -20,7 +21,7 @@ from vibe_photos.task_queue import post_process, pre_process, process
 LOGGER = get_logger(__name__, extra={"component": "enqueue_celery"})
 
 
-def _existing_path_map(session) -> dict[str, str]:
+def _existing_path_map(session: Session) -> dict[str, str]:
     mapping: dict[str, str] = {}
     rows = session.execute(select(Image.image_id, Image.all_paths)).mappings()
     for row in rows:
@@ -34,7 +35,7 @@ def _existing_path_map(session) -> dict[str, str]:
     return mapping
 
 
-def _ingest_files(session, files: Sequence[FileInfo]) -> list[str]:
+def _ingest_files(session: Session, files: Sequence[FileInfo]) -> list[str]:
     """Upsert :class:`Image` rows for scanned files and return their IDs."""
 
     total_files = len(files)

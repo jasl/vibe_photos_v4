@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import cast
 
 import torch
 from torch import Tensor
@@ -82,7 +83,7 @@ class SceneClassifierWithAttributes:
         if float(norm) == 0.0:
             raise ValueError("embedding must have non-zero norm")
 
-        return emb / norm
+        return cast(Tensor, emb / norm)
 
     def _predict_boolean_with_margin(self, attribute_id: str, image_embedding: Tensor) -> tuple[bool, float]:
         """Predict a boolean attribute and return its value and margin.

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.config import Settings
@@ -30,8 +31,8 @@ LOGGER = get_logger(__name__, extra={"component": "cluster_pass"})
 
 def run_image_cluster_pass(
     *,
-    primary_session,
-    projection_session,
+    primary_session: Session,
+    projection_session: Session,
     settings: Settings,
     cache_root: Path,
 ) -> tuple[int, int]:
@@ -97,8 +98,8 @@ def run_image_cluster_pass(
 
 def run_region_cluster_pass(
     *,
-    primary_session,
-    projection_session,
+    primary_session: Session,
+    projection_session: Session,
     settings: Settings,
     cache_root: Path,
 ) -> tuple[int, int]:
@@ -159,7 +160,7 @@ def run_region_cluster_pass(
     return cluster_count, member_count
 
 
-def _load_scene_filtered_images(primary_session, settings: Settings, scene_keys: Sequence[str]) -> list[str]:
+def _load_scene_filtered_images(primary_session: Session, settings: Settings, scene_keys: Sequence[str]) -> list[str]:
     scene_labels = {
         row.key: row.id
         for row in primary_session.execute(select(Label.id, Label.key).where(Label.key.in_(tuple(scene_keys))))
@@ -178,7 +179,9 @@ def _load_scene_filtered_images(primary_session, settings: Settings, scene_keys:
     return [row.target_id for row in rows]
 
 
-def _load_image_embedding_paths(projection_session, model_name: str, target_ids: Sequence[str]) -> dict[str, str]:
+def _load_image_embedding_paths(
+    projection_session: Session, model_name: str, target_ids: Sequence[str]
+) -> dict[str, str]:
     rows = projection_session.execute(
         select(ImageEmbedding.image_id, ImageEmbedding.embedding_path).where(ImageEmbedding.model_name == model_name)
     )
@@ -262,7 +265,7 @@ def _extract_components(
     return components
 
 
-def _reset_cluster_method(primary_session, method: str) -> None:
+def _reset_cluster_method(primary_session: Session, method: str) -> None:
     cluster_rows = primary_session.execute(
         select(ImageSimilarityCluster.id, ImageSimilarityCluster.key).where(ImageSimilarityCluster.method == method)
     ).all()
@@ -287,7 +290,7 @@ def _reset_cluster_method(primary_session, method: str) -> None:
 
 def _write_clusters(
     *,
-    primary_session,
+    primary_session: Session,
     repo: LabelRepository,
     method: str,
     target_type: str,

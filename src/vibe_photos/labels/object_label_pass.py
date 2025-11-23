@@ -7,9 +7,11 @@ import json
 from collections import defaultdict
 from collections.abc import Iterable
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.config import Settings, load_settings
@@ -27,6 +29,12 @@ from vibe_photos.labels.repository import LabelRepository
 LOGGER = get_logger(__name__, extra={"command": "object_label_pass"})
 
 
+class RegionEmbeddingRow(NamedTuple):
+    region_id: str
+    embedding_path: str
+    image_id: str
+
+
 def _load_prototypes(cache_root: Path, prototype_name: str) -> tuple[np.ndarray, np.ndarray]:
     path = cache_root / "label_text_prototypes" / f"{prototype_name}.npz"
     if not path.exists():
@@ -36,16 +44,20 @@ def _load_prototypes(cache_root: Path, prototype_name: str) -> tuple[np.ndarray,
     return data["label_ids"], data["prototypes"]
 
 
-def _load_region_rows(projection_session, embedding_model_name: str) -> Iterable[tuple[str, str, str]]:
+def _load_region_rows(projection_session: Session, embedding_model_name: str) -> list[RegionEmbeddingRow]:
     rows = projection_session.execute(
         select(RegionEmbedding.region_id, RegionEmbedding.embedding_path, Region.image_id)
         .join(Region, Region.id == RegionEmbedding.region_id)
         .where(RegionEmbedding.model_name == embedding_model_name)
-    )
-    return rows.all()
+    ).all()
+
+    return [
+        RegionEmbeddingRow(region_id=row.region_id, embedding_path=row.embedding_path, image_id=row.image_id)
+        for row in rows
+    ]
 
 
-def _load_scene_labels(primary_session, settings: Settings) -> dict[str, str]:
+def _load_scene_labels(primary_session: Session, settings: Settings) -> dict[str, str]:
     """Return best scene label key per image_id for the active scene space."""
 
     stmt = (
@@ -67,8 +79,8 @@ def _load_scene_labels(primary_session, settings: Settings) -> dict[str, str]:
 
 def run_object_label_pass(
     *,
-    primary_session,
-    projection_session,
+    primary_session: Session,
+    projection_session: Session,
     settings: Settings,
     cache_root: Path,
     label_space_ver: str | None = None,

@@ -5,17 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 
 from PIL import Image
+from PIL.Image import Resampling
 
 from utils.logging import get_logger
 
 LOGGER = get_logger(__name__, extra={"component": "thumbnailing"})
 
 
-def _get_resample_filter() -> int:
+def _get_resample_filter() -> Resampling:
     """Return the preferred resample filter compatible with the current Pillow."""
 
-    resampling = getattr(Image, "Resampling", None)
-    return resampling.LANCZOS if resampling is not None else Image.LANCZOS
+    return Resampling.LANCZOS
 
 
 def build_thumbnail_image(image: Image.Image, max_side: int) -> Image.Image:

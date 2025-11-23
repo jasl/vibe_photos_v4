@@ -10,7 +10,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from sqlalchemy import Select, select
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.classifier import (
@@ -36,16 +37,14 @@ def _margin_to_probability(margin: float) -> float:
     return float(1.0 / (1.0 + math.exp(-margin)))
 
 
-def _load_embedding_rows(projection_session, model_name: str) -> dict[str, str]:
-    stmt: Select[tuple[str, str]] = select(ImageEmbedding.image_id, ImageEmbedding.embedding_path).where(
-        ImageEmbedding.model_name == model_name
-    )
+def _load_embedding_rows(projection_session: Session, model_name: str) -> dict[str, str]:
+    stmt = select(ImageEmbedding.image_id, ImageEmbedding.embedding_path).where(ImageEmbedding.model_name == model_name)
     rows = projection_session.execute(stmt).all()
     return {row.image_id: row.embedding_path for row in rows}
 
 
-def _load_active_image_ids(primary_session) -> list[str]:
-    stmt: Select[str] = select(Image.image_id).where(Image.status == "active").order_by(Image.image_id)
+def _load_active_image_ids(primary_session: Session) -> list[str]:
+    stmt = select(Image.image_id).where(Image.status == "active").order_by(Image.image_id)
     return [row.image_id for row in primary_session.execute(stmt)]
 
 
@@ -53,11 +52,11 @@ def _upsert_image_scene(
     *,
     image_id: str,
     attributes: SceneAttributes,
-    projection_session,
-    primary_session,
+    projection_session: Session,
+    primary_session: Session,
 ) -> None:
     now = time.time()
-    def _upsert(target_session) -> None:
+    def _upsert(target_session: Session) -> None:
         stmt = dialect_insert(target_session, ImageScene).values(
             image_id=image_id,
             scene_type=attributes.scene_type,
@@ -161,8 +160,8 @@ def _write_attribute_assignments(
 
 def run_scene_label_pass(
     *,
-    primary_session,
-    projection_session,
+    primary_session: Session,
+    projection_session: Session,
     settings: Settings,
     cache_root: Path,
     label_space_ver: str | None = None,

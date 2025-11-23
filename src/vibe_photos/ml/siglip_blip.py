@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import torch
@@ -120,7 +121,7 @@ class SiglipBlipDetector:
 
         emb = image_emb[0]
         emb = emb / emb.norm(dim=-1, keepdim=True)
-        return emb.detach().cpu().numpy().astype(np.float32)
+        return cast(NDArray[np.float32], emb.detach().cpu().numpy().astype(np.float32))
 
     def _classify_with_siglip(self, image: Image.Image, labels: list[str]) -> dict[str, float]:
         """Compute zero-shot classification scores via SigLIP."""
@@ -156,7 +157,7 @@ class SiglipBlipDetector:
         with torch.no_grad():
             generated_ids = self._blip_model.generate(**inputs, max_new_tokens=50)
 
-        return self._blip_processor.decode(generated_ids[0], skip_special_tokens=True)
+        return str(self._blip_processor.decode(generated_ids[0], skip_special_tokens=True))
 
 
 __all__ = ["SiglipBlipDetector", "SiglipBlipDetectionResult"]

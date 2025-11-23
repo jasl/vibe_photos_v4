@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Lock
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -458,7 +459,7 @@ def _get_engine(target: str | Path) -> Engine:
         if is_sqlite:
 
             @event.listens_for(engine, "connect")
-            def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # type: ignore[override]
+            def _set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:  # type: ignore[override]
                 """Configure SQLite for better concurrent access."""
 
                 cursor = dbapi_connection.cursor()
@@ -521,7 +522,7 @@ def reset_projection_tables(session: Session) -> None:
     session.commit()
 
 
-def dialect_insert(session: Session, table):
+def dialect_insert(session: Session, table: Any) -> Any:
     """Return a dialect-aware INSERT statement supporting ON CONFLICT."""
 
     bind = session.get_bind()

@@ -5,10 +5,11 @@ from __future__ import annotations
 import shutil
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import typer
 from sqlalchemy import delete
+from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.cache_manifest import clear_cache_artifacts
@@ -32,7 +33,7 @@ def _remove_path(path: Path) -> None:
         shutil.rmtree(path, ignore_errors=True)
 
 
-def _invalidate_db_tables(session, stages: set[Stage]) -> None:
+def _invalidate_db_tables(session: Session, stages: set[Stage]) -> None:
     if "embeddings" in stages or "all" in stages:
         session.execute(delete(ImageEmbedding))
     if "captions" in stages or "all" in stages:
@@ -79,7 +80,8 @@ def main(
     """Invalidate cached artifacts for selected stages."""
 
     cache_root = cache_root.resolve()
-    selected = set(stages or ["all"])
+    raw_stages = set(stages or ["all"])
+    selected: set[Stage] = {cast(Stage, stage) for stage in raw_stages}
 
     if full_reset:
         clear_cache_artifacts(cache_root)

@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.config import Settings, load_settings
@@ -22,7 +23,7 @@ from vibe_photos.ml.models import get_siglip_embedding_model
 LOGGER = get_logger(__name__, extra={"command": "build_object_prototypes"})
 
 
-def _collect_alias_texts(session, label_id: int) -> dict[str | None, list[str]]:
+def _collect_alias_texts(session: Session, label_id: int) -> dict[str | None, list[str]]:
     rows = session.execute(
         select(LabelAlias.alias_text, LabelAlias.language).where(LabelAlias.label_id == label_id)
     ).all()
@@ -34,7 +35,7 @@ def _collect_alias_texts(session, label_id: int) -> dict[str | None, list[str]]:
 
 def build_object_prototypes(
     *,
-    session,
+    session: Session,
     settings: Settings,
     cache_root: Path,
     output_name: str,

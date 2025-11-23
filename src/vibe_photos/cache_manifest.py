@@ -7,7 +7,7 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from utils.logging import get_logger
 from vibe_photos.config import Settings
@@ -79,7 +79,7 @@ def _payloads_match(existing: CacheManifest, expected: dict[str, Any]) -> bool:
         return False
 
     def _normalize(block: dict[str, Any]) -> dict[str, Any]:
-        return json.loads(json.dumps(block, sort_keys=True))
+        return cast(dict[str, Any], json.loads(json.dumps(block, sort_keys=True)))
 
     existing_models = _normalize(existing.models)
     expected_models = _normalize(expected.get("models", {}))

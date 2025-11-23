@@ -10,8 +10,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+from PIL import Image
 from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.cache_manifest import CACHE_FORMAT_VERSION, ensure_cache_manifest
@@ -60,7 +63,9 @@ class RunJournalRecord:
     updated_at: float
 
 
-def _extract_exif_and_gps(image, datetime_format: str = "raw") -> tuple[str | None, str | None, dict[str, object] | None]:
+def _extract_exif_and_gps(
+    image: Image.Image, datetime_format: str = "raw"
+) -> tuple[str | None, str | None, dict[str, object] | None]:
     """Extract EXIF datetime, camera model, and GPS coordinates from a PIL image.
 
     Returns a tuple of ``(exif_datetime, camera_model, gps_payload)`` where the GPS payload,
@@ -125,7 +130,7 @@ def _extract_exif_and_gps(image, datetime_format: str = "raw") -> tuple[str | No
     lon = gps_tags.get("GPSLongitude")
     lon_ref = gps_tags.get("GPSLongitudeRef")
 
-    def _to_degrees(value) -> float | None:
+    def _to_degrees(value: object) -> float | None:
         try:
             d, m, s = value
         except Exception:
@@ -267,7 +272,7 @@ class PreprocessingPipeline:
 
         return current_idx
 
-    def _purge_projection_caches(self, image_ids: Sequence[str], projection_session) -> None:
+    def _purge_projection_caches(self, image_ids: Sequence[str], projection_session: Session | None) -> None:
         """Remove cached artifacts/rows in the projection DB for the provided image IDs."""
 
         ids = list({str(image_id) for image_id in image_ids})

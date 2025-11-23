@@ -10,6 +10,7 @@ from typing import Any
 
 from flask import Flask, abort, redirect, render_template, request, send_file, url_for
 from sqlalchemy import and_, exists, func, or_, select
+from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactSpec
@@ -60,7 +61,7 @@ def _is_checked(value: str | None) -> bool:
     return lowered in {"1", "true", "yes", "on"}
 
 
-def _load_label_ids(session, keys) -> dict[str, int]:
+def _load_label_ids(session: Session, keys: set[str]) -> dict[str, int]:
     key_list = [key for key in keys if key]
     if not key_list:
         return {}
@@ -68,7 +69,7 @@ def _load_label_ids(session, keys) -> dict[str, int]:
     return {row.key: row.id for row in session.execute(stmt)}
 
 
-def _assignment_exists_clause(label_id: int, label_space: str):
+def _assignment_exists_clause(label_id: int, label_space: str) -> Any:
     return exists().where(
         and_(
             LabelAssignment.target_type == "image",
@@ -142,7 +143,7 @@ def images() -> Any:
 
         obj_space = settings.label_spaces.object_current
         if region_label:
-            rows = session.execute(
+            region_targets = session.execute(
                 select(LabelAssignment.target_id)
                 .join(Label, Label.id == LabelAssignment.label_id)
                 .where(
@@ -151,7 +152,7 @@ def images() -> Any:
                     Label.key == region_label,
                 )
             ).scalars()
-            region_filter_ids = {str(target_id).split("#", 1)[0] for target_id in rows}
+            region_filter_ids = {str(target_id).split("#", 1)[0] for target_id in region_targets}
 
         if region_filter_ids is not None:
             if region_filter_ids:
@@ -188,14 +189,11 @@ def images() -> Any:
         total = int(session.execute(total_stmt).scalar_one())
 
         query_stmt = stmt.order_by(Image.image_id).limit(page_size).offset(offset)
-        rows = session.execute(query_stmt).mappings().all()
+        rows: list[dict[str, Any]] = [dict(row) for row in session.execute(query_stmt).mappings().all()]
 
-        dup_ids = {
-            row.duplicate_image_id
-            for row in session.execute(select(ImageNearDuplicate.duplicate_image_id))
-        }
+        dup_ids = set(session.execute(select(ImageNearDuplicate.duplicate_image_id)).scalars().all())
 
-        image_ids = [row.image_id for row in rows]
+        image_ids = [str(row["image_id"]) for row in rows if row.get("image_id")]
         scenes_by_image: dict[str, dict[str, Any]] = {}
         attributes_by_image: dict[str, dict[str, bool]] = defaultdict(dict)
         objects_by_image: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -264,7 +262,9 @@ def images() -> Any:
 
     items: list[dict[str, Any]] = []
     for row in rows:
-        image_id = row.image_id
+        image_id = str(row.get("image_id", ""))
+        if not image_id:
+            continue
         scene_entry = scenes_by_image.get(image_id)
         scene_label = scene_type_from_label_key(scene_entry["key"]) if scene_entry else None
         attr_flags = attributes_by_image.get(image_id, {})
@@ -326,7 +326,7 @@ def image_detail(image_id: str) -> Any:
     projection_path = _get_projection_db_path()
     if projection_path.exists():
         with open_projection_session(projection_path) as projection_session:
-            region_rows = (
+            region_rows = list(
                 projection_session.execute(select(Region).where(Region.image_id == image_id)).scalars().all()
             )
     region_ids = [region.id for region in region_rows]
@@ -382,10 +382,11 @@ def image_detail(image_id: str) -> Any:
             .order_by(LabelAssignment.created_at.desc())
         ).all()
 
-        region_object_rows = []
-        region_cluster_rows = []
+        region_object_rows: list[Any] = []
+        region_cluster_rows: list[Any] = []
         if region_ids:
-            region_object_rows = session.execute(
+            region_object_rows = list(
+                session.execute(
                 select(
                     LabelAssignment.target_id,
                     Label.display_name,
@@ -399,9 +400,10 @@ def image_detail(image_id: str) -> Any:
                     Label.level == "object",
                 )
                 .order_by(LabelAssignment.score.desc())
-            ).all()
+            ).all())
 
-            region_cluster_rows = session.execute(
+            region_cluster_rows = list(
+                session.execute(
                 select(
                     LabelAssignment.target_id,
                     Label.display_name,
@@ -414,7 +416,7 @@ def image_detail(image_id: str) -> Any:
                     LabelAssignment.label_space_ver == settings.label_spaces.cluster_current,
                     Label.level == "cluster",
                 )
-            ).all()
+            ).all())
 
     scene_entry: dict[str, Any] | None = None
     attr_flags: dict[str, bool] = {}

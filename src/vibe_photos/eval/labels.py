@@ -9,8 +9,9 @@ from typing import Any
 
 import typer
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from vibe_photos.config import load_settings
+from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import Label, LabelAssignment, open_primary_session
 from vibe_photos.labels.scene_schema import ATTRIBUTE_LABEL_KEYS
 
@@ -68,7 +69,7 @@ def _load_ground_truth(path: Path) -> list[dict[str, Any]]:
     return []
 
 
-def _compute_metrics(session, settings, records: Sequence[dict[str, Any]]) -> dict[str, Any]:
+def _compute_metrics(session: Session, settings: Settings, records: Sequence[dict[str, Any]]) -> dict[str, Any]:
     scene_total = 0
     scene_correct = 0
 
@@ -129,7 +130,7 @@ def _compute_metrics(session, settings, records: Sequence[dict[str, Any]]) -> di
     }
 
 
-def _predict_scene(session, image_id: str, settings) -> str | None:
+def _predict_scene(session: Session, image_id: str, settings: Settings) -> str | None:
     rows = session.execute(
         select(Label.key, LabelAssignment.score)
         .join(Label, Label.id == LabelAssignment.label_id)
@@ -143,10 +144,10 @@ def _predict_scene(session, image_id: str, settings) -> str | None:
     ).all()
     if not rows:
         return None
-    return rows[0].key
+    return str(rows[0].key)
 
 
-def _predict_attributes(session, image_id: str, settings) -> set[str]:
+def _predict_attributes(session: Session, image_id: str, settings: Settings) -> set[str]:
     rows = session.execute(
         select(Label.key)
         .join(Label, Label.id == LabelAssignment.label_id)
@@ -157,10 +158,10 @@ def _predict_attributes(session, image_id: str, settings) -> set[str]:
             Label.level == "attribute",
         )
     ).all()
-    return {row.key for row in rows}
+    return {str(row.key) for row in rows}
 
 
-def _predict_objects(session, image_id: str, settings) -> list[str]:
+def _predict_objects(session: Session, image_id: str, settings: Settings) -> list[str]:
     rows = session.execute(
         select(Label.key, LabelAssignment.score)
         .join(Label, Label.id == LabelAssignment.label_id)
@@ -172,7 +173,7 @@ def _predict_objects(session, image_id: str, settings) -> list[str]:
         )
         .order_by(LabelAssignment.score.desc())
     ).all()
-    return [row.key for row in rows]
+    return [str(row.key) for row in rows]
 
 
 def _as_list(value: Any) -> list[str]:
@@ -221,5 +222,4 @@ def _print_metrics(metrics: dict[str, Any]) -> None:
 
 if __name__ == "__main__":
     app()
-
 

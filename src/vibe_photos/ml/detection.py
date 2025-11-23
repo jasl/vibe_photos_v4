@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 import torch
 from PIL import Image
@@ -20,8 +20,8 @@ from vibe_photos.ml.models import _select_device
 LOGGER = get_logger(__name__, extra={"component": "detection"})
 
 
-_OWL_PROCESSOR: OwlViTProcessor | None = None
-_OWL_MODEL: OwlViTForObjectDetection | None = None
+_OWL_PROCESSOR: Any | None = None
+_OWL_MODEL: Any | None = None
 _OWL_DEVICE: TorchDevice | None = None
 _OWL_MODEL_NAME: str | None = None
 
@@ -127,7 +127,7 @@ def detection_priority(det: Detection, *, area_gamma: float = 0.3, center_penalt
     if center_weight < 0.0:
         center_weight = 0.0
 
-    return det.score * area_weight * center_weight
+    return float(det.score * area_weight * center_weight)
 
 
 def filter_secondary_regions_by_priority(
@@ -177,7 +177,7 @@ def filter_secondary_regions_by_priority(
     return kept_detections, kept_priorities
 
 
-def _load_owlvit(config: DetectionModelConfig) -> tuple[OwlViTProcessor, OwlViTForObjectDetection, TorchDevice]:
+def _load_owlvit(config: DetectionModelConfig) -> tuple[Any, Any, TorchDevice]:
     """Load (or reuse) the OWL-ViT processor/model for the current process."""
 
     model_name = config.model_name
@@ -194,7 +194,7 @@ def _load_owlvit(config: DetectionModelConfig) -> tuple[OwlViTProcessor, OwlViTF
         return _OWL_PROCESSOR, _OWL_MODEL, _OWL_DEVICE
 
     processor = OwlViTProcessor.from_pretrained(model_name)
-    model = OwlViTForObjectDetection.from_pretrained(model_name).to(device)
+    model = cast(Any, OwlViTForObjectDetection.from_pretrained(model_name)).to(device)
     model.eval()
 
     _OWL_PROCESSOR = processor
@@ -221,8 +221,8 @@ class OwlVitDetector:
         config: DetectionModelConfig,
         device: TorchDevice,
         *,
-        processor: OwlViTProcessor | None = None,
-        model: OwlViTForObjectDetection | None = None,
+        processor: Any | None = None,
+        model: Any | None = None,
     ) -> None:
         """Initialize the OWL-ViT detector from configuration."""
 
@@ -230,8 +230,8 @@ class OwlVitDetector:
         self._device = device
 
         model_name = config.model_name
-        self._processor = processor or OwlViTProcessor.from_pretrained(model_name)
-        self._model = (model or OwlViTForObjectDetection.from_pretrained(model_name)).to(device)
+        self._processor: Any = processor or OwlViTProcessor.from_pretrained(model_name)
+        self._model: Any = cast(Any, model or OwlViTForObjectDetection.from_pretrained(model_name)).to(device)
         self._model.eval()
 
         self._backend = config.backend

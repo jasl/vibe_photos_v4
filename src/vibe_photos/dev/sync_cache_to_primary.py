@@ -7,6 +7,7 @@ from typing import Literal
 
 import typer
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.config import load_settings
@@ -26,7 +27,7 @@ LOGGER = get_logger(__name__)
 TableName = Literal["embeddings", "captions", "scenes", "duplicates", "all"]
 
 
-def _sync_embeddings(src_session, dst_session) -> int:
+def _sync_embeddings(src_session: Session, dst_session: Session) -> int:
     rows = src_session.execute(select(ImageEmbedding)).scalars()
     count = 0
     for row in rows:
@@ -52,7 +53,7 @@ def _sync_embeddings(src_session, dst_session) -> int:
     return count
 
 
-def _sync_captions(src_session, dst_session) -> int:
+def _sync_captions(src_session: Session, dst_session: Session) -> int:
     rows = src_session.execute(select(ImageCaption)).scalars()
     count = 0
     for row in rows:
@@ -76,7 +77,7 @@ def _sync_captions(src_session, dst_session) -> int:
     return count
 
 
-def _sync_scenes(src_session, dst_session) -> int:
+def _sync_scenes(src_session: Session, dst_session: Session) -> int:
     rows = src_session.execute(select(ImageScene)).scalars()
     count = 0
     for row in rows:
@@ -111,7 +112,7 @@ def _sync_scenes(src_session, dst_session) -> int:
     return count
 
 
-def _sync_duplicates(src_session, dst_session) -> int:
+def _sync_duplicates(src_session: Session, dst_session: Session) -> int:
     rows = src_session.execute(select(ImageNearDuplicate)).scalars()
     count = 0
     for row in rows:

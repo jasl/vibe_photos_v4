@@ -6,6 +6,7 @@ import json
 from collections import defaultdict
 
 from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.db import (
@@ -19,7 +20,7 @@ from vibe_photos.labels.repository import LabelRepository
 LOGGER = get_logger(__name__, extra={"component": "duplicate_propagation"})
 
 
-def _load_duplicate_map(primary_session) -> dict[str, list[str]]:
+def _load_duplicate_map(primary_session: Session) -> dict[str, list[str]]:
     groups = {
         row.id: row.canonical_image_id
         for row in primary_session.execute(
@@ -46,7 +47,7 @@ def _load_duplicate_map(primary_session) -> dict[str, list[str]]:
     return duplicates
 
 
-def propagate_duplicate_labels(primary_session, *, label_space_ver: str) -> int:
+def propagate_duplicate_labels(primary_session: Session, *, label_space_ver: str) -> int:
     """Copy canonical image labels to their near-duplicate siblings."""
 
     repo = LabelRepository(primary_session)
@@ -134,5 +135,4 @@ def propagate_duplicate_labels(primary_session, *, label_space_ver: str) -> int:
 
 
 __all__ = ["propagate_duplicate_labels"]
-
 

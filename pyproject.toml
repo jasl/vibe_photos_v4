@@ -55,6 +55,7 @@ dev = [
     "memory-profiler>=0.61.0",
     "line-profiler>=5.0.0",
     "py-spy>=0.4.1",
+    "types-PyYAML>=6.0.12.20241230",
 ]
 phase_final = [
     "fastapi>=0.121.2",
@@ -110,6 +111,14 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 plugins = ["sqlalchemy.ext.mypy.plugin"]
+
+[[tool.mypy.overrides]]
+module = ["celery", "celery.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["vibe_photos.pipeline"]
+ignore_errors = true
 
 [tool.pytest.ini_options]
 minversion = "8.4.2"
