@@ -4,6 +4,10 @@
 # `./init_project.sh` script will also create a baseline `settings.yaml`
 # if it does not exist.
 
+databases:
+  primary_url: "postgresql+psycopg://vibe:vibe@localhost:5432/vibe_primary"
+  projection_url: "sqlite:///cache/index.db"
+
 models:
   embedding:
     backend: "siglip"

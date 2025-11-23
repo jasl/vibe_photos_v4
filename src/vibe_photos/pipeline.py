@@ -12,7 +12,6 @@ from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import and_, delete, func, or_, select, update
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from utils.logging import get_logger
 from vibe_photos.cache_manifest import CACHE_FORMAT_VERSION, ensure_cache_manifest
@@ -27,6 +26,7 @@ from vibe_photos.db import (
     ImageScene,
     Region,
     RegionEmbedding,
+    dialect_insert,
     open_primary_session,
     open_projection_session,
 )
@@ -306,7 +306,7 @@ class PreprocessingPipeline:
 
             self._near_duplicate_dirty.update(ids)
 
-    def run(self, roots: Sequence[Path], primary_db_path: Path, projection_db_path: Path) -> None:
+    def run(self, roots: Sequence[Path], primary_db_path: Path | str, projection_db_path: Path) -> None:
         """Run the preprocessing pipeline for the given album roots.
 
         The initial implementation focuses on wiring and logging. Individual
@@ -315,7 +315,7 @@ class PreprocessingPipeline:
 
         Args:
             roots: Album root directories to scan.
-            primary_db_path: Path to the primary operational database.
+            primary_db_path: Connection target for the primary operational database.
             projection_db_path: Path to the projection database for model outputs.
         """
 
@@ -1274,25 +1274,30 @@ class PreprocessingPipeline:
                     meta_path = embeddings_dir / f"{image_id}.json"
                     meta_path.write_text(json.dumps(meta_payload), encoding="utf-8")
 
-                    stmt = sqlite_insert(ImageEmbedding).values(
-                        image_id=image_id,
-                        model_name=embedding_model_name,
-                        embedding_path=rel_path,
-                        embedding_dim=int(vec.shape[-1]),
-                        model_backend=embedding_cfg.backend,
-                        updated_at=now,
-                    )
-                    stmt = stmt.on_conflict_do_update(
-                        index_elements=[ImageEmbedding.image_id, ImageEmbedding.model_name],
-                        set_={
-                            "embedding_path": stmt.excluded.embedding_path,
-                            "embedding_dim": stmt.excluded.embedding_dim,
-                            "model_backend": stmt.excluded.model_backend,
-                            "updated_at": stmt.excluded.updated_at,
-                        },
-                    )
-                    projection_session.execute(stmt)
-                    primary_session.execute(stmt)
+                    values = {
+                        "image_id": image_id,
+                        "model_name": embedding_model_name,
+                        "embedding_path": rel_path,
+                        "embedding_dim": int(vec.shape[-1]),
+                        "model_backend": embedding_cfg.backend,
+                        "updated_at": now,
+                    }
+
+                    def _upsert_embedding(target_session, payload=values) -> None:
+                        stmt = dialect_insert(target_session, ImageEmbedding).values(**payload)
+                        stmt = stmt.on_conflict_do_update(
+                            index_elements=[ImageEmbedding.image_id, ImageEmbedding.model_name],
+                            set_={
+                                "embedding_path": stmt.excluded.embedding_path,
+                                "embedding_dim": stmt.excluded.embedding_dim,
+                                "model_backend": stmt.excluded.model_backend,
+                                "updated_at": stmt.excluded.updated_at,
+                            },
+                        )
+                        target_session.execute(stmt)
+
+                    _upsert_embedding(projection_session)
+                    _upsert_embedding(primary_session)
                     total_embeddings += 1
 
             projection_session.commit()
@@ -1371,23 +1376,28 @@ class PreprocessingPipeline:
                     }
                     caption_path.write_text(json.dumps(payload), encoding="utf-8")
 
-                    stmt = sqlite_insert(ImageCaption).values(
-                        image_id=image_id,
-                        model_name=caption_model_name,
-                        caption=caption_text,
-                        model_backend=caption_cfg.backend,
-                        updated_at=now,
-                    )
-                    stmt = stmt.on_conflict_do_update(
-                        index_elements=[ImageCaption.image_id, ImageCaption.model_name],
-                        set_={
-                            "caption": stmt.excluded.caption,
-                            "model_backend": stmt.excluded.model_backend,
-                            "updated_at": stmt.excluded.updated_at,
-                        },
-                    )
-                    projection_session.execute(stmt)
-                    primary_session.execute(stmt)
+                    values = {
+                        "image_id": image_id,
+                        "model_name": caption_model_name,
+                        "caption": caption_text,
+                        "model_backend": caption_cfg.backend,
+                        "updated_at": now,
+                    }
+
+                    def _upsert_caption(target_session, payload=values) -> None:
+                        stmt = dialect_insert(target_session, ImageCaption).values(**payload)
+                        stmt = stmt.on_conflict_do_update(
+                            index_elements=[ImageCaption.image_id, ImageCaption.model_name],
+                            set_={
+                                "caption": stmt.excluded.caption,
+                                "model_backend": stmt.excluded.model_backend,
+                                "updated_at": stmt.excluded.updated_at,
+                            },
+                        )
+                        target_session.execute(stmt)
+
+                    _upsert_caption(projection_session)
+                    _upsert_caption(primary_session)
                     total_captions += 1
 
             projection_session.commit()
@@ -1494,7 +1504,7 @@ class PreprocessingPipeline:
         meta_path = embeddings_dir / f"{image_id}.json"
         meta_path.write_text(json.dumps(meta_payload), encoding="utf-8")
 
-        stmt = sqlite_insert(ImageEmbedding).values(
+        stmt = dialect_insert(primary_session, ImageEmbedding).values(
             image_id=image_id,
             model_name=embedding_model_name,
             embedding_path=rel_path,
@@ -1577,7 +1587,7 @@ class PreprocessingPipeline:
         }
         caption_path.write_text(json.dumps(payload), encoding="utf-8")
 
-        stmt = sqlite_insert(ImageCaption).values(
+        stmt = dialect_insert(primary_session, ImageCaption).values(
             image_id=image_id,
             model_name=caption_model_name,
             caption=caption_text,

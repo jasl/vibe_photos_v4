@@ -172,7 +172,11 @@ def _enqueue_targets(image_ids: Sequence[str], task: str) -> None:
 
 def main(
     roots: list[Path] = typer.Argument(..., help="One or more directories to scan for images."),
-    db: Path = typer.Option(Path("data/index.db"), help="Path to the primary SQLite database."),
+    db: str | None = typer.Option(
+        None,
+        "--db",
+        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+    ),
     task: str = typer.Option(
         "process",
         "--task",
@@ -187,11 +191,12 @@ def main(
         raise typer.BadParameter("task must be one of: pre_process, process, post_process")
 
     settings: Settings = load_settings()
+    primary_target = db or settings.databases.primary_url
     LOGGER.info(
         "celery_enqueue_start",
         extra={
             "roots": [str(root) for root in roots],
-            "db": str(db),
+            "db": str(primary_target),
             "task": task,
             "queues": {
                 "pre_process": settings.queues.preprocess_queue,
@@ -206,7 +211,7 @@ def main(
         LOGGER.warning("celery_enqueue_no_files", extra={"roots": [str(root) for root in roots]})
         return
 
-    with open_primary_session(db) as session:
+    with open_primary_session(primary_target) as session:
         image_ids = _ingest_files(session, files)
 
     _enqueue_targets(image_ids, task)

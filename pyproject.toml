@@ -27,6 +27,8 @@ dependencies = [
     "xxhash>=3.6.0",
     "inflect>=7.0.0",
     "openai>=1.0.0",
+    "psycopg[binary]>=3.2.3",
+    "pgvector>=0.4.1",
 ]
 
 [tool.uv]
@@ -58,8 +60,6 @@ phase_final = [
     "fastapi>=0.121.2",
     "uvicorn>=0.38.0",
     "streamlit>=1.51.0",
-    "psycopg2-binary>=2.9.11",
-    "pgvector>=0.4.1",
     "redis>=7.0.1",
     "prometheus-client>=0.23.1",
 ]

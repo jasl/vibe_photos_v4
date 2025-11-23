@@ -10,7 +10,6 @@ from typing import cast
 
 from celery import Celery
 from PIL import Image
-from sqlalchemy import select
 
 from utils.logging import get_logger
 from vibe_photos.artifact_store import (
@@ -26,6 +25,7 @@ from vibe_photos.db import (
     ProcessResult,
     open_primary_session,
     open_projection_session,
+    sqlite_path_from_target,
 )
 from vibe_photos.db import Image as ImageRow
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
@@ -40,12 +40,14 @@ def _load_settings() -> Settings:
     return load_settings()
 
 
-def _default_primary_db() -> Path:
-    return Path("data/index.db")
+def _default_primary_db() -> str:
+    settings = _load_settings()
+    return settings.databases.primary_url
 
 
 def _default_projection_db() -> Path:
-    return Path("cache/index.db")
+    settings = _load_settings()
+    return sqlite_path_from_target(settings.databases.projection_url)
 
 
 def _init_celery() -> Celery:

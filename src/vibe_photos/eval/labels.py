@@ -20,7 +20,11 @@ app = typer.Typer(add_completion=False)
 @app.command()
 def main(
     gt: Path = typer.Option(..., "--gt", help="Path to ground truth JSON or JSONL file."),
-    db: Path = typer.Option(Path("data/index.db"), "--db", help="Path to data/index.db."),
+    db: str | None = typer.Option(
+        None,
+        "--db",
+        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+    ),
 ) -> None:
     """Evaluate scene/attribute/object labels."""
 
@@ -30,7 +34,8 @@ def main(
         raise typer.Exit(code=1)
 
     settings = load_settings()
-    with open_primary_session(db) as session:
+    primary_target = db or settings.databases.primary_url
+    with open_primary_session(primary_target) as session:
         metrics = _compute_metrics(session, settings, records)
 
     _print_metrics(metrics)

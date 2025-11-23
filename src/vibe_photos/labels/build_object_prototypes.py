@@ -11,7 +11,12 @@ from sqlalchemy import select
 
 from utils.logging import get_logger
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import Label, LabelAlias, open_primary_session
+from vibe_photos.db import (
+    Label,
+    LabelAlias,
+    open_primary_session,
+    sqlite_path_from_target,
+)
 from vibe_photos.ml.models import get_siglip_embedding_model
 
 LOGGER = get_logger(__name__, extra={"command": "build_object_prototypes"})
@@ -92,12 +97,17 @@ def build_object_prototypes(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build SigLIP text prototypes for object labels.")
-    parser.add_argument("--db", type=Path, default=Path("data/index.db"), help="Primary DB with labels table.")
+    parser.add_argument(
+        "--db",
+        type=str,
+        default=None,
+        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+    )
     parser.add_argument(
         "--cache-root",
-        type=Path,
-        default=Path("cache"),
-        help="Cache root where prototypes will be stored (under label_text_prototypes/).",
+        type=str,
+        default=None,
+        help="Cache root where prototypes will be stored. Defaults to the projection DB directory.",
     )
     parser.add_argument(
         "--output-name",
@@ -111,8 +121,14 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     settings = load_settings()
-    with open_primary_session(args.db) as session:
-        build_object_prototypes(session=session, settings=settings, cache_root=args.cache_root, output_name=args.output_name)
+    primary_target = args.db or settings.databases.primary_url
+    if args.cache_root:
+        cache_root = Path(args.cache_root)
+    else:
+        cache_root = sqlite_path_from_target(settings.databases.projection_url).parent
+
+    with open_primary_session(primary_target) as session:
+        build_object_prototypes(session=session, settings=settings, cache_root=cache_root, output_name=args.output_name)
 
 
 if __name__ == "__main__":

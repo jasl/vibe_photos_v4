@@ -11,7 +11,6 @@ from pathlib import Path
 import numpy as np
 import torch
 from sqlalchemy import Select, select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from utils.logging import get_logger
 from vibe_photos.classifier import (
@@ -20,7 +19,7 @@ from vibe_photos.classifier import (
     build_scene_classifier,
 )
 from vibe_photos.config import Settings
-from vibe_photos.db import Image, ImageEmbedding, ImageScene, Label
+from vibe_photos.db import Image, ImageEmbedding, ImageScene, Label, dialect_insert
 from vibe_photos.labels.repository import LabelRepository
 from vibe_photos.labels.scene_schema import (
     ALL_SCENE_LABEL_KEYS,
@@ -58,34 +57,37 @@ def _upsert_image_scene(
     primary_session,
 ) -> None:
     now = time.time()
-    stmt = sqlite_insert(ImageScene).values(
-        image_id=image_id,
-        scene_type=attributes.scene_type,
-        scene_confidence=attributes.scene_confidence,
-        has_text=bool(attributes.has_text),
-        has_person=bool(attributes.has_person),
-        is_screenshot=bool(attributes.is_screenshot),
-        is_document=bool(attributes.is_document),
-        classifier_name=attributes.classifier_name,
-        classifier_version=attributes.classifier_version,
-        updated_at=now,
-    )
-    stmt = stmt.on_conflict_do_update(
-        index_elements=[ImageScene.image_id],
-        set_={
-            "scene_type": stmt.excluded.scene_type,
-            "scene_confidence": stmt.excluded.scene_confidence,
-            "has_text": stmt.excluded.has_text,
-            "has_person": stmt.excluded.has_person,
-            "is_screenshot": stmt.excluded.is_screenshot,
-            "is_document": stmt.excluded.is_document,
-            "classifier_name": stmt.excluded.classifier_name,
-            "classifier_version": stmt.excluded.classifier_version,
-            "updated_at": stmt.excluded.updated_at,
-        },
-    )
-    projection_session.execute(stmt)
-    primary_session.execute(stmt)
+    def _upsert(target_session) -> None:
+        stmt = dialect_insert(target_session, ImageScene).values(
+            image_id=image_id,
+            scene_type=attributes.scene_type,
+            scene_confidence=attributes.scene_confidence,
+            has_text=bool(attributes.has_text),
+            has_person=bool(attributes.has_person),
+            is_screenshot=bool(attributes.is_screenshot),
+            is_document=bool(attributes.is_document),
+            classifier_name=attributes.classifier_name,
+            classifier_version=attributes.classifier_version,
+            updated_at=now,
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ImageScene.image_id],
+            set_={
+                "scene_type": stmt.excluded.scene_type,
+                "scene_confidence": stmt.excluded.scene_confidence,
+                "has_text": stmt.excluded.has_text,
+                "has_person": stmt.excluded.has_person,
+                "is_screenshot": stmt.excluded.is_screenshot,
+                "is_document": stmt.excluded.is_document,
+                "classifier_name": stmt.excluded.classifier_name,
+                "classifier_version": stmt.excluded.classifier_version,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        )
+        target_session.execute(stmt)
+
+    _upsert(projection_session)
+    _upsert(primary_session)
 
 
 def _write_scene_assignment(

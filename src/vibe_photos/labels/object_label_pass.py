@@ -20,6 +20,7 @@ from vibe_photos.db import (
     RegionEmbedding,
     open_primary_session,
     open_projection_session,
+    sqlite_path_from_target,
 )
 from vibe_photos.labels.repository import LabelRepository
 
@@ -269,9 +270,24 @@ def run_object_label_pass(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run region-based zero-shot object label pass.")
-    parser.add_argument("--data-db", type=Path, default=Path("data/index.db"), help="Primary DB path (labels target).")
-    parser.add_argument("--cache-db", type=Path, default=Path("cache/index.db"), help="Cache DB path (regions source).")
-    parser.add_argument("--cache-root", type=Path, default=Path("cache"), help="Cache root containing embeddings.")
+    parser.add_argument(
+        "--data-db",
+        type=str,
+        default=None,
+        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+    )
+    parser.add_argument(
+        "--cache-db",
+        type=str,
+        default=None,
+        help="Projection database URL or path. Defaults to databases.projection_url in settings.yaml.",
+    )
+    parser.add_argument(
+        "--cache-root",
+        type=str,
+        default=None,
+        help="Cache root containing embeddings. Defaults to the projection DB directory.",
+    )
     parser.add_argument("--label-space", type=str, default="object_v1", help="Label space version for assignments.")
     parser.add_argument("--prototype", type=str, default="object_v1", help="Prototype file name (without .npz).")
     return parser.parse_args()
@@ -280,12 +296,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     settings = load_settings()
-    with open_primary_session(args.data_db) as primary_session, open_projection_session(args.cache_db) as projection_session:
+    primary_target = args.data_db or settings.databases.primary_url
+    cache_target = args.cache_db or settings.databases.projection_url
+    if args.cache_root:
+        cache_root = Path(args.cache_root)
+    else:
+        cache_root = sqlite_path_from_target(cache_target).parent
+
+    with open_primary_session(primary_target) as primary_session, open_projection_session(cache_target) as projection_session:
         run_object_label_pass(
             primary_session=primary_session,
             projection_session=projection_session,
             settings=settings,
-            cache_root=args.cache_root,
+            cache_root=cache_root,
             label_space_ver=args.label_space,
             prototype_name=args.prototype,
         )

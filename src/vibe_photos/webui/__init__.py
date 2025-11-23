@@ -24,6 +24,7 @@ from vibe_photos.db import (
     Region,
     open_primary_session,
     open_projection_session,
+    sqlite_path_from_target,
 )
 from vibe_photos.labels.scene_schema import (
     ATTRIBUTE_LABEL_KEYS,
@@ -36,16 +37,20 @@ LOGGER = get_logger(__name__)
 app = Flask(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
-_DATA_ROOT = _PROJECT_ROOT / "data"
-_CACHE_ROOT = _PROJECT_ROOT / "cache"
 
 
-def _get_primary_db_path() -> Path:
-    return _DATA_ROOT / "index.db"
+def _get_primary_db_target() -> str | Path:
+    settings = load_settings()
+    return settings.databases.primary_url
 
 
 def _get_projection_db_path() -> Path:
-    return _CACHE_ROOT / "index.db"
+    settings = load_settings()
+    return sqlite_path_from_target(settings.databases.projection_url)
+
+
+def _get_cache_root() -> Path:
+    return _get_projection_db_path().parent
 
 
 def _is_checked(value: str | None) -> bool:
@@ -105,9 +110,9 @@ def images() -> Any:
 
     region_filter_ids: set[str] | None = None
 
-    primary_path = _get_primary_db_path()
+    primary_target = _get_primary_db_target()
 
-    with open_primary_session(primary_path) as session:
+    with open_primary_session(primary_target) as session:
         label_keys = set(ATTRIBUTE_LABEL_KEYS.values())
         scene_filter_key = normalize_scene_filter(scene_type)
         if scene_filter_key:
@@ -298,11 +303,11 @@ def images() -> Any:
 def image_detail(image_id: str) -> Any:
     """Detail page for a single image, keyed by logical image identifier."""
 
-    primary_path = _get_primary_db_path()
+    primary_target = _get_primary_db_target()
     settings = load_settings()
     scene_space = settings.label_spaces.scene_current
 
-    with open_primary_session(primary_path) as session:
+    with open_primary_session(primary_target) as session:
         image_row = session.get(Image, image_id)
         if image_row is None:
             abort(404)
@@ -326,7 +331,7 @@ def image_detail(image_id: str) -> Any:
             )
     region_ids = [region.id for region in region_rows]
 
-    with open_primary_session(primary_path) as session:
+    with open_primary_session(primary_target) as session:
         label_rows = session.execute(
             select(
                 Label.key,
@@ -482,7 +487,7 @@ def image_detail(image_id: str) -> Any:
 
     # Near-duplicate images (both as anchor and as duplicate).
     near_duplicates: list[dict[str, Any]] = []
-    with open_primary_session(primary_path) as session:
+    with open_primary_session(primary_target) as session:
         anchor_rows = (
             session.execute(
                 select(ImageNearDuplicate).where(ImageNearDuplicate.anchor_image_id == image_id)
@@ -534,7 +539,7 @@ def image_detail(image_id: str) -> Any:
 
     gps_latitude: float | None = None
     gps_longitude: float | None = None
-    metadata_path = Path("cache") / "images" / "metadata" / f"{image_id}.json"
+    metadata_path = _get_cache_root() / "images" / "metadata" / f"{image_id}.json"
     if metadata_path.exists():
         try:
             payload = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -638,10 +643,11 @@ def image_thumbnail(image_id: str) -> Any:
             params={"size": settings.pipeline.thumbnail_size_large},
         )
 
-    primary_path = _get_primary_db_path()
+    primary_target = _get_primary_db_target()
     projection_path = _get_projection_db_path()
+    cache_root = _get_cache_root()
 
-    with open_primary_session(primary_path) as session:
+    with open_primary_session(primary_target) as session:
         row = session.execute(
             select(Image.primary_path, Image.phash).where(and_(Image.image_id == image_id, Image.status == "active"))
         ).first()
@@ -668,7 +674,7 @@ def image_thumbnail(image_id: str) -> Any:
             thumb_path = candidate if candidate.exists() else None
 
     if thumb_path is None:
-        legacy_cache_path = _CACHE_ROOT / "images" / "thumbnails" / f"{image_id}.jpg"
+        legacy_cache_path = cache_root / "images" / "thumbnails" / f"{image_id}.jpg"
         thumb_path = legacy_cache_path if legacy_cache_path.exists() else None
 
     if thumb_path is not None:
@@ -687,7 +693,7 @@ def image_thumbnail(image_id: str) -> Any:
 
     # Backward-compatibility: fall back to legacy pHash-keyed thumbnails if present.
     if phash_hex:
-        legacy_thumb_path = _CACHE_ROOT / "images" / "thumbnails" / f"{phash_hex}.jpg"
+        legacy_thumb_path = cache_root / "images" / "thumbnails" / f"{phash_hex}.jpg"
         if legacy_thumb_path.exists():
             try:
                 return send_file(legacy_thumb_path)

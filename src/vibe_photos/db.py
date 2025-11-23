@@ -17,8 +17,12 @@ from sqlalchemy import (
     create_engine,
     delete,
     event,
+    text,
 )
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -365,7 +369,7 @@ class LabelAssignment(Base):
     )
 
 
-_ENGINE_CACHE: dict[Path, Engine] = {}
+_ENGINE_CACHE: dict[str, Engine] = {}
 _ENGINE_LOCK = Lock()
 
 
@@ -379,39 +383,90 @@ def _ensure_parent_directory(path: Path) -> None:
         raise
 
 
-def _get_engine(path: Path) -> Engine:
-    """Return a cached SQLite engine for the provided path, creating schema if needed."""
+def _normalize_target(target: str | Path) -> str:
+    if isinstance(target, Path):
+        return f"sqlite:///{target.resolve()}"
 
-    resolved = path.resolve()
-    engine = _ENGINE_CACHE.get(resolved)
+    raw = str(target).strip()
+    if not raw:
+        raise ValueError("database target cannot be empty")
+
+    if "://" not in raw:
+        return f"sqlite:///{Path(raw).resolve()}"
+
+    url = make_url(raw)
+    if url.drivername.startswith("sqlite"):
+        database = url.database or ""
+        if database not in {":memory:", ""}:
+            db_path = Path(database)
+            if not db_path.is_absolute():
+                db_path = (Path.cwd() / db_path).resolve()
+            url = url.set(database=str(db_path))
+        return str(url)
+
+    return raw
+
+
+def sqlite_path_from_target(target: str | Path) -> Path:
+    if isinstance(target, Path):
+        return target.resolve()
+
+    raw = str(target).strip()
+    if "://" not in raw:
+        return Path(raw).resolve()
+
+    url = make_url(raw)
+    if not url.drivername.startswith("sqlite"):
+        raise ValueError(f"Expected sqlite URL, received {raw!r}")
+
+    database = url.database or ""
+    if database == ":memory:":
+        raise ValueError("in-memory SQLite databases are not supported for projection cache")
+
+    db_path = Path(database)
+    if not db_path.is_absolute():
+        db_path = (Path.cwd() / db_path).resolve()
+    return db_path
+
+
+def _get_engine(target: str | Path) -> Engine:
+    """Return a cached SQLAlchemy engine for the provided target, creating schema if needed."""
+
+    normalized = _normalize_target(target)
+    engine = _ENGINE_CACHE.get(normalized)
     if engine is not None:
         return engine
 
     with _ENGINE_LOCK:
-        engine = _ENGINE_CACHE.get(resolved)
+        engine = _ENGINE_CACHE.get(normalized)
         if engine is not None:
             return engine
 
-        _ensure_parent_directory(resolved)
-        engine = create_engine(
-            f"sqlite:///{resolved}",
-            future=True,
-            # Allow readers/writers to wait for a busy database instead of failing fast.
-            connect_args={"timeout": 30.0},
-        )
+        sa_url = make_url(normalized)
+        is_sqlite = sa_url.drivername.startswith("sqlite")
 
-        @event.listens_for(engine, "connect")
-        def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # type: ignore[override]
-            """Configure SQLite for better concurrent access."""
+        engine_kwargs: dict[str, object] = {"future": True}
+        if is_sqlite:
+            if sa_url.database and sa_url.database not in {":memory:"}:
+                _ensure_parent_directory(Path(sa_url.database))
+            engine_kwargs["connect_args"] = {"timeout": 30.0}
+        else:
+            engine_kwargs["pool_pre_ping"] = True
 
-            cursor = dbapi_connection.cursor()
-            try:
-                # WAL mode lets readers proceed while a writer has a transaction open.
-                cursor.execute("PRAGMA journal_mode=WAL")
-                # Additional safeguard on the SQLite side; in milliseconds.
-                cursor.execute("PRAGMA busy_timeout = 30000")
-            finally:
-                cursor.close()
+        engine = create_engine(normalized, **engine_kwargs)
+
+        if is_sqlite:
+
+            @event.listens_for(engine, "connect")
+            def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # type: ignore[override]
+                """Configure SQLite for better concurrent access."""
+
+                cursor = dbapi_connection.cursor()
+                try:
+                    cursor.execute("PRAGMA journal_mode=WAL")
+                    cursor.execute("PRAGMA busy_timeout = 30000")
+                finally:
+                    cursor.close()
 
         try:
             Base.metadata.create_all(engine)
@@ -423,26 +478,34 @@ def _get_engine(path: Path) -> Engine:
             if "already exists" in message:
                 LOGGER.info(
                     "db_create_all_table_exists_race",
-                    extra={"path": str(resolved), "error": str(exc)},
+                    extra={"target": normalized, "error": str(exc)},
                 )
             else:
                 raise
 
-        _ENGINE_CACHE[resolved] = engine
+        if sa_url.drivername.startswith("postgresql"):
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.error("db_vector_extension_error", extra={"url": str(sa_url), "error": str(exc)})
+                raise
+
+        _ENGINE_CACHE[normalized] = engine
         return engine
 
 
-def open_primary_session(path: Path) -> Session:
+def open_primary_session(target: str | Path) -> Session:
     """Open a SQLAlchemy session for the primary database."""
 
-    engine = _get_engine(path)
+    engine = _get_engine(target)
     return Session(engine, future=True)
 
 
-def open_projection_session(path: Path) -> Session:
+def open_projection_session(target: str | Path) -> Session:
     """Open a SQLAlchemy session for the projection database."""
 
-    engine = _get_engine(path)
+    engine = _get_engine(target)
     return Session(engine, future=True)
 
 
@@ -456,6 +519,21 @@ def reset_projection_tables(session: Session) -> None:
     session.execute(delete(Region))
     session.execute(delete(RegionEmbedding))
     session.commit()
+
+
+def dialect_insert(session: Session, table):
+    """Return a dialect-aware INSERT statement supporting ON CONFLICT."""
+
+    bind = session.get_bind()
+    if bind is None:
+        raise RuntimeError("Session is not bound to an engine.")
+
+    name = bind.dialect.name
+    if name == "sqlite":
+        return sqlite_insert(table)
+    if name.startswith("postgresql"):
+        return pg_insert(table)
+    raise NotImplementedError(f"Unsupported dialect for upsert: {name}")
 
 
 __all__ = [
@@ -476,5 +554,7 @@ __all__ = [
     "LabelAssignment",
     "open_primary_session",
     "open_projection_session",
+    "dialect_insert",
+    "sqlite_path_from_target",
     "reset_projection_tables",
 ]

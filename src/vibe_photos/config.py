@@ -321,6 +321,14 @@ class ClusterConfig:
 
 
 @dataclass
+class DatabaseConfig:
+    """Database connection targets for primary and projection stores."""
+
+    primary_url: str = "sqlite:///data/index.db"
+    projection_url: str = "sqlite:///cache/index.db"
+
+
+@dataclass
 class ModelsConfig:
     """Bundle of all model-related configuration."""
 
@@ -393,6 +401,7 @@ class LabelSpacesConfig:
 class Settings:
     """Top-level application settings."""
 
+    databases: DatabaseConfig = field(default_factory=DatabaseConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     queues: QueueConfig = field(default_factory=QueueConfig)
@@ -427,6 +436,13 @@ def load_settings(settings_path: Path | None = None) -> Settings:
 
     if not isinstance(raw, dict):
         return settings
+
+    databases_raw = _as_dict(raw.get("databases"))
+    db_cfg = settings.databases
+    if isinstance(databases_raw.get("primary_url"), str):
+        db_cfg.primary_url = databases_raw["primary_url"]
+    if isinstance(databases_raw.get("projection_url"), str):
+        db_cfg.projection_url = databases_raw["projection_url"]
 
     models_raw = _as_dict(raw.get("models"))
     embedding_raw = _as_dict(models_raw.get("embedding"))
@@ -679,6 +695,7 @@ def get_caption_model_name(settings: Settings | None = None) -> str:
 
 
 __all__ = [
+    "DatabaseConfig",
     "EmbeddingModelConfig",
     "CaptionModelConfig",
     "DetectionModelConfig",

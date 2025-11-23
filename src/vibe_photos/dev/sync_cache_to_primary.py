@@ -3,21 +3,22 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from pathlib import Path
 from typing import Literal
 
 import typer
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from utils.logging import get_logger
+from vibe_photos.config import load_settings
 from vibe_photos.db import (
     ImageCaption,
     ImageEmbedding,
     ImageNearDuplicate,
     ImageScene,
+    dialect_insert,
     open_primary_session,
     open_projection_session,
+    sqlite_path_from_target,
 )
 
 LOGGER = get_logger(__name__)
@@ -29,7 +30,7 @@ def _sync_embeddings(src_session, dst_session) -> int:
     rows = src_session.execute(select(ImageEmbedding)).scalars()
     count = 0
     for row in rows:
-        stmt = sqlite_insert(ImageEmbedding).values(
+        stmt = dialect_insert(dst_session, ImageEmbedding).values(
             image_id=row.image_id,
             model_name=row.model_name,
             embedding_path=row.embedding_path,
@@ -55,7 +56,7 @@ def _sync_captions(src_session, dst_session) -> int:
     rows = src_session.execute(select(ImageCaption)).scalars()
     count = 0
     for row in rows:
-        stmt = sqlite_insert(ImageCaption).values(
+        stmt = dialect_insert(dst_session, ImageCaption).values(
             image_id=row.image_id,
             model_name=row.model_name,
             caption=row.caption,
@@ -79,7 +80,7 @@ def _sync_scenes(src_session, dst_session) -> int:
     rows = src_session.execute(select(ImageScene)).scalars()
     count = 0
     for row in rows:
-        stmt = sqlite_insert(ImageScene).values(
+        stmt = dialect_insert(dst_session, ImageScene).values(
             image_id=row.image_id,
             scene_type=row.scene_type,
             scene_confidence=row.scene_confidence,
@@ -114,7 +115,7 @@ def _sync_duplicates(src_session, dst_session) -> int:
     rows = src_session.execute(select(ImageNearDuplicate)).scalars()
     count = 0
     for row in rows:
-        stmt = sqlite_insert(ImageNearDuplicate).values(
+        stmt = dialect_insert(dst_session, ImageNearDuplicate).values(
             anchor_image_id=row.anchor_image_id,
             duplicate_image_id=row.duplicate_image_id,
             phash_distance=row.phash_distance,
@@ -133,16 +134,29 @@ def _sync_duplicates(src_session, dst_session) -> int:
 
 
 def main(
-    cache_db: Path = typer.Option(Path("cache/index.db"), help="Cache DB path (projection)."),
-    db: Path = typer.Option(Path("data/index.db"), help="Primary DB path."),
+    cache_db: str | None = typer.Option(
+        None,
+        "--cache-db",
+        help="Projection database URL or path. Defaults to databases.projection_url in settings.yaml.",
+    ),
+    db: str | None = typer.Option(
+        None,
+        "--db",
+        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+    ),
     tables: Iterable[TableName] = typer.Option(
         ["all"], "--table", "-t", help="Tables to sync: embeddings, captions, scenes, duplicates, or all."
     ),
 ) -> None:
     """Copy cache projection tables into the primary DB."""
 
+    settings = load_settings()
+    cache_target = cache_db or settings.databases.projection_url
+    cache_path = sqlite_path_from_target(cache_target)
+    primary_target = db or settings.databases.primary_url
+
     selected = set(tables or ["all"])
-    with open_projection_session(cache_db) as src, open_primary_session(db) as dst:
+    with open_projection_session(cache_path) as src, open_primary_session(primary_target) as dst:
         total = 0
         if "embeddings" in selected or "all" in selected:
             total += _sync_embeddings(src, dst)
@@ -153,7 +167,10 @@ def main(
         if "duplicates" in selected or "all" in selected:
             total += _sync_duplicates(src, dst)
 
-    LOGGER.info("cache_sync_complete", extra={"tables": sorted(selected), "rows_synced": total, "cache_db": str(cache_db), "db": str(db)})
+    LOGGER.info(
+        "cache_sync_complete",
+        extra={"tables": sorted(selected), "rows_synced": total, "cache_db": str(cache_path), "db": str(primary_target)},
+    )
 
 
 if __name__ == "__main__":

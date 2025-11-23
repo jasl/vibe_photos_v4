@@ -46,24 +46,31 @@ On Linux or Windows machines with a compatible NVIDIA GPU and CUDA 13.0:
   - `models.detection.device: "cuda"` (if detection is enabled)
 - Alternatively, pass `--device cuda` to the preprocessing CLI or workers to override the configured device at runtime.
 
+Database Configuration
+----------------------
+
+- `config/settings.yml` now includes a `databases` block. By default the primary database points at the local Postgres + pgvector service defined in `docker-compose.yml`, while the projection/cache database remains `sqlite:///cache/index.db` for portability.
+- Start the backing services with `docker compose up postgres redis` (or the full stack) before running the pipeline.
+- Override `databases.primary_url` / `databases.projection_url` per environment as needed; all CLIs and services now accept DB URLs in addition to file paths.
+
 Running the Pipeline (Single-Process)
 ------------------------------------
 
 For local runs, the recommended and simplest path is a single-process Typer CLI:
 
-- `vibe_photos.dev.process` — scans album roots, populates the primary SQLite database,
-  and writes all versioned cache artifacts for embeddings, captions, thumbnails, detections,
-  regions, and scene labels.
+- `vibe_photos.dev.process` — scans album roots, populates the primary database
+  (PostgreSQL by default, configured via `databases.primary_url`), and writes all versioned cache artifacts
+  for embeddings, captions, thumbnails, detections, regions, and scene labels into the projection cache.
 
 Basic single-process run:
 
-- `uv run python -m vibe_photos.dev.process --root <album_root> --db data/index.db --cache-db cache/index.db`
+- `uv run python -m vibe_photos.dev.process --root <album_root>`
 
 Key options:
 
 - `--root`: one or more album root directories to scan (may be passed multiple times).
-- `--db`: path to the primary operational SQLite database (default `data/index.db`).
-- `--cache-db`: path to the projection SQLite database (default `cache/index.db`).
+- `--db`: primary database URL or path (defaults to `databases.primary_url` in `config/settings.yaml`).
+- `--cache-db`: projection database URL or path (defaults to `databases.projection_url`, which remains SQLite for portability).
 - `--batch-size`: override the model batch size from `config/settings.yaml`.
 - `--device`: override the model device (for example `cpu`, `cuda`, or `mps`).
 - `--image-path`: process a single image into the projection cache using shared preprocessing steps.
@@ -71,7 +78,7 @@ Key options:
 
 `cache/index.db` is a cache of *pre_process* outputs (embeddings, captions, detections, scenes) and is safe to discard; `process` stages read
 from this cache and may copy into the primary DB when required.
-Serve/UI/API must read from `data/index.db` only; use the sync helper (below) to copy projection tables from cache into primary when needed.
+Serve/UI/API should read from the primary Postgres database (configured via `databases.primary_url`); use the sync helper (below) to copy projection tables from cache into primary when needed.
 
 What a single-process run does:
 
@@ -168,8 +175,8 @@ Start the UI:
 
 - `FLASK_APP=vibe_photos.webui uv run flask run`
 
-By default the UI connects to `data/index.db` in the project root. Once the
-server is running, open the following in a browser:
+By default the UI connects to the primary database specified in `config/settings.yaml`
+(`databases.primary_url`). Once the server is running, open the following in a browser:
 
 - `http://127.0.0.1:5000/`
 

@@ -9,11 +9,11 @@ from __future__ import annotations
 import argparse
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
+from vibe_photos.config import load_settings
 from vibe_photos.db import open_primary_session
 from vibe_photos.labels.repository import LabelRepository
 
@@ -81,13 +81,20 @@ def seed_labels(session: Session) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Seed base labels into the primary database.")
-    parser.add_argument("--db", type=Path, default=Path("data/index.db"), help="Path to primary data DB.")
+    parser.add_argument(
+        "--db",
+        type=str,
+        default=None,
+        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    with open_primary_session(args.db) as session:
+    settings = load_settings()
+    target = args.db or settings.databases.primary_url
+    with open_primary_session(target) as session:
         seed_labels(session)
 
 

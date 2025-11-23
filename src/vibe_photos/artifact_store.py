@@ -10,11 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sqlalchemy import select
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
-from vibe_photos.db import ArtifactDependency, ArtifactRecord
+from vibe_photos.db import ArtifactDependency, ArtifactRecord, dialect_insert
 
 LOGGER = get_logger(__name__, extra={"component": "artifact_store"})
 
@@ -82,7 +81,7 @@ class ArtifactManager:
         result = builder(artifact_dir)
         now = time.time()
 
-        stmt = sqlite_insert(ArtifactRecord).values(
+        stmt = dialect_insert(self._session, ArtifactRecord).values(
             image_id=image_id,
             artifact_type=spec.artifact_type,
             version_key=spec.version_key,
@@ -130,7 +129,7 @@ class ArtifactManager:
 
     def _record_dependencies(self, artifact_id: int, dependencies: Iterable[int]) -> None:
         for dep in dependencies:
-            stmt = sqlite_insert(ArtifactDependency).values(
+            stmt = dialect_insert(self._session, ArtifactDependency).values(
                 artifact_id=artifact_id, depends_on_artifact_id=int(dep)
             ).on_conflict_do_nothing()
             self._session.execute(stmt)

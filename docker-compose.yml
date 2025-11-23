@@ -8,5 +8,19 @@ services:
     volumes:
       - redis_data:/data
 
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vibe_primary
+      POSTGRES_USER: vibe
+      POSTGRES_PASSWORD: vibe
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
 volumes:
   redis_data:
+  postgres_data:
