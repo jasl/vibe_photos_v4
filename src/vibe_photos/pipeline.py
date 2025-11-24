@@ -1557,8 +1557,9 @@ class PreprocessingPipeline:
         # Ensure concurrent Celery workers lock rows in a consistent order on Postgres to
         # avoid deadlocks when multiple pipelines recompute pHash simultaneously.
         bind = primary_session.get_bind()
-        if bind is not None and getattr(bind.dialect, "name", "") == "postgresql":
-            phash_query = phash_query.with_for_update(skip_locked=True)
+        if bind is None:
+            raise RuntimeError("primary_session is not bound to an engine")
+        phash_query = phash_query.with_for_update(skip_locked=True)
 
         rows = primary_session.execute(phash_query)
 
