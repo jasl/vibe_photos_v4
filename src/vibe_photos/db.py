@@ -398,14 +398,10 @@ def _get_engine(target: str | Path) -> Engine:
             try:
                 with engine.begin() as conn:
                     conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.error("db_vector_extension_error", extra={"url": str(sa_url), "error": str(exc)})
-                raise
-        elif sa_url.drivername.startswith("sqlite"):
-            engine = create_engine(normalized, future=True)
-            Base.metadata.create_all(engine)
+            except Exception as exc:  # pragma: no cover - extension might be unavailable in local test clusters
+                LOGGER.warning("db_vector_extension_unavailable", extra={"url": str(sa_url), "error": str(exc)})
         else:  # pragma: no cover - defensive guard for unsupported dialects
-            raise ValueError(f"Unsupported database dialect {sa_url.drivername!r}; expected postgresql or sqlite")
+            raise ValueError(f"Unsupported database dialect {sa_url.drivername!r}; expected postgresql")
 
         _ENGINE_CACHE[normalized] = engine
         return engine

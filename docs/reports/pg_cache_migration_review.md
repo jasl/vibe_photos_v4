@@ -2,8 +2,7 @@
 
 ## Residual SQLite-oriented code paths
 
-- `normalize_database_url` still assumes SQLite for plain paths and rewrites relative URLs to SQLite paths. This can hide misconfigured PostgreSQL URLs and keeps SQLite-specific helpers in the critical path for both the primary database and cache handling. Consider making PostgreSQL the default/required when a URL scheme is missing, and move cache path handling to a cache-specific helper instead of `sqlite_path_from_target`. 【F:src/vibe_photos/db_helpers.py†L12-L48】【F:src/vibe_photos/task_queue.py†L35-L47】【F:scripts/init_databases.py†L16-L58】
-- Cache handling and helper names remain SQLite-centric (`sqlite_path_from_target`, `.db` sentinel checks) even though caches are now filesystem-only. Renaming these helpers (for example `cache_root_from_target`) and removing SQLite URL parsing would clarify intent and reduce surprise for PostgreSQL-only deployments. The current Celery/default cache root resolution and initialization scripts still depend on the SQLite-style sentinel. 【F:src/vibe_photos/db_helpers.py†L40-L73】【F:src/vibe_photos/task_queue.py†L39-L64】【F:scripts/init_databases.py†L40-L71】
+Remaining follow-ups have been addressed by enforcing PostgreSQL-only URL normalization and dropping the legacy SQLite cache sentinel.
 - The database engine factory retains SQLite-only behaviors (PRAGMA setup, `connect_args` timeouts, and SQLite-specific exports in `__all__`). If SQLite is no longer supported, these branches can be isolated to legacy/shim paths or removed to simplify the engine bootstrap. 【F:src/vibe_photos/db.py†L375-L458】【F:src/vibe_photos/db.py†L493-L506】
 
 ## Documentation alignment gaps

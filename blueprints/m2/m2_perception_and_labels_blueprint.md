@@ -12,7 +12,7 @@ M1 已经完成了一条稳定的本地预处理流水线：
 
 - **感知输出（features）**：SigLIP 全图 embedding、BLIP caption、OWL‑ViT region 检测、pHash。
 - **轻量分类**：基于 SigLIP 的 coarse scene + 布尔属性（has_text / has_person / is_document / is_screenshot）。
-- **Cache + primary DB**：感知结果写入主数据库（M1 时代为 `data/index.db`，Phase Final 迁移到 Postgres），缓存文件位于 `cache/` 目录（历史上通过 `cache/index.db` 定位，如今仅作哨兵）。
+- **Cache + primary DB**：感知结果写入主数据库（M1 时代为 `data/index.db`，Phase Final 迁移到 Postgres），缓存文件位于 `cache/` 目录。
 - **Flask QA UI**：支持按 coarse scene 和布尔属性筛图。
 
 在此基础上，**M2 的核心目标**是：
@@ -583,7 +583,7 @@ M2 在感知层不过度追求全新模型，而是围绕现有 SigLIP / BLIP / 
 #### 5.1.5 特征存储（可选）
 
 上述 face_count、screenshot_score、document_score 等中间特征可以只在 scene/attribute pass 内存中使用；  
-为了便于后续系统化调参与评估，推荐在主数据库中增加轻量的 image‑level feature 表，将这些标量以 JSON 形式存储（`cache/index.db` 仅作为缓存根目录的占位符存在）：
+为了便于后续系统化调参与评估，推荐在主数据库中增加轻量的 image‑level feature 表，将这些标量以 JSON 形式存储：
 
 ```sql
 CREATE TABLE image_features (

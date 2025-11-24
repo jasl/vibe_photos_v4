@@ -126,7 +126,7 @@ Deletion semantics in M1:
 - When some paths disappear but at least one valid path remains, the row stays `status = "active"` and the missing paths are removed from `all_paths`.
 - This ensures that a logical image remains active as long as it is present under any configured root.
 
-### `image_scene` table (primary DB; legacy cache path `cache/index.db`)
+### `image_scene` table (primary DB)
 Stores lightweight pre-classification outputs derived from cached detection files under `cache/detections/`.
 
 ```sql
@@ -150,7 +150,7 @@ CREATE INDEX IF NOT EXISTS idx_image_scene_is_screenshot ON image_scene(is_scree
 CREATE INDEX IF NOT EXISTS idx_image_scene_is_document ON image_scene(is_document);
 ```
 
-### `image_embedding` table (primary DB; legacy cache path `cache/index.db`)
+### `image_embedding` table (primary DB)
 Stores metadata for per-image SigLIP embeddings sourced from cache files under `cache/embeddings/`; the schema allows multiple embeddings per image keyed by `model_name`.
 
 ```sql
@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS image_embedding (
 CREATE INDEX IF NOT EXISTS idx_image_embedding_model_name ON image_embedding(model_name);
 ```
 
-### `image_caption` table (primary DB; legacy cache path `cache/index.db`)
+### `image_caption` table (primary DB)
 Stores BLIP caption outputs sourced from cache files under `cache/captions/`; the schema allows multiple captions per image keyed by `model_name`.
 
 ```sql
@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS image_caption (
 CREATE INDEX IF NOT EXISTS idx_image_caption_model_name ON image_caption(model_name);
 ```
 
-### `image_near_duplicate` table (primary DB; legacy cache path `cache/index.db`)
+### `image_near_duplicate` table (primary DB)
 Stores near-duplicate relationships derived from `images.phash`. This table is fully rebuildable from the `images` table and the pHash algorithm.
 
 ```sql
@@ -249,7 +249,7 @@ pipeline:
 ### 5.0 CLI Parameters
 - `--root`: one or more album root directories to scan (required; may be passed multiple times).
 - `--db`: path to the primary operational SQLite database (optional, defaults to `data/index.db`).
-- `--cache-root`: path/URL used to locate the cache directory on disk (optional, defaults to `cache.root`, which resolves to the configured cache directory or legacy `cache/index.db` sentinel).
+- `--cache-root`: path/URL used to locate the cache directory on disk (optional, defaults to `cache.root`, which resolves to the configured cache directory).
 - `--batch-size`: override the batch size from `config/settings.yaml` for model inference.
 - `--device`: override the device from `config/settings.yaml` (for example `cpu`, `cuda`, `mps`).
 
@@ -411,7 +411,7 @@ project_root/
 ```
 
 - M1 processing CLI: `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-root cache/] [--batch-size ... --device ...]`, using `config/settings.yaml` as the source of defaults with CLI flags overriding when provided.
-- When `--cache-root` is omitted, the preprocessing CLI resolves the cache directory from `cache.root` and falls back to the historical `cache/index.db` sentinel when that path points at a directory.
+- When `--cache-root` is omitted, the preprocessing CLI resolves the cache directory from `cache.root`.
 - Flask Web UI: `FLASK_APP=vibe_photos.webui uv run flask run` for manual inspection during development.
 
 ## 8. Acceptance Criteria

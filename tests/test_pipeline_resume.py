@@ -25,8 +25,7 @@ def _stub_stage(recorder: list[str], name: str):
 
 def test_pipeline_skips_completed_and_resumes_next_stage(monkeypatch, tmp_path):
     cache_root = tmp_path / "cache"
-    primary_db = tmp_path / "data" / "index.db"
-    primary_db.parent.mkdir(parents=True, exist_ok=True)
+    primary_db = "postgresql+psycopg://postgres@localhost:5432/postgres"
 
     save_run_journal(
         cache_root, RunJournalRecord(stage="preprocess_artifacts", cursor_image_id=None, updated_at=0.0)
@@ -53,8 +52,7 @@ def test_pipeline_skips_completed_and_resumes_next_stage(monkeypatch, tmp_path):
 
 def test_pipeline_resumes_stage_from_cursor(monkeypatch, tmp_path):
     cache_root = tmp_path / "cache"
-    primary_db = tmp_path / "data" / "index.db"
-    primary_db.parent.mkdir(parents=True, exist_ok=True)
+    primary_db = "postgresql+psycopg://postgres@localhost:5432/postgres"
 
     save_run_journal(cache_root, RunJournalRecord(stage="embeddings_and_captions", cursor_image_id="img_002", updated_at=0.0))
 

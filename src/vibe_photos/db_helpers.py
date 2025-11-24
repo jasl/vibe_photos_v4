@@ -6,32 +6,22 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session
 
 
 def normalize_database_url(target: str | Path) -> str:
-    """Normalize database URLs, permitting sqlite paths for local/test flows."""
+    """Normalize database URLs, restricting usage to PostgreSQL targets."""
 
     raw = str(target).strip()
     if not raw:
         raise ValueError("database target cannot be empty")
 
-    if "://" not in raw:
-        path = Path(raw).expanduser().resolve()
-        return f"sqlite:///{path}"
-
     url = make_url(raw)
-    if url.drivername.startswith("postgresql"):
+    if url.drivername.startswith("postgresql") and url.database:
         return str(url)
 
-    if url.drivername.startswith("sqlite"):
-        if url.database:
-            return str(url)
-        raise ValueError("sqlite URLs must include a database path or :memory:")
-
-    raise ValueError(f"Unsupported database dialect {url.drivername!r}; expected postgresql or sqlite")
+    raise ValueError(f"Unsupported database dialect {url.drivername!r}; expected postgresql with an explicit database name")
 
 
 def resolve_cache_root(target: str | Path) -> Path:
@@ -61,8 +51,6 @@ def dialect_insert(session: Session, table: Any) -> Any:
     name = bind.dialect.name
     if name.startswith("postgresql"):
         return pg_insert(table)
-    if name.startswith("sqlite"):
-        return sqlite_insert(table)
 
     raise NotImplementedError(f"Unsupported dialect for upsert: {name}")
 

@@ -84,13 +84,13 @@ Key options:
 
 - `--root`: one or more album root directories to scan (may be passed multiple times).
 - `--db`: primary database URL or path (defaults to `databases.primary_url` in `config/settings.yaml`).
-- `--cache-root`: cache root URL or path (defaults to `cache.root`, which resolves to a cache directory such as `cache/` or a legacy `cache/index.db` sentinel).
+- `--cache-root`: cache root URL or path (defaults to `cache.root`, which resolves to a cache directory such as `cache/`).
 - `--batch-size`: override the model batch size from `config/settings.yaml`.
 - `--device`: override the model device (for example `cpu`, `cuda`, or `mps`).
 - `--image-path`: process a single image using the shared preprocessing steps and write artifacts under the cache root.
 - `--image-id`: optional explicit `image_id` when `--image-path` is used; defaults to the content hash.
 
-`cache/index.db` now exists only as a sentinel path that determines where cache files live on disk. All structured metadata (embeddings, captions, scenes, regions, near duplicates, etc.) is stored directly in the primary database, while vectors/JSON payloads remain under `cache/`. Serve/UI/API components should read from the primary database, and cache directories can be purged when the manifest changes.
+Structured metadata (embeddings, captions, scenes, regions, near duplicates, etc.) is stored directly in the primary database, while vectors/JSON payloads remain under `cache/`. Serve/UI/API components should read from the primary database, and cache directories can be purged when the manifest changes.
 
 What a single-process run does:
 
@@ -231,12 +231,9 @@ Going forward:
 Notes and Limitations
 ---------------------
 
-- `cache/index.db` now serves only as a sentinel path to derive the on-disk cache
-  root. All structured cache metadata (embeddings, captions, scenes, regions,
-  near-duplicates, etc.) lives in the primary database, while the actual vectors,
-  captions, thumbnails, and JSON payloads remain on disk under `cache/`.
+- Structured cache metadata (embeddings, captions, scenes, regions, near-duplicates, etc.) lives in the primary database, while the actual vectors, captions, thumbnails, and JSON payloads remain on disk under `cache/`.
 - Use `uv run python -m vibe_photos.dev.clear_cache --stage <...>` to invalidate
-  specific cache stages (or `--full-reset` to clear all caches and the sentinel file).
+  specific cache stages (or `--full-reset` to clear all caches).
 - When a file’s content hash changes, its cache artifacts and near-duplicate pairs on disk are invalidated and rebuilt on the next run; primary DB rows remain intact for auditability.
 - All paths in this document are relative to the project root; commands should
   be executed from the repository root with the virtual environment activated.

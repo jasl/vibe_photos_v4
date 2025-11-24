@@ -16,11 +16,9 @@ from vibe_photos.db import (
     ImageEmbedding,
     ImageNearDuplicate,
     ImageScene,
-    open_primary_session,
 )
 from vibe_photos.db_helpers import (
     dialect_insert,
-    normalize_database_url,
     resolve_cache_root,
 )
 
@@ -140,7 +138,7 @@ def main(
     cache_root: str | None = typer.Option(
         None,
         "--cache-root",
-        help="Cache root directory containing the local SQLite index.db (defaults to cache.root in settings.yaml).",
+        help="Cache root directory containing filesystem embeddings and artifacts (defaults to cache.root in settings.yaml).",
     ),
     db: str | None = typer.Option(
         None,
@@ -154,32 +152,12 @@ def main(
     """Copy cache tables into the primary DB."""
 
     settings = load_settings()
-    cache_root_path = resolve_cache_root(cache_root or settings.cache.root)
-    cache_db_url = normalize_database_url(cache_root_path / "index.db")
-    primary_target = db or settings.databases.primary_url
+    _cache_root_path = resolve_cache_root(cache_root or settings.cache.root)
+    _primary_target = db or settings.databases.primary_url
 
-    selected = set(tables or ["all"])
-    with open_primary_session(cache_db_url) as src, open_primary_session(primary_target) as dst:
-        total = 0
-        if "embeddings" in selected or "all" in selected:
-            total += _sync_embeddings(src, dst)
-        if "captions" in selected or "all" in selected:
-            total += _sync_captions(src, dst)
-        if "scenes" in selected or "all" in selected:
-            total += _sync_scenes(src, dst)
-        if "duplicates" in selected or "all" in selected:
-            total += _sync_duplicates(src, dst)
-
-    LOGGER.info(
-        "cache_sync_complete",
-        extra={
-            "tables": sorted(selected),
-            "rows_synced": total,
-            "cache_root": str(cache_root_path),
-            "db": str(primary_target),
-        },
+    raise RuntimeError(
+        "Filesystem caches no longer include a SQLite index; sync from the primary database instead."
     )
-
 
 if __name__ == "__main__":
     typer.run(main)

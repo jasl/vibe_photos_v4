@@ -251,10 +251,10 @@ class PreprocessingPipeline:
         Args:
             roots: Album root directories to scan.
             primary_db_path: Connection target for the primary operational database.
-            cache_root_path: Path to the cache root directory (the legacy `cache/index.db` sentinel is still accepted).
+            cache_root_path: Path to the cache root directory.
         """
 
-        cache_root = cache_root_path.parent if cache_root_path.suffix == ".db" else cache_root_path
+        cache_root = cache_root_path
         self._cache_root = cache_root
         # Ensure cache manifest exists and matches current settings; resets cache
         # artifacts when the manifest changes.

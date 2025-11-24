@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 from sqlalchemy import select
 
+from tests.utils.postgres import temporary_postgres
 from vibe_photos.config import Settings
 from vibe_photos.db import (
     Label,
@@ -38,7 +39,6 @@ def _write_proto(cache_root: Path, label_ids: list[int]) -> None:
 
 
 def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
-    data_db = tmp_path / "data.db"
     cache_root = tmp_path / "cache"
 
     settings = Settings()
@@ -46,7 +46,7 @@ def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
     settings.label_spaces.scene_current = "scene_v1"
     settings.object.zero_shot.scene_whitelist = ["scene.product"]
 
-    with open_primary_session(data_db) as primary:
+    with temporary_postgres(tmp_path) as db_url, open_primary_session(db_url) as primary:
         cache_session = primary
         seed_labels(primary)
         primary.commit()
