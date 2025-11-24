@@ -13,7 +13,7 @@ This document explains where every artifact lives and how coding AIs should inte
 | Path | Access | Purpose | Notes |
 |------|--------|---------|-------|
 | `samples/` | Read-only | Canonical evaluation photos provided by stakeholders. | Never edit or commit changes. |
-| `data/` | Read/Write | Runtime SQLite DB (`vibe_photos.db`) and incremental state snapshots. | Git-ignored. Safe to delete between runs. |
+| `data/` | Read/Write | Runtime PostgreSQL exports/snapshots and incremental state archives. | Git-ignored. Safe to delete between runs. |
 | `cache/` | Read/Write | Reusable artifacts: normalized images, thumbnails, detection JSON, OCR results, embeddings, perceptual hashes, ingestion queue files. | Share across phases to skip recomputation. |
 | `log/` | Read/Write | Rotating logs (`*.log`, `*.log.*`). | Configure rotation (10 MB, keep 5). |
 | `tmp/` | Read/Write | Short-lived temp files. | Clean freely. |
@@ -24,15 +24,14 @@ This document explains where every artifact lives and how coding AIs should inte
 
 ```
 cache/
-├── images/
-│   ├── processed/      # Normalized JPEG assets
-│   └── thumbnails/     # 512x512 previews
-├── detections/         # SigLIP classification results (.json)
-├── captions/           # BLIP caption outputs (.json)
-├── ocr/                # OCR text blocks (.json)
-├── embeddings/         # Vector cache exports (SQLite dumps today, pgvector exports later)
-├── ingestion_queue/    # Legacy filesystem-backed task queue segments (current M1 uses Celery + Redis instead)
-└── hashes/             # Perceptual hash lookups
+├── artifacts/             # Per-image artifacts (thumbnails, metadata JSON, etc.)
+├── embeddings/            # Image + region embedding vectors (.npy + metadata)
+│   └── regions/<model>/   # Region-level embeddings
+├── captions/              # BLIP caption outputs (.json)
+├── regions/               # Detection payloads (.json)
+├── label_text_prototypes/ # Object-label prototype archives (.npz)
+├── manifest.json          # Cache manifest (version + settings snapshot)
+└── run_journal.json       # Resumable pipeline journal
 ```
 
 - Use perceptual hash (`phash`) as the cache key to deduplicate identical content.
@@ -48,9 +47,11 @@ rm -rf data/* cache/* log/* tmp/*
 rm -rf data/* log/* tmp/*
 
 # Targeted cleanup
-rm -rf cache/detections/*      # Remove classification cache
-rm -rf cache/ocr/*             # Remove OCR cache
-rm -rf cache/images/processed/*
+rm -rf cache/captions/*
+rm -rf cache/embeddings/*
+rm -rf cache/regions/*
+rm -rf cache/artifacts/*
+rm -rf cache/label_text_prototypes/*
 ```
 
 ## 5. Model Storage Guidance

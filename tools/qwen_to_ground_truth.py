@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Convert Qwen3-VL JSONL annotations into M2 evaluation ground truth.
 
-This script is intended to run on the local machine (where data/index.db lives)
-after copying the JSONL produced by ``tools/qwen_vl_annotate_batch.py`` from
-the H100 server.
+This script is intended to run on the local machine after copying the JSONL
+produced by ``tools/qwen_vl_annotate_batch.py`` from the H100 server.
 
 Input JSONL (one record per line), as produced by qwen_vl_annotate_batch:
 

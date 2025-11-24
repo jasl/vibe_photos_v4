@@ -15,16 +15,16 @@ This file tracks high-level implementation tasks and their status for the Phase 
 
 - [x] Set up `uv` environment and base dependencies. (Project is pinned to Python 3.12 with `uv` metadata in `pyproject.toml`.)
 - [x] Implement shared logging and configuration modules. (See `src/utils/logging.py` and `src/vibe_photos/config.py`.)
-- [x] Define initial SQLite schema for photos, metadata, and model outputs. (See ORM models in `src/vibe_photos/db.py`.)
+- [x] Define initial PostgreSQL schema for photos, metadata, and model outputs. (See ORM models in `src/vibe_photos/db.py`; legacy file-backed database paths are no longer supported.)
 - [x] Implement photo scanning and registration for local folders/NAS mounts. (Implemented in `src/vibe_photos/scanner.py` and `_run_scan_and_hash` in `src/vibe_photos/pipeline.py`.)
 - [x] Normalize images and generate thumbnails / web-friendly versions. (A preprocessing stage now writes configurable JPEG thumbnails (default 256×256 small, 1024×1024 large) to artifact-managed paths such as `cache/artifacts/<image_id>/thumbnail_large/<hash>/thumbnail_1024.jpg`, keyed by `image_id`; `/thumbnail/<image_id>` reads from the recorded artifact path with a fallback to originals. Full normalized copies under `cache/images/processed/` remain future work.)
 - [x] Extract EXIF, capture time, GPS (when present), and file timestamps. (EXIF datetime, camera model, and GPS coordinates are now written to both the primary `images` table and a metadata artifact under `cache/artifacts/<image_id>/metadata/`, so downstream services and the Web UI no longer read `cache/images/metadata` directly.)
 - [x] Compute file hashes and perceptual hashes; record near-duplicate relationships. (Content hashes and pHash-based near-duplicate groups are implemented in `src/vibe_photos/hasher.py` and `_run_perceptual_hashing_and_duplicates` in `src/vibe_photos/pipeline.py`; pHash is recomputed only when missing/algorithm changes, and near-duplicate pairs are incremental—dirty images drop their old pairs and recompute against active images, full pass only when the table is empty.)
 - [x] Integrate SigLIP embeddings and BLIP captions; cache results. (Implemented in `_run_embeddings_and_captions` with NPY/JSON caches under `cache/` and metadata persisted in the primary database.)
 - [x] (Optional) Integrate Grounding DINO / OWL-ViT detection and SigLIP re-ranking. (OWL-ViT + SigLIP region re-ranking and JSON caches are implemented; enabled via `models.detection.enabled` and `pipeline.run_detection` settings.)
-- [x] Consolidated preprocessing orchestration onto Celery task queues; the legacy SQLite `preprocess_task` queue and associated enqueue/worker CLIs have been removed in favor of `vibe_photos.task_queue` and `vibe_photos.dev.enqueue_celery`.
+- [x] Consolidated preprocessing orchestration onto Celery task queues; the legacy file-backed `preprocess_task` queue and associated enqueue/worker CLIs have been removed in favor of `vibe_photos.task_queue` and `vibe_photos.dev.enqueue_celery`.
 - [x] Add a Celery-backed enqueue helper to scan directories and push `pre_process`/`process`/`post_process` jobs to dedicated queues (`vibe_photos.dev.enqueue_celery`).
-- [x] Define a stable, versioned on-disk format for preprocessing caches under `cache/` that is decoupled from the database schema. (A cache manifest (`cache/manifest.json`) and per-image JSON sidecars now version embeddings, captions, detections, and regions; cache tables are populated during pipeline runs and rely on the manifest for trust.)
+- [x] Define a stable, versioned on-disk format for preprocessing caches under `cache/` that is decoupled from the database schema. (A cache manifest (`cache/manifest.json`) and per-image JSON sidecars now version embeddings, captions, and region payloads; cache tables are populated during pipeline runs and rely on the manifest for trust.)
 - [x] Build a simple Flask-based debug UI to list canonical photos and show per-photo preprocessing details and similar images. (Implemented in `src/vibe_photos/webui/__init__.py` with templates under `src/vibe_photos/webui/templates`.)
 - [x] Standardize database access on SQLAlchemy ORM/Core models and prohibit new raw SQL usage in pipeline and web UI.
 
@@ -43,7 +43,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - Full image normalization and storage under `cache/images/processed/` is not yet implemented; only thumbnails are generated in the preprocessing pipeline today.
 - EXIF and GPS metadata are parsed during preprocessing and surfaced in the debug UI, but the on-disk metadata format is minimal and may evolve as later milestones add richer EXIF/sidecar handling.
 - The preprocessing pipeline is resumable via a JSON run journal in `cache/run_journal.json`; it now skips completed stages and resumes batch cursors. Celery (`vibe_photos.task_queue`) is available for durable `pre_process`/`process`/`post_process` workers, while the single-process loop remains the default local entrypoint.
-- `cache/index.db` now exists only as a sentinel path for cache roots; cache validity is gated by the manifest version rather than by a separate rebuild path.
+- Cache validity is gated by the manifest version rather than by a standalone cache database; cache roots are filesystem directories only.
 - Caption-aware primary-region fallback in the detection stage assumes that BLIP captions have already been computed and written to `image_caption` for any image that runs detection. Future incremental “detection-only” entry points must either preserve this ordering (captions first) or gracefully disable/adjust caption-based fallbacks to avoid surprising gaps in primary regions.
 
 #### Future technical improvements (beyond M1)
@@ -63,7 +63,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 
 ### M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)
 
-- [ ] Design PostgreSQL schema and migrations based on the M1/M2 SQLite cache tables and Phase Final specs.
+- [ ] Design PostgreSQL schema and migrations based on the M1/M2 cache tables and Phase Final specs.
 - [ ] Implement search and inspection APIs backed by PostgreSQL + pgvector (hybrid text + vector + filters).
 - [ ] Define a `docker-compose` stack (API, workers, DB, Redis, UI) suitable for PC/NAS deployment and wire the existing preprocessing pipeline into this stack.
 - [x] Add CLI utilities to dump and restore the primary PostgreSQL database (`scripts/dump_primary_db.py`, `scripts/restore_primary_db.py`).

@@ -213,7 +213,7 @@ class PreprocessingPipeline:
             return
 
         if cache_session is not None:
-            # Use chunked deletes to avoid exceeding SQLite's bound-parameter limit
+            # Use chunked deletes to avoid exceeding per-statement parameter limits
             # when invalidating large libraries.
             chunk_size = 400
             for offset in range(0, len(ids), chunk_size):
@@ -234,14 +234,12 @@ class PreprocessingPipeline:
                 _remove_path(cache_root / "embeddings" / f"{image_id}.npy")
                 _remove_path(cache_root / "embeddings" / f"{image_id}.json")
                 _remove_path(cache_root / "captions" / f"{image_id}.json")
-                _remove_path(cache_root / "detections" / f"{image_id}.json")
                 _remove_path(cache_root / "regions" / f"{image_id}.json")
-                _remove_path(cache_root / "images" / "metadata" / f"{image_id}.json")
                 artifacts_dir = cache_root / "artifacts" / image_id
                 if artifacts_dir.exists():
                     shutil.rmtree(artifacts_dir, ignore_errors=True)
 
-    def run(self, roots: Sequence[Path], primary_db_path: Path | str, cache_root_path: Path) -> None:
+    def run(self, roots: Sequence[Path], primary_db_url: str, cache_root_path: Path) -> None:
         """Run the preprocessing pipeline for the given album roots.
 
         The initial implementation focuses on wiring and logging. Individual
@@ -250,11 +248,14 @@ class PreprocessingPipeline:
 
         Args:
             roots: Album root directories to scan.
-            primary_db_path: Connection target for the primary operational database.
-            cache_root_path: Path to the cache root directory (the legacy `cache/index.db` sentinel is still accepted).
+            primary_db_url: Connection target for the primary operational database.
+            cache_root_path: Path to the cache root directory.
         """
 
-        cache_root = cache_root_path.parent if cache_root_path.suffix == ".db" else cache_root_path
+        if not isinstance(primary_db_url, str):
+            raise TypeError("primary_db_url must be a PostgreSQL URL string")
+
+        cache_root = cache_root_path
         self._cache_root = cache_root
         # Ensure cache manifest exists and matches current settings; resets cache
         # artifacts when the manifest changes.
@@ -263,7 +264,7 @@ class PreprocessingPipeline:
             "pipeline_start",
             extra={
                 "roots": [str(root) for root in roots],
-                "primary_db": str(primary_db_path),
+                "primary_db": primary_db_url,
                 "cache_root": str(cache_root),
             },
         )
@@ -276,7 +277,7 @@ class PreprocessingPipeline:
                 extra={"stage": journal.stage, "cursor_image_id": journal.cursor_image_id},
             )
 
-        with open_primary_session(primary_db_path) as primary_session:
+        with open_primary_session(primary_db_url) as primary_session:
             cache_session = primary_session
             stage_plan: list[tuple[str, Callable[[], None], bool]] = [
                 (
@@ -1691,8 +1692,8 @@ class PreprocessingPipeline:
             self._logger.info("phash_and_duplicates_skip", extra={"reason": "no_dirty_ids"})
             return
 
-        # SQLite enforces a relatively small limit on the number of bound variables
-        # in a single statement (commonly 999). Large libraries can easily exceed
+        # Database engines enforce limits on the number of bound variables in a
+        # single statement (commonly around 1k). Large libraries can easily exceed
         # this when deleting by IN (...) for both anchor and duplicate columns, so
         # chunk the deletes to stay under that limit while keeping behavior the
         # same. Near-duplicate edges are persisted in the primary database only.

@@ -3,8 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 from sqlalchemy import select
 
+from tests.utils.postgres import temporary_postgres
 from vibe_photos.config import Settings
 from vibe_photos.db import (
     Label,
@@ -38,7 +40,6 @@ def _write_proto(cache_root: Path, label_ids: list[int]) -> None:
 
 
 def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
-    data_db = tmp_path / "data.db"
     cache_root = tmp_path / "cache"
 
     settings = Settings()
@@ -46,91 +47,94 @@ def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
     settings.label_spaces.scene_current = "scene_v1"
     settings.object.zero_shot.scene_whitelist = ["scene.product"]
 
-    with open_primary_session(data_db) as primary:
-        cache_session = primary
-        seed_labels(primary)
-        primary.commit()
+    try:
+        with temporary_postgres(tmp_path) as db_url, open_primary_session(db_url) as primary:
+            cache_session = primary
+            seed_labels(primary)
+            primary.commit()
 
-        repo = LabelRepository(primary)
-        label_old = repo.get_or_create_label(key="object.test.old", level="object", display_name="Old")
-        label_new = repo.get_or_create_label(key="object.test.new", level="object", display_name="New")
-        primary.commit()
+            repo = LabelRepository(primary)
+            label_old = repo.get_or_create_label(key="object.test.old", level="object", display_name="Old")
+            label_new = repo.get_or_create_label(key="object.test.new", level="object", display_name="New")
+            primary.commit()
 
-        # Scene gate to allow labeling
-        scene_label = primary.execute(select(Label).where(Label.key == "scene.product")).scalar_one()
-        primary.add(
-            LabelAssignment(
-                target_type="image",
-                target_id="img1",
-                label_id=scene_label.id,
-                source="classifier",
-                label_space_ver="scene_v1",
-                score=0.9,
-                extra_json=None,
-                created_at=1.0,
-                updated_at=1.0,
+            # Scene gate to allow labeling
+            scene_label = primary.execute(select(Label).where(Label.key == "scene.product")).scalar_one()
+            primary.add(
+                LabelAssignment(
+                    target_type="image",
+                    target_id="img1",
+                    label_id=scene_label.id,
+                    source="classifier",
+                    label_space_ver="scene_v1",
+                    score=0.9,
+                    extra_json=None,
+                    created_at=1.0,
+                    updated_at=1.0,
+                )
             )
-        )
-        primary.commit()
+            primary.commit()
 
-        # Region + embedding aligned to old label
-        cache_session.add(
-            Region(
-                id="img1#0",
-                image_id="img1",
-                x_min=0.0,
-                y_min=0.0,
-                x_max=1.0,
-                y_max=1.0,
-                detector="owlvit",
-                raw_label="thing",
-                raw_score=0.9,
-                created_at=1.0,
+            # Region + embedding aligned to old label
+            cache_session.add(
+                Region(
+                    id="img1#0",
+                    image_id="img1",
+                    x_min=0.0,
+                    y_min=0.0,
+                    x_max=1.0,
+                    y_max=1.0,
+                    detector="owlvit",
+                    raw_label="object.test.old",
+                    raw_score=0.9,
+                    created_at=1.0,
+                )
             )
-        )
-        emb_rel = f"regions/{settings.models.embedding.resolved_model_name()}/img1#0.npy"
-        emb_path = cache_root / "embeddings" / emb_rel
-        emb_path.parent.mkdir(parents=True, exist_ok=True)
-        vec = np.zeros(4, dtype=np.float32)
-        vec[0] = 1.0
-        np.save(emb_path, vec)
-        cache_session.add(
-            RegionEmbedding(
-                region_id="img1#0",
-                model_name=settings.models.embedding.resolved_model_name(),
-                embedding_path=emb_rel,
-                embedding_dim=4,
-                backend=settings.models.embedding.backend,
-                updated_at=1.0,
+            emb_rel = f"regions/{settings.models.embedding.resolved_model_name()}/img1#0.npy"
+            emb_path = cache_root / "embeddings" / emb_rel
+            emb_path.parent.mkdir(parents=True, exist_ok=True)
+            vec = np.zeros(4, dtype=np.float32)
+            vec[0] = 1.0
+            np.save(emb_path, vec)
+            cache_session.add(
+                RegionEmbedding(
+                    region_id="img1#0",
+                    model_name=settings.models.embedding.resolved_model_name(),
+                    embedding_path=emb_rel,
+                    embedding_dim=4,
+                    backend=settings.models.embedding.backend,
+                    updated_at=1.0,
+                )
             )
-        )
-        cache_session.commit()
+            cache_session.commit()
 
-        _write_proto(cache_root, [label_old.id, label_new.id])
+            _write_proto(cache_root, [label_old.id, label_new.id])
 
-        settings.object.blacklist = ["object.test.new"]
-        settings.object.remap = {"object.test.old": "object.test.new"}
+            settings.object.zero_shot.label_blacklist = {"scene.product": ["object.test.old"]}
+            settings.object.zero_shot.label_remap = {"object.test.old": "object.test.new"}
 
-        run_object_label_pass(
-            primary_session=primary,
-            cache_session=cache_session,
-            settings=settings,
-            cache_root=cache_root,
-            label_space_ver="object_v1",
-            prototype_name="object_v1",
-        )
-
-        rows = primary.execute(
-            select(Label.display_name, Label.key)
-            .join(LabelAssignment, Label.id == LabelAssignment.label_id)
-            .where(
-                LabelAssignment.target_type == "image",
-                LabelAssignment.target_id == "img1",
-                LabelAssignment.label_space_ver == "object_v1",
+            run_object_label_pass(
+                primary_session=primary,
+                cache_session=cache_session,
+                settings=settings,
+                cache_root=cache_root,
+                label_space_ver="object_v1",
+                prototype_name="object_v1",
             )
-        ).all()
 
-        assigned_keys = {row.key for row in rows}
+            rows = primary.execute(
+                select(Label.display_name, Label.key)
+                .join(LabelAssignment, Label.id == LabelAssignment.label_id)
+                .where(
+                    LabelAssignment.target_type == "image",
+                    LabelAssignment.target_id == "img1",
+                    LabelAssignment.label_space_ver == "object_v1",
+                )
+            ).all()
 
-        assert "object.test.old" not in assigned_keys
-        assert "object.test.new" in assigned_keys
+            assigned_keys = {row.key for row in rows}
+
+            assert "object.test.old" not in assigned_keys
+            assert "object.test.new" in assigned_keys
+    except RuntimeError as exc:
+        pytest.skip(f"temporary postgres unavailable: {exc}")

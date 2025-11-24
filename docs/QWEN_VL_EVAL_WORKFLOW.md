@@ -87,7 +87,7 @@ rsync -avz user@server:/mnt/cache/qwen_vl_raw_annotations.jsonl tmp/qwen_vl_raw_
 
 ### 2. Convert JSONL to M2 Ground Truth Format
 
-On your local machine (where `data/index.db` and the M2 code live) use:
+On your local machine (where the M2 code lives) use:
 
 ```bash
 uv run python tools/qwen_to_ground_truth.py \

@@ -15,7 +15,7 @@ This file captures key insights from previous iterations and the updated Phase F
 ## 2. Engineering Takeaways
 
 - Start simple:
-  - First validate usefulness with **SQLite + SigLIP/BLIP** on a small subset of photos.
+  - First validate usefulness with **local prototypes (SigLIP/BLIP)** on a small subset of photos.
   - Only after confirming value, adopt heavier models and PostgreSQL + pgvector.
 - Favor a single, well‑factored preprocessing pipeline (as in M1) over parallel PoCs; reuse the same codepath from CLIs, queues, and UIs to keep behavior consistent.
 - Avoid over‑engineering:

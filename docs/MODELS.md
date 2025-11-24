@@ -109,7 +109,7 @@ implementation.
 
 - Keep captions short (≤ 50 tokens) and neutral in tone.
 
-- Store caption text in SQLite in M1 using the `ImageCaption` ORM
+- Store caption text in PostgreSQL using the `ImageCaption` ORM
   (`src/vibe_photos/db.py`) and mirror it into JSON caches under `cache/captions/`
   for rebuilds (see `_run_embeddings_and_captions` in `src/vibe_photos/pipeline.py`).
 

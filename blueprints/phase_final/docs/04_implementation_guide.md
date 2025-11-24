@@ -10,14 +10,14 @@ This guide turns the requirements and solution design into a staged implementati
      - Extracts metadata (time, file stats, EXIF, GPS).
      - Computes fingerprints (hashes, perceptual hashes) and near‑duplicate groups.
      - Runs the initial perception models (SigLIP/BLIP and, where feasible, detection).
-   - Store all results in caches and a SQLite database for reuse.
+   - Store all results in caches and the PostgreSQL database for reuse.
 2. **M2 — Perception Quality & Labeling**
    - Improve recognition quality and label hygiene on top of M1:
      - Iterate on SigLIP label sets and grouping to reduce manual maintenance and improve coverage.
      - Refine detection + SigLIP/BLIP thresholds, blacklists, and remapping to reduce noisy object/product labels.
      - Establish small but realistic evaluation sets and metrics for coarse categories and object‑level recognition.
 3. **M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)**
-   - Move from SQLite to PostgreSQL/pgvector and build search/tools on top of the improved perception stack.
+   - Harden the PostgreSQL/pgvector stack and build search/tools on top of the improved perception stack.
    - Containerize the stack with `docker-compose` (API, workers, DB, Redis, UI).
    - Introduce Redis and background worker stack.
 4. **M4 — Learning & Personalization**
@@ -43,7 +43,7 @@ src/
 
 Supporting directories (see `DIRECTORY_STRUCTURE.md`):
 
-- `data/` — Runtime DB files for SQLite (M1/M2) and optional exports.
+- `data/` — Runtime database exports/backups for PostgreSQL deployments.
 - `cache/` — Normalized images, thumbnails, detections, captions, embeddings.
 - `models/` — Downloaded model weights and tokenizer/processor assets.
 - `log/` — Structured application logs.
@@ -67,12 +67,12 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - Model choices and batch sizes.
 - Database:
   - Follow the canonical M1 schema defined in `blueprints/m1/m1_development_plan.md`:
-    - A primary operational database under `data/index.db` (SQLite era) or PostgreSQL/pgvector (current builds) for canonical image metadata (`images` table with content hash and perceptual hash fields).
-    - A cache root under `cache/` (historically addressed via `cache/index.db`) for:
+    - A primary operational database backed by PostgreSQL/pgvector for canonical image metadata (`images` table with content hash and perceptual hash fields).
+    - A cache root under `cache/` for:
       - Lightweight scene classification outputs (`image_scene`) serialized as JSON plus mirrored rows in the primary DB.
       - Embedding and caption tables (`image_embedding`, `image_caption`) stored in the primary DB with vectors on disk.
       - Near-duplicate relationships (`image_near_duplicate`) derived from `images.phash`, persisted in the primary DB.
-  - Cache directories are rebuildable from artifacts plus the primary database; treat the legacy SQLite path only as a sentinel for cache location.
+  - Cache directories are rebuildable from artifacts plus the primary database.
 - Image preprocessing:
   - Normalize images (orientation, color profile) and generate:
     - Web‑friendly thumbnails (e.g. 512×512).
@@ -88,7 +88,7 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - Perceptual hash (`phash64-v2`) using a fixed 64-bit DCT-based pHash (32×32 grayscale → 8×8 low-frequency block → median threshold) for near-duplicate detection, following `blueprints/m1/m1_development_plan.md`.
   - Identify near-duplicate groups:
     - Treat two active images as near-duplicates when the Hamming distance between their 64-bit `phash` values is less than or equal to a configurable threshold (see `Settings.pipeline.phash_hamming_threshold`, default 12 in this codebase).
-    - Record near-duplicate relationships in `image_near_duplicate` (for SQLite) or the equivalent table in PostgreSQL/pgvector, designating an anchor/canonical image and linking duplicates to it.
+    - Record near-duplicate relationships in `image_near_duplicate`, designating an anchor/canonical image and linking duplicates to it.
     - Optionally use high-order `phash` bits (for example, the top 16 bits) as buckets and only compute full Hamming distances within buckets to keep grouping efficient at 30k+ photos; experiments in M1 showed that a simple all-pairs scan is acceptable at current library sizes but bucketing remains a future optimization.
     - Optionally skip heavy model inference for images deemed “near identical” while linking them to a canonical representative; in M1 this behavior is controlled by the `pipeline.skip_duplicates_for_heavy_models` flag in `config/settings.yaml`.
 - Model inference:
@@ -98,7 +98,7 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - BLIP captions.
   - Where feasible (depending on hardware and priorities), add:
     - Grounding DINO / OWL‑ViT detection and SigLIP re‑ranking.
-  - Store all outputs in the SQLite DB and JSON caches under `cache/`.
+  - Store all outputs in the PostgreSQL DB and JSON caches under `cache/`.
 - Concurrency & robustness:
   - Provide both a single-process CLI (`vibe_photos.dev.process`) and an optional Celery-based worker model (`vibe_photos.task_queue` + `vibe_photos.dev.enqueue_celery`) appropriate for local runs.
   - Support resumable processing:
@@ -150,17 +150,17 @@ To start M1 development, build on the existing groundwork in the following order
    - Create a dedicated preprocessing module under `src/vibe_photos/ml/` or `src/vibe_photos/core/` that:
      - Walks configured photo roots.
      - Normalizes images and writes thumbnails into `cache/`.
-     - Computes content hashes and perceptual hashes following the M1 blueprint (`xxhash64-v1` over file bytes for `image_id`, `phash64-v2` for perceptual hash) and stores them in the `images` table in the primary SQLite database (`data/index.db`).
+     - Computes content hashes and perceptual hashes following the M1 blueprint (`xxhash64-v1` over file bytes for `image_id`, `phash64-v2` for perceptual hash) and stores them in the `images` table in the primary PostgreSQL database.
    - Integrate SigLIP and BLIP via `get_siglip_embedding_model()` and `get_blip_caption_model()` (`src/vibe_photos/ml/models.py`):
      - Batch images using the configured batch sizes.
-     - Persist embeddings and captions both to caches (`cache/`) and to the SQLite schema.
+     - Persist embeddings and captions both to caches (`cache/`) and to the PostgreSQL schema.
 3. **Wire coarse categories into the pipeline**
    - Reuse `build_siglip_coarse_classifier()` (`src/vibe_photos/ml/coarse_categories.py`) to compute:
      - `primary_category` and coarse category scores as DB fields.
      - Optional derived fields to gate detection/OCR work (for example, only run detection for electronics/food/document/screenshots).
-4. **Design and implement the initial SQLite schema**
+4. **Design and implement the initial PostgreSQL schema**
    - Start from the canonical M1 schema in `blueprints/m1/m1_development_plan.md`:
-    - `images` in `data/index.db` (paths, `image_id` content hash, `phash`/`phash_algo`/`phash_updated_at`, timestamps, EXIF).
+    - `images` (paths, `image_id` content hash, `phash`/`phash_algo`/`phash_updated_at`, timestamps, EXIF).
     - `image_scene`, `image_embedding`, `image_caption`, and `image_near_duplicate` in the primary database, with vectors/JSON artifacts mirrored under `cache/`.
    - Keep schema changes localized and treat caches under `cache/` as the durable source of truth for recomputing databases.
 5. **Add a minimal CLI for running M1**
@@ -192,7 +192,7 @@ M1 must:
 4. Optionally run open‑vocabulary detection (OWL‑ViT) if enabled in config.
 5. Store all results in:
    - Versioned caches under `cache/`.
-   - A SQLite database for search and inspection.
+   - A PostgreSQL database for search and inspection.
 
 The system MUST run fully on a local PC/Mac/NAS (CPU‑only is allowed; GPU is a bonus).
 
@@ -278,7 +278,7 @@ You MUST respect these constraints (see `AI_CODING_STANDARDS.md` and `docs/AI_CO
    - Detection batching is optional in M1.
 6. Caching and DB separation
    - Treat caches under `cache/` (JSON/NPY, with model and pipeline version info) as the durable source of truth.
-   - SQLite (under `data/`) is a cache-backed replica and may be rebuilt.
+   - Database backups under `data/` are rebuildable from caches and should not be treated as golden copies.
 7. Modern Python style
    - Python 3.12, type hints, `dataclasses`, `pathlib.Path`.
    - Follow import order and logging rules from `AI_CODING_STANDARDS.md`.
@@ -305,11 +305,11 @@ Priority steps:
    - Implement a preprocessing module that:
      - Walks configured photo roots.
      - Normalizes images and writes thumbnails under `cache/`.
-     - Computes content hashes and perceptual hashes using `xxhash64-v1` and `phash64-v2` as specified in `blueprints/m1/m1_development_plan.md`, and writes them to caches and the appropriate SQLite databases.
+     - Computes content hashes and perceptual hashes using `xxhash64-v1` and `phash64-v2` as specified in `blueprints/m1/m1_development_plan.md`, and writes them to caches and the appropriate database tables.
 4. Embeddings and coarse categories
    - Use SigLIP to compute embeddings in batches and classify coarse categories via `build_siglip_coarse_classifier()`.
 5. Captions
-   - Use BLIP to generate one short caption per image and store it in caches and SQLite.
+   - Use BLIP to generate one short caption per image and store it in caches and the primary database.
 6. (Optional) Detection
    - Add a pluggable OWL‑ViT backend controlled by config flags.
 7. CLI and status
@@ -353,7 +353,7 @@ Goal: Move to the final database and deployment architecture and expose producti
 - Database:
   - Define PostgreSQL + pgvector schema based on `../specs/database_schema.sql` (adapted to PostgreSQL syntax).
   - Implement migrations via Alembic or a similar tool.
-  - Implement a data migration path from SQLite (where feasible).
+  - Implement a data migration path from existing cache artifacts (where feasible).
 - Vector search:
   - Create pgvector columns for embeddings and region embeddings.
   - Build indexes and tune parameters for 30k–100k photos.

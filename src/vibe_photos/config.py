@@ -499,10 +499,6 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     cache_cfg = settings.cache
     if isinstance(cache_raw.get("root"), str):
         cache_cfg.root = cache_raw["root"]
-    else:
-        legacy_cache_value = databases_raw.get("cache_url")
-        if isinstance(legacy_cache_value, str):
-            cache_cfg.root = legacy_cache_value
 
     models_raw = _as_dict(raw.get("models"))
     embedding_raw = _as_dict(models_raw.get("embedding"))
@@ -624,10 +620,6 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         pipeline_cfg.thumbnail_size_small = pipeline_raw["thumbnail_size_small"]
     if isinstance(pipeline_raw.get("thumbnail_size_large"), int):
         pipeline_cfg.thumbnail_size_large = pipeline_raw["thumbnail_size_large"]
-    elif isinstance(pipeline_raw.get("thumbnail_size"), int):
-        legacy_size = pipeline_raw["thumbnail_size"]
-        pipeline_cfg.thumbnail_size_small = min(256, legacy_size)
-        pipeline_cfg.thumbnail_size_large = max(1024, legacy_size)
     if isinstance(pipeline_raw.get("thumbnail_quality"), int):
         pipeline_cfg.thumbnail_quality = pipeline_raw["thumbnail_quality"]
     if isinstance(pipeline_raw.get("exif_datetime_format"), str):

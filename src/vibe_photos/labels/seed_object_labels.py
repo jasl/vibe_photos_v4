@@ -615,7 +615,7 @@ def parse_args() -> argparse.Namespace:
         "--db",
         type=str,
         default=None,
-        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+        help="Primary PostgreSQL database URL. Defaults to databases.primary_url in settings.yaml.",
     )
     return parser.parse_args()
 

@@ -30,8 +30,8 @@ This handover summarizes the current blueprint so future coding AIs and human de
 1. Re‑read `docs/01_requirements.md` and `docs/02_solution_design.md` to internalize the product scope and user context.
 2. Align tooling and decisions with `decisions/AI_DECISION_RECORD.md` (create or update as needed).
 3. Follow the staged plan in `docs/04_implementation_guide.md`:
-   - Start with M1 (preprocessing & feature extraction on SQLite with SigLIP/BLIP and stable caches).
-   - Add search & tools on top of SQLite.
+   - Start with M1 (preprocessing & feature extraction on PostgreSQL with SigLIP/BLIP and stable caches).
+   - Add search & tools on top of PostgreSQL.
    - Migrate to PostgreSQL + pgvector and docker‑compose deployment.
 4. Use `blueprints/phase_final/poc/` scripts as inspiration only; production code should follow repository standards.
 5. Document deviations and outcomes in:

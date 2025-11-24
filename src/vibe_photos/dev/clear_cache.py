@@ -23,7 +23,7 @@ from vibe_photos.db import (
     RegionEmbedding,
     open_primary_session,
 )
-from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target
+from vibe_photos.db_helpers import resolve_cache_root
 
 LOGGER = get_logger(__name__)
 
@@ -55,8 +55,6 @@ def _invalidate_cache_dirs(cache_root: Path, stages: set[Stage]) -> None:
         _remove_path(cache_root / "embeddings")
     if "captions" in stages or "all" in stages:
         _remove_path(cache_root / "captions")
-    if "scenes" in stages or "all" in stages:
-        _remove_path(cache_root / "detections")
     if "regions" in stages or "all" in stages:
         _remove_path(cache_root / "regions")
         _remove_path(cache_root / "embeddings" / "regions")
@@ -69,7 +67,7 @@ def main(
     cache_root: Path | None = typer.Option(
         None,
         "--cache-root",
-        help="Cache root containing cache/index.db; defaults to cache.root from settings.yaml.",
+        help="Cache root directory; defaults to cache.root from settings.yaml.",
     ),
     stages: Iterable[Stage] = typer.Option(
         ["all"],
@@ -77,19 +75,17 @@ def main(
         "-s",
         help="Stages to invalidate. Defaults to all.",
     ),
-    full_reset: bool = typer.Option(
+        full_reset: bool = typer.Option(
         False,
         "--full-reset",
-        help="Remove all cache artifacts and cache/index.db regardless of stage selection.",
+        help="Remove all cache artifacts regardless of stage selection.",
     ),
 ) -> None:
     """Invalidate cached artifacts for selected stages."""
 
     settings = load_settings()
     if cache_root is None:
-        cache_target = normalize_cache_target(settings.cache.root)
-        cache_path = sqlite_path_from_target(cache_target)
-        cache_root = cache_path.parent
+        cache_root = resolve_cache_root(settings.cache.root)
     cache_root = cache_root.resolve()
     raw_stages = set(stages or ["all"])
     selected: set[Stage] = {cast(Stage, stage) for stage in raw_stages}

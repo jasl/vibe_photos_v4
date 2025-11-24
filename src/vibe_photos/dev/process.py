@@ -16,7 +16,7 @@ from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactManager
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import open_primary_session
-from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target
+from vibe_photos.db_helpers import resolve_cache_root
 from vibe_photos.hasher import compute_content_hash
 from vibe_photos.labels.build_object_prototypes import build_object_prototypes
 from vibe_photos.labels.object_label_pass import run_object_label_pass
@@ -48,7 +48,7 @@ def ensure_artifacts_for_image(
     *,
     image_id: str | None = None,
     artifact_root: Path | None = None,
-    db_target: str | Path | None = None,
+    db_target: str | None = None,
 ) -> str:
     """Create preprocessing artifacts for a single image using shared steps."""
 
@@ -85,12 +85,12 @@ def main(
     db: str | None = typer.Option(
         None,
         "--db",
-        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+        help="Primary PostgreSQL database URL. Defaults to databases.primary_url in settings.yaml.",
     ),
     cache_root_arg: str | None = typer.Option(
         None,
         "--cache-root",
-        help="Cache root URL or path (defaults to cache.root in settings.yaml).",
+        help="Cache root directory path (defaults to cache.root in settings.yaml).",
     ),
     image_path: Path | None = typer.Option(
         None,
@@ -139,9 +139,7 @@ def main(
 
     primary_target = db or settings.databases.primary_url
     cache_target_raw = cache_root_arg or settings.cache.root
-    cache_target = normalize_cache_target(cache_target_raw)
-    cache_sentinel = sqlite_path_from_target(cache_target)
-    cache_root = cache_sentinel.parent
+    cache_root = resolve_cache_root(cache_target_raw)
 
     if image_path:
         resolved_id = ensure_artifacts_for_image(
@@ -182,7 +180,7 @@ def main(
         return
 
     pipeline = PreprocessingPipeline(settings=settings)
-    pipeline.run(roots=root, primary_db_path=primary_target, cache_root_path=cache_root)
+    pipeline.run(roots=root, primary_db_url=primary_target, cache_root_path=cache_root)
 
     if run_object_labels:
         proto_name = prototype_name or settings.label_spaces.object_current

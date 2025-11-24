@@ -16,12 +16,10 @@ from vibe_photos.db import (
     ImageEmbedding,
     ImageNearDuplicate,
     ImageScene,
-    open_primary_session,
 )
 from vibe_photos.db_helpers import (
     dialect_insert,
-    normalize_cache_target,
-    sqlite_path_from_target,
+    resolve_cache_root,
 )
 
 LOGGER = get_logger(__name__)
@@ -140,12 +138,12 @@ def main(
     cache_root: str | None = typer.Option(
         None,
         "--cache-root",
-        help="Cache root URL or path. Defaults to cache.root in settings.yaml.",
+        help="Cache root directory containing filesystem embeddings and artifacts (defaults to cache.root in settings.yaml).",
     ),
     db: str | None = typer.Option(
         None,
         "--db",
-        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+        help="Primary PostgreSQL database URL. Defaults to databases.primary_url in settings.yaml.",
     ),
     tables: Iterable[TableName] = typer.Option(
         ["all"], "--table", "-t", help="Tables to sync: embeddings, captions, scenes, duplicates, or all."
@@ -154,33 +152,10 @@ def main(
     """Copy cache tables into the primary DB."""
 
     settings = load_settings()
-    cache_target_raw = cache_root or settings.cache.root
-    cache_target = normalize_cache_target(cache_target_raw)
-    cache_path = sqlite_path_from_target(cache_target)
-    primary_target = db or settings.databases.primary_url
+    _cache_root_path = resolve_cache_root(cache_root or settings.cache.root)
+    _primary_target = db or settings.databases.primary_url
 
-    selected = set(tables or ["all"])
-    with open_primary_session(cache_target) as src, open_primary_session(primary_target) as dst:
-        total = 0
-        if "embeddings" in selected or "all" in selected:
-            total += _sync_embeddings(src, dst)
-        if "captions" in selected or "all" in selected:
-            total += _sync_captions(src, dst)
-        if "scenes" in selected or "all" in selected:
-            total += _sync_scenes(src, dst)
-        if "duplicates" in selected or "all" in selected:
-            total += _sync_duplicates(src, dst)
-
-    LOGGER.info(
-        "cache_sync_complete",
-        extra={
-            "tables": sorted(selected),
-            "rows_synced": total,
-            "cache_root": str(cache_path.parent),
-            "db": str(primary_target),
-        },
-    )
-
+    raise RuntimeError("Filesystem caches no longer expose a standalone DB; sync from the primary database instead.")
 
 if __name__ == "__main__":
     typer.run(main)

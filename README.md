@@ -49,7 +49,7 @@ On Linux or Windows machines with a compatible NVIDIA GPU and CUDA 13.0:
 Database Configuration
 ----------------------
 
-- `config/settings.yml` now includes a `databases` block (for the primary DSN) and a `cache` block (for the filesystem root that stores embeddings/captions/detections). The legacy `databases.cache_url` key is still parsed for backward compatibility, but `cache.root` is the canonical setting going forward.
+- `config/settings.yml` now includes a `databases` block (for the primary DSN) and a `cache` block (for the filesystem root that stores embeddings/captions/detections). The `cache.root` is the canonical setting going forward.
 - The default primary DSN is `postgresql+psycopg://vibe:vibe@localhost:5432/vibe_primary`, matching the docker-compose service credentials; override the user/host/dbname as needed.
 - Start the backing services with `docker compose up postgres redis` (or the full stack) before running the pipeline.
 - Override `databases.primary_url` / `cache.root` per environment as needed; all CLIs and services now accept DB URLs in addition to file paths.
@@ -83,14 +83,14 @@ Basic single-process run:
 Key options:
 
 - `--root`: one or more album root directories to scan (may be passed multiple times).
-- `--db`: primary database URL or path (defaults to `databases.primary_url` in `config/settings.yaml`).
-- `--cache-root`: cache root URL or path (defaults to `cache.root`, which resolves to a cache directory such as `cache/` or a legacy `cache/index.db` sentinel).
+- `--db`: primary PostgreSQL database URL (defaults to `databases.primary_url` in `config/settings.yaml`).
+- `--cache-root`: cache root directory path (defaults to `cache.root`, which resolves to a cache directory such as `cache/`).
 - `--batch-size`: override the model batch size from `config/settings.yaml`.
 - `--device`: override the model device (for example `cpu`, `cuda`, or `mps`).
 - `--image-path`: process a single image using the shared preprocessing steps and write artifacts under the cache root.
 - `--image-id`: optional explicit `image_id` when `--image-path` is used; defaults to the content hash.
 
-`cache/index.db` now exists only as a sentinel path that determines where cache files live on disk. All structured metadata (embeddings, captions, scenes, regions, near duplicates, etc.) is stored directly in the primary database, while vectors/JSON payloads remain under `cache/`. Serve/UI/API components should read from the primary database, and cache directories can be purged when the manifest changes.
+Structured metadata (embeddings, captions, scenes, regions, near duplicates, etc.) is stored directly in the primary database, while vectors/JSON payloads remain under `cache/`. Serve/UI/API components should read from the primary database, and cache directories can be purged when the manifest changes.
 
 What a single-process run does:
 
@@ -231,12 +231,9 @@ Going forward:
 Notes and Limitations
 ---------------------
 
-- `cache/index.db` now serves only as a sentinel path to derive the on-disk cache
-  root. All structured cache metadata (embeddings, captions, scenes, regions,
-  near-duplicates, etc.) lives in the primary database, while the actual vectors,
-  captions, thumbnails, and JSON payloads remain on disk under `cache/`.
+- Structured cache metadata (embeddings, captions, scenes, regions, near-duplicates, etc.) lives in the primary database, while the actual vectors, captions, thumbnails, and JSON payloads remain on disk under `cache/`.
 - Use `uv run python -m vibe_photos.dev.clear_cache --stage <...>` to invalidate
-  specific cache stages (or `--full-reset` to clear all caches and the sentinel file).
+  specific cache stages (or `--full-reset` to clear all caches).
 - When a file’s content hash changes, its cache artifacts and near-duplicate pairs on disk are invalidated and rebuilt on the next run; primary DB rows remain intact for auditability.
 - All paths in this document are relative to the project root; commands should
   be executed from the repository root with the virtual environment activated.
