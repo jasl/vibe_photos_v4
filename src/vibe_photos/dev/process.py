@@ -48,7 +48,7 @@ def ensure_artifacts_for_image(
     *,
     image_id: str | None = None,
     artifact_root: Path | None = None,
-    db_target: str | Path | None = None,
+    db_target: str | None = None,
 ) -> str:
     """Create preprocessing artifacts for a single image using shared steps."""
 
@@ -85,12 +85,12 @@ def main(
     db: str | None = typer.Option(
         None,
         "--db",
-        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+        help="Primary PostgreSQL database URL. Defaults to databases.primary_url in settings.yaml.",
     ),
     cache_root_arg: str | None = typer.Option(
         None,
         "--cache-root",
-        help="Cache root URL or path (defaults to cache.root in settings.yaml).",
+        help="Cache root directory path (defaults to cache.root in settings.yaml).",
     ),
     image_path: Path | None = typer.Option(
         None,
@@ -180,7 +180,7 @@ def main(
         return
 
     pipeline = PreprocessingPipeline(settings=settings)
-    pipeline.run(roots=root, primary_db_path=primary_target, cache_root_path=cache_root)
+    pipeline.run(roots=root, primary_db_url=primary_target, cache_root_path=cache_root)
 
     if run_object_labels:
         proto_name = prototype_name or settings.label_spaces.object_current

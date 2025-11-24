@@ -57,14 +57,14 @@ Status: ready for implementation (implements reviewed guidance for the first mil
 ```
 
 Run modes:
-- CLI processing entry point (`uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-root cache/] [--batch-size ... --device ...]`) for scan + hash + classify + embeddings/captions; `--cache-root` directly selects the cache directory and falls back to `cache.root` from `config/settings.yaml`. Batch size/device are read from `config/settings.yaml` with CLI flags acting as overrides when provided.
+- CLI processing entry point (`uv run python -m vibe_photos.dev.process --root <album> --db postgresql+psycopg://localhost:5432/vibe [--cache-root cache/] [--batch-size ... --device ...]`) for scan + hash + classify + embeddings/captions; `--cache-root` directly selects the cache directory and falls back to `cache.root` from `config/settings.yaml`. Batch size/device are read from `config/settings.yaml` with CLI flags acting as overrides when provided.
 - Flask app for manual inspection during development.
 - A cache manifest under `cache/manifest.json` versions model/config settings; preprocessing stages trust cache artifacts only when the manifest matches the active `cache_format_version`, and a run journal in `cache/run_journal.json` supports resumable single-process runs.
 
 ## 4. Data Model
-M1 originally targeted two SQLite databases; modern deployments use PostgreSQL for the primary database and treat the cache purely as a filesystem directory tree.
-- A **primary operational database** (PostgreSQL in current builds; SQLite only in historical prototypes) stores canonical image metadata, model outputs, near-duplicate relationships, and run state. This database is the only one that production-facing services (CLI, Web UI, future APIs) MUST read and write.
-- A **cache root** under `cache/` stores derived vectors/JSON artifacts. There is no SQLite cache database; the directory itself is the cache boundary.
+M1 originally targeted file-based databases; modern deployments use PostgreSQL for the primary database and treat the cache purely as a filesystem directory tree.
+- A **primary operational database** (PostgreSQL in current builds) stores canonical image metadata, model outputs, near-duplicate relationships, and run state. This database is the only one that production-facing services (CLI, Web UI, future APIs) MUST read and write.
+- A **cache root** under `cache/` stores derived vectors/JSON artifacts. There is no database-backed cache; the directory itself is the cache boundary.
 
 ### Hash Strategy: Content vs Perceptual
 M1 uses two distinct hash types:
@@ -88,7 +88,7 @@ Mental model:
 - `image_id` → “Are these files exactly the same bits?”
 - `phash`   → “Do these photos look roughly the same?”
 
-### `images` table (primary DB: `data/index.db`)
+### `images` table (primary DB: PostgreSQL)
 Tracks stable identity and file metadata.
 
 ```sql
@@ -127,7 +127,7 @@ Deletion semantics in M1:
 - This ensures that a logical image remains active as long as it is present under any configured root.
 
 ### `image_scene` table (primary DB)
-Stores lightweight pre-classification outputs derived from cached detection files under `cache/detections/`.
+Stores lightweight pre-classification outputs produced by SigLIP scene/attribute classifiers, persisted directly in the primary database (legacy filesystem caches under `cache/detections/` are no longer used).
 
 ```sql
 CREATE TABLE IF NOT EXISTS image_scene (
@@ -248,7 +248,7 @@ pipeline:
 
 ### 5.0 CLI Parameters
 - `--root`: one or more album root directories to scan (required; may be passed multiple times).
-- `--db`: path to the primary operational SQLite database (optional, defaults to `data/index.db`).
+- `--db`: connection string for the primary operational PostgreSQL database (optional, defaults to `databases.primary_url`).
 - `--cache-root`: path/URL used to locate the cache directory on disk (optional, defaults to `cache.root`, which resolves to the configured cache directory).
 - `--batch-size`: override the batch size from `config/settings.yaml` for model inference.
 - `--device`: override the device from `config/settings.yaml` (for example `cpu`, `cuda`, `mps`).
@@ -304,7 +304,7 @@ pipeline:
     - Compute `sim_pos = cosine(image, positive_prompt)` and `sim_neg = cosine(image, negative_prompt)`.
     - Set the attribute to `True` when `(sim_pos - sim_neg) > threshold` and `False` otherwise.
 - **Model initialization happens once per process**; no per-image reloads.
-- Scene classification outputs SHOULD also be cached under `cache/detections/<image_id>.json` (including `classifier_name`, `classifier_version`, and timestamps) so SQLite tables can be rebuilt from cache artifacts.
+- Scene classification outputs are persisted only in the `image_scene` table (with `classifier_name`, `classifier_version`, and timestamps) so downstream services can rebuild views directly from the database.
 
 ### 5.4 Embeddings & Captions (SigLIP + BLIP)
 - Batch process active, non-deleted images to compute:
@@ -410,15 +410,15 @@ project_root/
       m1_development_plan.md  # this blueprint
 ```
 
-- M1 processing CLI: `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-root cache/] [--batch-size ... --device ...]`, using `config/settings.yaml` as the source of defaults with CLI flags overriding when provided.
+- M1 processing CLI: `uv run python -m vibe_photos.dev.process --root <album> --db postgresql+psycopg://localhost:5432/vibe [--cache-root cache/] [--batch-size ... --device ...]`, using `config/settings.yaml` as the source of defaults with CLI flags overriding when provided.
 - When `--cache-root` is omitted, the preprocessing CLI resolves the cache directory from `cache.root`.
 - Flask Web UI: `FLASK_APP=vibe_photos.webui uv run flask run` for manual inspection during development.
 
 ## 8. Acceptance Criteria
 ### Functional
-- `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db --cache-root cache/ --batch-size 16 --device cpu|cuda`:
+- `uv run python -m vibe_photos.dev.process --root <album> --db postgresql+psycopg://localhost:5432/vibe --cache-root cache/ --batch-size 16 --device cpu|cuda`:
   - Populates `images` with active assets, content hashes (`image_id`), and perceptual hashes (`phash`) for all decodable images.
-  - Populates `image_scene` for active images and writes corresponding cache files under `cache/detections/`; records errors without stopping.
+  - Populates `image_scene` for active images (scene type + attributes) and records errors without stopping.
   - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 16` by default) and persists them into `image_near_duplicate` in the primary database; anchors are chosen by `mtime` and tie-broken by `image_id`.
 - Computes SigLIP embeddings and BLIP captions for canonical images and persists them under `cache/embeddings/` and `cache/captions/`, with metadata written into `image_embedding` and `image_caption`.
 - Preprocessing respects `config/settings.yaml` defaults for model IDs, devices, batch sizes, and pipeline flags, with CLI arguments overriding config values when supplied.
@@ -434,7 +434,7 @@ project_root/
 
 ### Evolvability Hooks for M2+
 - Use `schema_version`, `classifier_name`, and `classifier_version` to detect stale rows and re-run when models change.
-- Scene, `has_text`, embeddings, and captions outputs gate future OCR runs and search; the cache layer stores embeddings, logits, detections, and OCR text keyed by `image_id`.
+- Scene, `has_text`, embeddings, and captions outputs gate future OCR runs and search; the cache layer stores embeddings, caption JSON, region payloads, and future OCR text keyed by `image_id`.
 
 ## 9. Search-Relevant Expectations (Preview for Future Phases)
 - Each photo should eventually emit 1–3 high-quality coarse + mid-level labels to support text and embedding search.

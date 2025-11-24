@@ -49,7 +49,7 @@ On Linux or Windows machines with a compatible NVIDIA GPU and CUDA 13.0:
 Database Configuration
 ----------------------
 
-- `config/settings.yml` now includes a `databases` block (for the primary DSN) and a `cache` block (for the filesystem root that stores embeddings/captions/detections). The legacy `databases.cache_url` key is still parsed for backward compatibility, but `cache.root` is the canonical setting going forward.
+- `config/settings.yml` now includes a `databases` block (for the primary DSN) and a `cache` block (for the filesystem root that stores embeddings/captions/detections). The `cache.root` is the canonical setting going forward.
 - The default primary DSN is `postgresql+psycopg://vibe:vibe@localhost:5432/vibe_primary`, matching the docker-compose service credentials; override the user/host/dbname as needed.
 - Start the backing services with `docker compose up postgres redis` (or the full stack) before running the pipeline.
 - Override `databases.primary_url` / `cache.root` per environment as needed; all CLIs and services now accept DB URLs in addition to file paths.
@@ -83,8 +83,8 @@ Basic single-process run:
 Key options:
 
 - `--root`: one or more album root directories to scan (may be passed multiple times).
-- `--db`: primary database URL or path (defaults to `databases.primary_url` in `config/settings.yaml`).
-- `--cache-root`: cache root URL or path (defaults to `cache.root`, which resolves to a cache directory such as `cache/`).
+- `--db`: primary PostgreSQL database URL (defaults to `databases.primary_url` in `config/settings.yaml`).
+- `--cache-root`: cache root directory path (defaults to `cache.root`, which resolves to a cache directory such as `cache/`).
 - `--batch-size`: override the model batch size from `config/settings.yaml`.
 - `--device`: override the model device (for example `cpu`, `cuda`, or `mps`).
 - `--image-path`: process a single image using the shared preprocessing steps and write artifacts under the cache root.

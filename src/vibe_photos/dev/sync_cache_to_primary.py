@@ -143,7 +143,7 @@ def main(
     db: str | None = typer.Option(
         None,
         "--db",
-        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+        help="Primary PostgreSQL database URL. Defaults to databases.primary_url in settings.yaml.",
     ),
     tables: Iterable[TableName] = typer.Option(
         ["all"], "--table", "-t", help="Tables to sync: embeddings, captions, scenes, duplicates, or all."
@@ -155,9 +155,7 @@ def main(
     _cache_root_path = resolve_cache_root(cache_root or settings.cache.root)
     _primary_target = db or settings.databases.primary_url
 
-    raise RuntimeError(
-        "Filesystem caches no longer include a SQLite index; sync from the primary database instead."
-    )
+    raise RuntimeError("Filesystem caches no longer expose a standalone DB; sync from the primary database instead.")
 
 if __name__ == "__main__":
     typer.run(main)

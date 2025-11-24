@@ -2,7 +2,7 @@
 """Batch annotate images with Qwen3-VL via an OpenAI-compatible endpoint.
 
 This script is intended to run on the external H100 server where Qwen3-VL is
-hosted. It does **not** touch the local SQLite databases. Instead it:
+hosted. It does **not** touch the local primary database. Instead it:
 
 - Computes the same content hash used by the M2 pipeline (images.image_id).
 - Calls a Qwen3-VL endpoint to obtain a coarse JSON annotation per image.

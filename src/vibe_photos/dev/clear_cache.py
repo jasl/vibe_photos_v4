@@ -55,8 +55,6 @@ def _invalidate_cache_dirs(cache_root: Path, stages: set[Stage]) -> None:
         _remove_path(cache_root / "embeddings")
     if "captions" in stages or "all" in stages:
         _remove_path(cache_root / "captions")
-    if "scenes" in stages or "all" in stages:
-        _remove_path(cache_root / "detections")
     if "regions" in stages or "all" in stages:
         _remove_path(cache_root / "regions")
         _remove_path(cache_root / "embeddings" / "regions")

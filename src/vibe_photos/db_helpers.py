@@ -10,12 +10,15 @@ from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session
 
 
-def normalize_database_url(target: str | Path) -> str:
-    """Normalize database URLs, restricting usage to PostgreSQL targets."""
+def normalize_database_url(target: str) -> str:
+    """Normalize PostgreSQL database URLs and reject unsupported inputs."""
 
-    raw = str(target).strip()
+    raw = target.strip()
     if not raw:
         raise ValueError("database target cannot be empty")
+
+    if "://" not in raw:
+        raise ValueError("database target must include a driver scheme such as postgresql+psycopg://")
 
     url = make_url(raw)
     if url.drivername.startswith("postgresql") and url.database:
@@ -25,7 +28,7 @@ def normalize_database_url(target: str | Path) -> str:
 
 
 def resolve_cache_root(target: str | Path) -> Path:
-    """Resolve a filesystem cache root, ignoring legacy SQLite URL formats."""
+    """Resolve a filesystem cache root, enforcing directory-only inputs."""
 
     raw = str(target).strip()
     if not raw:
@@ -36,7 +39,7 @@ def resolve_cache_root(target: str | Path) -> Path:
 
     path = Path(raw).resolve()
     if path.suffix == ".db":
-        raise ValueError("cache root must be a directory, not a legacy SQLite file path")
+        raise ValueError("cache root must be a directory, not a database file path")
 
     return path
 

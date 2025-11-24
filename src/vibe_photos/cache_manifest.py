@@ -20,9 +20,7 @@ CACHE_FORMAT_VERSION: int = 1
 _CACHE_SUBDIRS = [
     "embeddings",
     "captions",
-    "detections",
     "regions",
-    "images",
     "artifacts",
 ]
 _CACHE_FILES = ["index.db", "run_journal.json"]

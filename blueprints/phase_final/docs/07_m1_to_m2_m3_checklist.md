@@ -19,7 +19,7 @@ This draft checklist summarizes the main engineering steps to move from the impl
 
 ## 2. M2 — Perception Quality & Labeling
 
-Goal: Improve recognition quality and label hygiene on top of the existing SQLite + cache stack, before investing in full search tooling.
+Goal: Improve recognition quality and label hygiene on top of the existing PostgreSQL + cache stack, before investing in full search tooling.
 
 - [ ] SigLIP label dictionaries and grouping:
   - [ ] Review and refine `settings.models.siglip_labels` to:
@@ -44,17 +44,11 @@ Goal: Promote the architecture to its Phase Final form with PostgreSQL + pgvecto
 
 - [ ] Design PostgreSQL schema:
   - [ ] Translate the canonical schema (`blueprints/phase_final/specs/database_schema.sql`) to PostgreSQL, including pgvector columns for embeddings.
-- [ ] Ensure tables map cleanly from the current SQLite cache tables (M1/M2) to PostgreSQL entities.
+- [ ] Ensure tables map cleanly from the current cache tables (M1/M2) to PostgreSQL entities.
   - [ ] Decide where to store:
     - [ ] Photo records and regions.
     - [ ] Embeddings and captions.
     - [ ] User-facing annotations and collections (even if initially empty).
-- [ ] Implement migration from SQLite:
-  - [ ] Choose the preferred migration path:
-    - [ ] Direct DB-to-DB migration from SQLite to PostgreSQL, or
-    - [ ] Rebuild PostgreSQL from caches and the primary SQLite DB using the M1 manifest.
-  - [ ] Implement a repeatable migration script (e.g., `uv run python -m vibe_photos.tools.migrate_to_postgres`).
-  - [ ] Validate migration on a realistic subset of data.
 - [ ] Wire pgvector search:
   - [ ] Create pgvector indexes for image embeddings (and optional region embeddings).
   - [ ] Mirror M2 search semantics:
@@ -73,7 +67,7 @@ Goal: Promote the architecture to its Phase Final form with PostgreSQL + pgvecto
   - [ ] Provide `.env.example` and short setup docs for local and NAS-style environments.
 - [ ] Queue & worker alignment:
   - [ ] Align the existing Celery tasks (`vibe_photos.task_queue`) with PostgreSQL-backed state.
-  - [ ] Decide which tasks remain SQLite-backed (if any) vs. fully migrated to PostgreSQL.
+  - [ ] Decide which tasks remain legacy-backed (if any) vs. fully migrated to PostgreSQL.
 - [ ] Operational readiness:
   - [ ] Add basic health checks for API, workers, and DB.
   - [ ] Define backup/restore procedures for PostgreSQL (docs + scripts).

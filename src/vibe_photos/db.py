@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from threading import Lock
 
 from sqlalchemy import (
@@ -376,8 +375,8 @@ _ENGINE_CACHE: dict[str, Engine] = {}
 _ENGINE_LOCK = Lock()
 
 
-def _get_engine(target: str | Path) -> Engine:
-    """Return a cached SQLAlchemy engine for the provided target, creating schema if needed."""
+def _get_engine(target: str) -> Engine:
+    """Return a cached SQLAlchemy engine for the provided PostgreSQL URL, creating schema if needed."""
 
     normalized = normalize_database_url(target)
     engine = _ENGINE_CACHE.get(normalized)
@@ -407,7 +406,7 @@ def _get_engine(target: str | Path) -> Engine:
         return engine
 
 
-def open_primary_session(target: str | Path) -> Session:
+def open_primary_session(target: str) -> Session:
     """Open a SQLAlchemy session for the primary database."""
 
     engine = _get_engine(target)

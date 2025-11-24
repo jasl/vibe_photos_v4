@@ -176,7 +176,7 @@ def main(
     db: str | None = typer.Option(
         None,
         "--db",
-        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+        help="Primary PostgreSQL database URL. Defaults to databases.primary_url in settings.yaml.",
     ),
     task: str = typer.Option(
         "process",

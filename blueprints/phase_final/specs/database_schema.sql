@@ -1,5 +1,5 @@
 -- Vibe Photos Phase Final database design
--- Compatible with SQLite and PostgreSQL
+-- Targeting PostgreSQL + pgvector
 
 -- ==========================================
 -- Core tables

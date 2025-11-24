@@ -15,28 +15,36 @@ def _find_free_port() -> int:
         return s.getsockname()[1]
 
 
+def _require_binary(name: str) -> str:
+    env_override = os.environ.get(name.upper())
+    if env_override:
+        return env_override
+    path = shutil.which(name)
+    if path is None:
+        raise RuntimeError(f"required PostgreSQL binary '{name}' not found on PATH")
+    return path
+
+
 @contextmanager
 def temporary_postgres(base_dir: Path | None = None):
     """Spin up a throwaway PostgreSQL instance for tests."""
 
-    workdir = Path(tempfile.mkdtemp())
+    initdb_bin = _require_binary("initdb")
+    pg_ctl_bin = _require_binary("pg_ctl")
+    _require_binary("postgres")
+
+    workdir_root = Path(tempfile.mkdtemp()) if base_dir is None else Path(base_dir)
+    workdir_root.mkdir(parents=True, exist_ok=True)
+    workdir = workdir_root / "temp_pg"
     data_dir = workdir / "pgdata"
     log_file = workdir / "postgresql.log"
+    data_dir.mkdir(parents=True, exist_ok=True)
 
     env = os.environ.copy()
-    env["PATH"] = "/usr/lib/postgresql/16/bin:" + env.get("PATH", "")
-
-    data_dir.mkdir(parents=True, exist_ok=True)
-    shutil.chown(workdir, user="postgres", group="postgres")
-    shutil.chown(data_dir, user="postgres", group="postgres")
 
     init = subprocess.run(
         [
-            "runuser",
-            "-u",
-            "postgres",
-            "--",
-            "initdb",
+            initdb_bin,
             "-D",
             str(data_dir),
             "--username",
@@ -50,16 +58,12 @@ def temporary_postgres(base_dir: Path | None = None):
         text=True,
     )
     if init.returncode != 0:
-        raise RuntimeError(f"initdb failed: {init.stderr}")
+        raise RuntimeError(f"initdb failed: {init.stderr.strip()}")
 
     port = _find_free_port()
     start = subprocess.run(
         [
-            "runuser",
-            "-u",
-            "postgres",
-            "--",
-            "pg_ctl",
+            pg_ctl_bin,
             "-D",
             str(data_dir),
             "-l",
@@ -74,14 +78,20 @@ def temporary_postgres(base_dir: Path | None = None):
         text=True,
     )
     if start.returncode != 0:
-        raise RuntimeError(f"pg_ctl start failed: {start.stderr}\nlog: {log_file.read_text()}" if log_file.exists() else start.stderr)
+        err_text = (
+            f"{start.stderr.strip()}\nlog: {log_file.read_text()}"
+            if log_file.exists()
+            else start.stderr.strip()
+        )
+        raise RuntimeError(f"pg_ctl start failed: {err_text}")
 
     try:
         yield f"postgresql+psycopg://postgres@127.0.0.1:{port}/postgres"
     finally:
         subprocess.run(
-            ["runuser", "-u", "postgres", "--", "pg_ctl", "-D", str(data_dir), "-m", "immediate", "stop"],
+            [pg_ctl_bin, "-D", str(data_dir), "-m", "immediate", "stop"],
             env=env,
             capture_output=True,
+            text=True,
         )
         shutil.rmtree(workdir, ignore_errors=True)

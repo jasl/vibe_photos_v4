@@ -20,7 +20,7 @@ from vibe_photos.db_helpers import resolve_cache_root  # noqa: E402
 LOGGER = get_logger(__name__)
 
 
-def _init_primary_db(target: str | Path) -> None:
+def _init_primary_db(target: str) -> None:
     session = open_primary_session(target)
     session.close()
     LOGGER.info("init_primary_db_ok", extra={"target": str(target)})
@@ -39,14 +39,14 @@ def parse_args() -> argparse.Namespace:
         "--data-db",
         type=str,
         default=None,
-        help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
+        help="Primary PostgreSQL database URL. Defaults to databases.primary_url in settings.yaml.",
     )
     parser.add_argument(
         "--cache-root",
         dest="cache_root",
         type=str,
         default=None,
-        help="Cache root URL or path. Defaults to cache.root in settings.yaml.",
+        help="Cache root directory path. Defaults to cache.root in settings.yaml.",
     )
     return parser.parse_args()
 

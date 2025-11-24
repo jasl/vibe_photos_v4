@@ -294,7 +294,7 @@ def process(image_id: str) -> str:
             primary_session.add(row)
             primary_session.commit()
 
-    pipeline.run(roots=[], primary_db_path=primary_path, cache_root_path=cache_root)
+    pipeline.run(roots=[], primary_db_url=primary_path, cache_root_path=cache_root)
 
     LOGGER.info("label_pipeline_complete", extra={})
 

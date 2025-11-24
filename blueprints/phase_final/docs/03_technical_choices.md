@@ -8,7 +8,7 @@ This document records the main technical decisions for the Phase Final architect
 - **Detection‑first:** Open‑vocabulary detection (Grounding DINO / OWL‑ViT) plus SigLIP/BLIP re‑ranking is a **must‑have**, not a future optimization.
 - **Model quality over minimal size:** Target modern Macs and UMA PCs with reasonable RAM/VRAM; larger models are acceptable if they materially improve search quality.
 - **CPU compatible, GPU enhanced:** The stack must run on CPU‑only machines, but should automatically take advantage of GPUs if available.
-- **Staged rollout:** Implementation proceeds in stages (SQLite prototype → PostgreSQL/pgvector), while keeping the final stack stable.
+- **Staged rollout:** Implementation proceeds in stages (local prototype → PostgreSQL/pgvector), while keeping the final stack stable.
 
 ## 2. Runtime Stack
 
@@ -92,7 +92,7 @@ Kubernetes is **explicitly out of scope** for Phase Final; if needed later, mani
 - **Development / Test:**
   - Prefer running services directly on the host using:
     - Python 3.12 managed via `uv` (`uv venv`, `uv sync`, `uv run`).
-    - SQLite for early milestones (M1–M2).
+    - PostgreSQL for all milestones (M1–M4).
   - Use `docker-compose` only when testing near‑final deployment (M3+).
   - GPU usage:
     - Optional; when present, used by detector and models.

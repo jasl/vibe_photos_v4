@@ -39,7 +39,7 @@ app = Flask(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
-def _get_primary_db_target() -> str | Path:
+def _get_primary_db_target() -> str:
     settings = load_settings()
     return settings.databases.primary_url
 

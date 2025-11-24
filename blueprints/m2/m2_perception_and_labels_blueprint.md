@@ -39,7 +39,7 @@ M1 已经完成了一条稳定的本地预处理流水线：
 ### 2.1 In Scope
 
 - **存储与基础设施**
-  - 继续使用现有的 **PostgreSQL + 文件系统 cache** 结构（SQLite 仅为历史背景，不再作为运行时目标）。
+  - 继续使用现有的 **PostgreSQL + 文件系统 cache** 结构（早期文件数据库方案仅作历史背景，不再作为运行时目标）。
   - 不大改 Celery / pipeline 基础框架，只在现有阶段上重排职责、加新任务。
 
 - **感知质量目标**
@@ -118,7 +118,7 @@ M2 把系统划分为三个清晰层次：
    - 现有的 scene / has_person 等字段逐步「镜像」到 label 层，后续 UI 和检索优先对 label 层聚合。
 
 3. **Retrieval & UI Layer（检索与 UI 层）**
-   - 继续使用当前 Flask QA UI + SQLite，但改成：
+  - 继续使用当前 Flask QA UI + PostgreSQL，但改成：
      - 一级分类 facet 基于 `label_assignment` + `labels`（`level='scene'`）聚合。
      - Region 标签从 `label_assignment` 读取（`target_type='region'`）。
      - Cluster 当作特殊标签展示（相似物体组），支持按 cluster 浏览。
@@ -139,7 +139,7 @@ M2 把系统划分为三个清晰层次：
 扫描 → hash → phash → SigLIP embedding → BLIP caption
     → coarse scene + attributes (zero-shot)
     → (可选) detection + SigLIP region re-ranking
-    → 写 SQLite
+    → 写 PostgreSQL
 ```
 
 M2 调整为三阶段：
@@ -173,9 +173,9 @@ M2 调整为三阶段：
 
 ---
 
-## 4. Data Model Changes (SQLite)
+## 4. Data Model Changes
 
-在不破坏已有表的前提下，M2 需要为标签层和 region/cluster 增加若干表。此处以 SQLite 为准，未来迁移到 PostgreSQL 时可以几乎直接映射。
+在不破坏已有表的前提下，M2 需要为标签层和 region/cluster 增加若干表。此处以 PostgreSQL schema 为准，未来可直接扩展至 pgvector。
 
 ### 4.1 Label Schema
 
@@ -474,9 +474,9 @@ CREATE TABLE cluster_membership (
 - 任务层不做跨库 JOIN；process 任务读取 cache、计算后直接写 data。cache 可随时重建，重建后跑一次 process 可恢复 data（人工标签除外）。
 - 数据库初始化通过 `scripts/` 目录下的独立脚本一次性创建所需表（原型阶段不做向后兼容），并在 `init_project.sh` 中调用，后续可演进到版本化迁移工具。
 
-### 4.5 SQLite 索引与查询模式（推荐）
+### 4.5 PostgreSQL 索引与查询模式（推荐）
 
-为保证在 SQLite 上的查询性能，推荐在初始化脚本中创建以下索引（使用 `IF NOT EXISTS` 以便安全重跑）：
+为保证在 PostgreSQL 上的查询性能，推荐在初始化脚本中创建以下索引（使用 `IF NOT EXISTS` 以便安全重跑）：
 
 ```sql
 -- label_assignment：按目标查标签（单图或单 region 的所有标签）
@@ -1040,7 +1040,7 @@ M2 不要求完整交互 UI，但结构上预留：
 功能：
 
 - 从 ground truth 文件加载标注；
-- 从 SQLite 中读取 `label_assignment`；
+- 从数据库中读取 `label_assignment`；
 - 计算：
   - Scene labels：准确率 / confusion matrix；
   - Attributes：precision / recall / F1；

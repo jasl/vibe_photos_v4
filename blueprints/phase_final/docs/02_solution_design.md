@@ -114,7 +114,7 @@ The architecture is **local‑first**: once models are downloaded and the stack 
 4. **Persistence**
    - All results are written to:
      - Stable, versioned preprocessing caches under `cache/` (JSON/NPY or similar) that are independent of DB schema. These caches store **raw model outputs** (embeddings, detections, captions, OCR blocks), not downstream classifications.
-     - The active search database (SQLite in early milestones, PostgreSQL + pgvector in Phase Final) as a cache-backed layer fed by those artifacts. Photo‑level classifications such as coarse categories (`primary_category`) are computed from cached embeddings/detections as part of pipeline logic and persisted only in the database.
+     - The active search database (PostgreSQL + pgvector) as a cache-backed layer fed by those artifacts. Photo‑level classifications such as coarse categories (`primary_category`) are computed from cached embeddings/detections as part of pipeline logic and persisted only in the database.
    - This separation allows:
      - Fast rebuilds of search DBs when schemas change across milestones.
      - Reuse of expensive model outputs as long as model and pipeline versions remain compatible, while allowing classification/ranking logic to evolve and be recomputed without rerunning heavy models.
@@ -214,16 +214,16 @@ While details live in `../specs/database_schema.sql`, the conceptual model inclu
 
 To reduce risk, implementation can proceed in stages while keeping the Phase Final design as the target:
 
-1. **M1 — Preprocessing & Feature Extraction** — Single‑machine, SQLite‑backed pipeline:
+1. **M1 — Preprocessing & Feature Extraction** — Single‑machine pipeline backed by PostgreSQL and filesystem caches:
    - High‑throughput preprocessing (normalization, thumbnails, EXIF/GPS, hashes, perceptual hashes).
    - Initial perception models (SigLIP/BLIP and, where feasible, detection).
-   - Versioned caches under `cache/` and a lightweight SQLite DB.
+  - Versioned caches under `cache/` plus a lightweight PostgreSQL schema.
 2. **M2 — Perception Quality & Labeling** — Improve recognition quality on top of M1:
    - Reduce manual maintenance of SigLIP label dictionaries and grouping (for example `settings.models.siglip_labels`) while improving coverage for creator‑relevant categories (electronics, food, documents, screenshots, products).
    - Tighten detection + SigLIP/BLIP integration (thresholds, label remapping/blacklists) to make object/product recognition more precise and less noisy.
    - Run focused evaluations on labeled subsets to understand failure modes and feed results back into configuration and model choices.
 3. **M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)** — Production search and tools:
-   - Migrate from SQLite to PostgreSQL/pgvector and expose search/inspection APIs and tools on top of the improved perception outputs.
+  - Harden PostgreSQL/pgvector and expose search/inspection APIs and tools on top of the improved perception outputs.
    - Containerize the stack with `docker-compose` (API, workers, DB, Redis, UI) for PC/NAS deployment.
 4. **M4 — Learning & Personalization** — Few‑shot and corrections loop:
    - Teach the system about niche products via few‑shot examples.
