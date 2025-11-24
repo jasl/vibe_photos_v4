@@ -57,7 +57,6 @@ def _invalidate_cache_dirs(cache_root: Path, stages: set[Stage]) -> None:
         _remove_path(cache_root / "captions")
     if "regions" in stages or "all" in stages:
         _remove_path(cache_root / "regions")
-        _remove_path(cache_root / "embeddings" / "regions")
     if "duplicates" in stages or "all" in stages:
         # No dedicated dir; rely on DB cleanup.
         return

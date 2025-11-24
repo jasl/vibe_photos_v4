@@ -48,10 +48,7 @@ def _resolve_embedding_path(cache_root: Path, rel_path: str) -> Path:
     path_obj = Path(rel_path)
     if path_obj.is_absolute():
         return path_obj
-    candidate = cache_root / path_obj
-    if candidate.exists():
-        return candidate
-    return cache_root / "embeddings" / path_obj
+    return cache_root / path_obj
 
 
 def _load_active_image_ids(primary_session: Session) -> list[str]:

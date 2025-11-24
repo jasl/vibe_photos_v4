@@ -711,8 +711,6 @@ class PreprocessingPipeline:
 
         embedding_model_name = self._settings.models.embedding.resolved_model_name()
         embedding_backend = self._settings.models.embedding.backend
-        region_emb_dir = cache_root / "embeddings" / "regions" / embedding_model_name
-        region_emb_dir.mkdir(parents=True, exist_ok=True)
 
         # Fallback: if no cache session is provided (e.g., single-image task),
         # reuse the primary session because feature tables now live in the primary DB.
@@ -938,7 +936,7 @@ class PreprocessingPipeline:
                 if new_index < len(region_embeddings):
                     emb_vec = region_embeddings[new_index]
                     region_rel_path = f"regions/{embedding_model_name}/{region_id}.npy"
-                    emb_path = cache_root / "embeddings" / region_rel_path
+                    emb_path = cache_root / region_rel_path
                     emb_path.parent.mkdir(parents=True, exist_ok=True)
                     np.save(emb_path, emb_vec)
 

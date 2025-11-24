@@ -18,12 +18,11 @@ LOGGER = get_logger(__name__)
 CACHE_FORMAT_VERSION: int = 1
 
 _CACHE_SUBDIRS = [
-    "embeddings",
-    "captions",
-    "regions",
     "artifacts",
+    "regions",
+    "label_text_prototypes",
 ]
-_CACHE_FILES = ["index.db", "run_journal.json"]
+_CACHE_FILES = ["manifest.json", "run_journal.json"]
 
 
 @dataclass

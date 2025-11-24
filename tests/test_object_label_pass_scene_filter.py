@@ -99,7 +99,7 @@ def test_object_pass_respects_scene_filters(tmp_path: Path) -> None:
                     )
                 )
                 emb_rel = f"regions/{settings.models.embedding.resolved_model_name()}/{region_id}.npy"
-                emb_path = cache_root / "embeddings" / emb_rel
+                emb_path = cache_root / emb_rel
                 emb_path.parent.mkdir(parents=True, exist_ok=True)
                 vec = np.zeros(4, dtype=np.float32)
                 vec[0] = 1.0  # align with laptop prototype

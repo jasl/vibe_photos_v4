@@ -91,7 +91,7 @@ def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
                 )
             )
             emb_rel = f"regions/{settings.models.embedding.resolved_model_name()}/img1#0.npy"
-            emb_path = cache_root / "embeddings" / emb_rel
+            emb_path = cache_root / emb_rel
             emb_path.parent.mkdir(parents=True, exist_ok=True)
             vec = np.zeros(4, dtype=np.float32)
             vec[0] = 1.0

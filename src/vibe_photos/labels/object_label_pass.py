@@ -59,10 +59,7 @@ def _resolve_region_embedding_path(cache_root: Path, rel_path: str) -> Path:
     path_obj = Path(rel_path)
     if path_obj.is_absolute():
         return path_obj
-    candidate = cache_root / path_obj
-    if candidate.exists():
-        return candidate
-    return cache_root / "embeddings" / path_obj
+    return cache_root / path_obj
 
 
 def _load_scene_labels(primary_session: Session, settings: Settings) -> dict[str, str]:
