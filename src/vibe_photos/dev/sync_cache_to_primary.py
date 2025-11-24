@@ -18,7 +18,11 @@ from vibe_photos.db import (
     ImageScene,
     open_primary_session,
 )
-from vibe_photos.db_helpers import dialect_insert
+from vibe_photos.db_helpers import (
+    dialect_insert,
+    normalize_database_url,
+    resolve_cache_root,
+)
 
 LOGGER = get_logger(__name__)
 
@@ -133,10 +137,10 @@ def _sync_duplicates(src_session: Session, dst_session: Session) -> int:
 
 
 def main(
-    cache_db: str | None = typer.Option(
+    cache_root: str | None = typer.Option(
         None,
-        "--cache-db",
-        help="Cache database URL (PostgreSQL). Defaults to databases.primary_url in settings.yaml.",
+        "--cache-root",
+        help="Cache root directory containing the local SQLite index.db (defaults to cache.root in settings.yaml).",
     ),
     db: str | None = typer.Option(
         None,
@@ -150,7 +154,8 @@ def main(
     """Copy cache tables into the primary DB."""
 
     settings = load_settings()
-    cache_db_url = cache_db or settings.databases.primary_url
+    cache_root_path = resolve_cache_root(cache_root or settings.cache.root)
+    cache_db_url = normalize_database_url(cache_root_path / "index.db")
     primary_target = db or settings.databases.primary_url
 
     selected = set(tables or ["all"])
@@ -170,7 +175,7 @@ def main(
         extra={
             "tables": sorted(selected),
             "rows_synced": total,
-            "cache_db": str(cache_db_url),
+            "cache_root": str(cache_root_path),
             "db": str(primary_target),
         },
     )
