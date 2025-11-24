@@ -13,7 +13,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
-from vibe_photos.db import ArtifactDependency, ArtifactRecord, dialect_insert
+from vibe_photos.db import ArtifactDependency, ArtifactRecord
+from vibe_photos.db_helpers import dialect_insert
 
 LOGGER = get_logger(__name__, extra={"component": "artifact_store"})
 

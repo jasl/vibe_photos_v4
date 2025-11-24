@@ -25,9 +25,9 @@ from vibe_photos.db import (
     ProcessResult,
     open_cache_session,
     open_primary_session,
-    sqlite_path_from_target,
 )
 from vibe_photos.db import Image as ImageRow
+from vibe_photos.db_helpers import sqlite_path_from_target
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.pipeline import PreprocessingPipeline
 from vibe_photos.preprocessing import ensure_preprocessing_artifacts

@@ -370,7 +370,7 @@ class ClusterConfig:
 class DatabaseConfig:
     """Database connection targets for primary and cache stores."""
 
-    primary_url: str = "sqlite:///data/index.db"
+    primary_url: str = "postgresql+psycopg://vibe:vibe@localhost:5432/vibe_primary"
     cache_url: str = "sqlite:///cache/index.db"
 
 

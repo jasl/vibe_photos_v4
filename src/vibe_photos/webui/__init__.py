@@ -25,8 +25,8 @@ from vibe_photos.db import (
     Region,
     open_cache_session,
     open_primary_session,
-    sqlite_path_from_target,
 )
+from vibe_photos.db_helpers import sqlite_path_from_target
 from vibe_photos.labels.scene_schema import (
     ATTRIBUTE_LABEL_KEYS,
     normalize_scene_filter,

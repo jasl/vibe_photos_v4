@@ -29,10 +29,10 @@ from vibe_photos.db import (
     ImageScene,
     Region,
     RegionEmbedding,
-    dialect_insert,
     open_cache_session,
     open_primary_session,
 )
+from vibe_photos.db_helpers import dialect_insert
 from vibe_photos.hasher import (
     CONTENT_HASH_ALGO,
     PHASH_ALGO,
