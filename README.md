@@ -53,6 +53,19 @@ Database Configuration
 - Start the backing services with `docker compose up postgres redis` (or the full stack) before running the pipeline.
 - Override `databases.primary_url` / `databases.cache_url` per environment as needed; all CLIs and services now accept DB URLs in addition to file paths.
 
+Primary DB Backup & Restore
+---------------------------
+
+- Dump the primary Postgres DB to `tmp/primary_db.dump` (custom format, compatible with `pg_restore`):
+  - `uv run python scripts/dump_primary_db.py`
+  - Override target DB with `--data-db postgresql+psycopg://user:pass@host:5432/dbname`.
+  - Change output or format/jobs: `--output <path> --format custom|plain|directory|tar --jobs 4` (jobs not supported for `plain`).
+- Restore from a dump (drops and recreates the DB when `--drop-existing` is set):
+  - `uv run python scripts/restore_primary_db.py --dump-file tmp/primary_db.dump --drop-existing`
+  - Uses `databases.primary_url` by default; override with `--data-db ...`.
+  - Add `--skip-clean` to leave existing objects in place; set parallel workers via `--jobs`.
+  - Uses `--maintenance-db postgres` for admin commands; adjust if your cluster reserves `postgres`.
+
 Running the Pipeline (Single-Process)
 ------------------------------------
 

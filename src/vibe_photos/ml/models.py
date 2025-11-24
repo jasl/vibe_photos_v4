@@ -14,7 +14,6 @@ from transformers import (
     AutoModel,
     AutoModelForImageTextToText,
     AutoProcessor,
-    PreTrainedModel,
 )
 
 from vibe_photos.config import (

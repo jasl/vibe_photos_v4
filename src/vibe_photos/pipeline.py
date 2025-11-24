@@ -10,7 +10,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TypedDict
 
 from PIL import Image as PILImage
 from sqlalchemy import and_, delete, func, or_, select, update

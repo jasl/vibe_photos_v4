@@ -65,6 +65,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - [ ] Design PostgreSQL schema and migrations based on the M1/M2 SQLite cache tables and Phase Final specs.
 - [ ] Implement search and inspection APIs backed by PostgreSQL + pgvector (hybrid text + vector + filters).
 - [ ] Define a `docker-compose` stack (API, workers, DB, Redis, UI) suitable for PC/NAS deployment and wire the existing preprocessing pipeline into this stack.
+- [x] Add CLI utilities to dump and restore the primary PostgreSQL database (`scripts/dump_primary_db.py`, `scripts/restore_primary_db.py`).
 
 ### M4 — Learning & Personalization
 
