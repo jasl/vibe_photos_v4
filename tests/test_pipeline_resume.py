@@ -28,7 +28,9 @@ def test_pipeline_skips_completed_and_resumes_next_stage(monkeypatch, tmp_path):
     primary_db = tmp_path / "data" / "index.db"
     primary_db.parent.mkdir(parents=True, exist_ok=True)
 
-    save_run_journal(cache_root, RunJournalRecord(stage="thumbnails", cursor_image_id=None, updated_at=0.0))
+    save_run_journal(
+        cache_root, RunJournalRecord(stage="preprocess_artifacts", cursor_image_id=None, updated_at=0.0)
+    )
 
     settings = Settings()
     pipeline = PreprocessingPipeline(settings=settings)
@@ -38,7 +40,7 @@ def test_pipeline_skips_completed_and_resumes_next_stage(monkeypatch, tmp_path):
     executed: list[str] = []
     pipeline._run_scan_and_hash = _stub_stage(executed, "scan_and_hash")  # type: ignore[assignment]
     pipeline._run_perceptual_hashing_and_duplicates = _stub_stage(executed, "phash_and_duplicates")  # type: ignore[assignment]
-    pipeline._run_thumbnails = _stub_stage(executed, "thumbnails")  # type: ignore[assignment]
+    pipeline._run_preprocess_artifacts = _stub_stage(executed, "preprocess_artifacts")  # type: ignore[assignment]
     pipeline._run_embeddings_and_captions = _stub_stage(executed, "embeddings_and_captions")  # type: ignore[assignment]
     pipeline._run_scene_classification = _stub_stage(executed, "scene_classification")  # type: ignore[assignment]
     pipeline._run_cluster_pass = _stub_stage(executed, "cluster_pass")  # type: ignore[assignment]
@@ -64,7 +66,7 @@ def test_pipeline_resumes_stage_from_cursor(monkeypatch, tmp_path):
     executed: list[str] = []
     pipeline._run_scan_and_hash = _stub_stage(executed, "scan_and_hash")  # type: ignore[assignment]
     pipeline._run_perceptual_hashing_and_duplicates = _stub_stage(executed, "phash_and_duplicates")  # type: ignore[assignment]
-    pipeline._run_thumbnails = _stub_stage(executed, "thumbnails")  # type: ignore[assignment]
+    pipeline._run_preprocess_artifacts = _stub_stage(executed, "preprocess_artifacts")  # type: ignore[assignment]
     pipeline._run_embeddings_and_captions = _stub_stage(executed, "embeddings_and_captions")  # type: ignore[assignment]
     pipeline._run_scene_classification = _stub_stage(executed, "scene_classification")  # type: ignore[assignment]
 

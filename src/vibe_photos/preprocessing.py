@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 
 from PIL import Image
@@ -22,6 +25,100 @@ from vibe_photos.hasher import (
 )
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.thumbnailing import save_thumbnail
+
+
+def extract_exif_and_gps(
+    image: Image.Image, datetime_format: str = "raw"
+) -> tuple[str | None, str | None, dict[str, object] | None]:
+    """Extract EXIF datetime, camera model, and GPS coordinates from a PIL image."""
+
+    try:
+        from PIL import ExifTags as _ExifTags
+    except Exception:
+        return None, None, None
+
+    try:
+        exif = image.getexif()
+    except Exception:
+        return None, None, None
+
+    if not exif:
+        return None, None, None
+
+    exif_dict = dict(exif)
+    exif_by_name: dict[str, object] = {}
+    for tag_id, value in exif_dict.items():
+        name = _ExifTags.TAGS.get(tag_id, str(tag_id))
+        exif_by_name[name] = value
+
+    exif_datetime: str | None = None
+    camera_model: str | None = None
+
+    raw_dt = exif_by_name.get("DateTimeOriginal") or exif_by_name.get("DateTime")
+    if isinstance(raw_dt, str):
+        if datetime_format == "iso":
+            try:
+                dt = datetime.strptime(raw_dt, "%Y:%m:%d %H:%M:%S")
+                exif_datetime = dt.isoformat(timespec="seconds")
+            except Exception:
+                exif_datetime = raw_dt
+        else:
+            exif_datetime = raw_dt
+
+    model = exif_by_name.get("Model")
+    make = exif_by_name.get("Make")
+    if isinstance(model, str) and isinstance(make, str):
+        camera_model = f"{make} {model}".strip()
+    elif isinstance(model, str):
+        camera_model = model
+    elif isinstance(make, str):
+        camera_model = make
+
+    gps_info = exif_by_name.get("GPSInfo")
+    if not gps_info or not isinstance(gps_info, dict):
+        return exif_datetime, camera_model, None
+
+    gps_tags: dict[str, object] = {}
+    for key, value in gps_info.items():
+        name = _ExifTags.GPSTAGS.get(key, str(key))
+        gps_tags[name] = value
+
+    lat = gps_tags.get("GPSLatitude")
+    lat_ref = gps_tags.get("GPSLatitudeRef")
+    lon = gps_tags.get("GPSLongitude")
+    lon_ref = gps_tags.get("GPSLongitudeRef")
+
+    def _to_degrees(value: object) -> float | None:
+        if not isinstance(value, Sequence):
+            return None
+        if len(value) < 3:
+            return None
+        d, m, s = value[0], value[1], value[2]
+        try:
+            d_val = float(d)
+            m_val = float(m)
+            s_val = float(s)
+            return d_val + (m_val / 60.0) + (s_val / 3600.0)
+        except Exception:
+            return None
+
+    latitude = _to_degrees(lat)
+    longitude = _to_degrees(lon)
+    if latitude is None or longitude is None:
+        return exif_datetime, camera_model, None
+
+    if isinstance(lat_ref, str) and lat_ref.upper() == "S":
+        latitude = -latitude
+    if isinstance(lon_ref, str) and lon_ref.upper() == "W":
+        longitude = -longitude
+
+    gps_payload = {
+        "latitude": latitude,
+        "latitude_ref": lat_ref,
+        "longitude": longitude,
+        "longitude_ref": lon_ref,
+    }
+    return exif_datetime, camera_model, gps_payload
 
 
 def build_thumbnail(
@@ -114,6 +211,15 @@ def build_caption_artifact(detector: SiglipBlipDetector, image: Image.Image, out
     return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path))
 
 
+def build_metadata_artifact(metadata: dict[str, object], output_dir: Path) -> ArtifactResult:
+    """Persist normalized metadata (EXIF, camera, GPS) to JSON."""
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / "metadata.json"
+    out_path.write_text(json.dumps(metadata), encoding="utf-8")
+    return ArtifactResult(storage_path=out_path, checksum=hash_file(out_path))
+
+
 def ensure_preprocessing_artifacts(
     *,
     image_id: str,
@@ -122,8 +228,23 @@ def ensure_preprocessing_artifacts(
     settings: Settings,
     manager: ArtifactManager,
     detector: SiglipBlipDetector,
-) -> dict[str, ArtifactSpec | ArtifactRecord]:
+) -> dict[str, ArtifactSpec | ArtifactRecord | dict[str, object]]:
     """Ensure all preprocessing artifacts exist for a single image and return key artifacts/specs."""
+
+    metadata_exif_datetime, metadata_camera_model, metadata_gps = extract_exif_and_gps(
+        image, datetime_format=settings.pipeline.exif_datetime_format
+    )
+    metadata_payload: dict[str, object] = {
+        "image_id": image_id,
+        "primary_path": str(image_path),
+        "updated_at": time.time(),
+    }
+    if metadata_exif_datetime is not None:
+        metadata_payload["exif_datetime"] = metadata_exif_datetime
+    if metadata_camera_model is not None:
+        metadata_payload["camera_model"] = metadata_camera_model
+    if metadata_gps is not None:
+        metadata_payload["gps"] = metadata_gps
 
     thumb_large = ArtifactSpec(
         artifact_type="thumbnail_large",
@@ -170,6 +291,17 @@ def ensure_preprocessing_artifacts(
         builder=lambda out_dir: build_exif_artifact(image, out_dir, datetime_format=settings.pipeline.exif_datetime_format),
     )
 
+    metadata_spec = ArtifactSpec(
+        artifact_type="metadata",
+        model_name="exif_summary",
+        params={"datetime_format": settings.pipeline.exif_datetime_format},
+    )
+    metadata_artifact = manager.ensure_artifact(
+        image_id=image_id,
+        spec=metadata_spec,
+        builder=lambda out_dir: build_metadata_artifact(metadata_payload, out_dir),
+    )
+
     hash_spec = ArtifactSpec(artifact_type="content_hash", model_name=CONTENT_HASH_ALGO, params={})
     content_hash_artifact = manager.ensure_artifact(
         image_id=image_id, spec=hash_spec, builder=lambda out_dir: build_content_hash_artifact(image_path, out_dir)
@@ -213,6 +345,9 @@ def ensure_preprocessing_artifacts(
         "thumb_small_artifact": thumb_small_artifact,
         "exif_spec": exif_spec,
         "exif_artifact": exif_artifact,
+        "metadata_spec": metadata_spec,
+        "metadata_artifact": metadata_artifact,
+        "metadata_payload": metadata_payload,
         "content_hash_artifact": content_hash_artifact,
         "phash_artifact": phash_artifact,
         "embedding_artifact": embedding,

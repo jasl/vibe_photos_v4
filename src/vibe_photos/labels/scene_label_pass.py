@@ -44,6 +44,16 @@ def _load_embedding_rows(cache_session: Session, model_name: str) -> dict[str, s
     return {row.image_id: row.embedding_path for row in rows}
 
 
+def _resolve_embedding_path(cache_root: Path, rel_path: str) -> Path:
+    path_obj = Path(rel_path)
+    if path_obj.is_absolute():
+        return path_obj
+    candidate = cache_root / path_obj
+    if candidate.exists():
+        return candidate
+    return cache_root / "embeddings" / path_obj
+
+
 def _load_active_image_ids(primary_session: Session) -> list[str]:
     stmt = select(Image.image_id).where(Image.status == "active").order_by(Image.image_id)
     return [row.image_id for row in primary_session.execute(stmt)]
@@ -210,7 +220,7 @@ def run_scene_label_pass(
             rel_path = embedding_paths.get(image_id)
             if rel_path is None:
                 continue
-            emb_path = cache_root / "embeddings" / rel_path
+            emb_path = _resolve_embedding_path(cache_root, rel_path)
             try:
                 vec = np.load(emb_path)
             except Exception as exc:  # pragma: no cover - defensive log

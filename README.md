@@ -99,8 +99,10 @@ What a single-process run does:
 - Computes perceptual hashes (`phash`) and builds near-duplicate groups:
   - pHash is recomputed when missing or algorithm changes.
   - Near-duplicate pairs are incremental: new or content-changed images delete their old pairs and recompute against all active images; if the table is empty, a full pass runs once. Results are written to `image_near_duplicate` in the primary DB.
-- Generates JPEG thumbnails under `cache/images/thumbnails/` and writes EXIF and
-  GPS metadata JSON under `cache/images/metadata/`.
+- Generates JPEG thumbnails via the artifact store (for example
+  `cache/artifacts/<image_id>/thumbnail_large/<hash>/thumbnail_1024.jpg`) and writes
+  EXIF + GPS metadata artifacts (`cache/artifacts/<image_id>/metadata/<hash>/metadata.json`)
+  while persisting normalized fields (datetime, camera, GPS) in the primary database.
 - Runs SigLIP embeddings and BLIP captions for canonical images and stores:
   - Embedding vectors under `cache/embeddings/<image_id>.npy`.
   - Embedding metadata under `cache/embeddings/<image_id>.json`.

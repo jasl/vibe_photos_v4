@@ -10,6 +10,8 @@ from typing import cast
 
 from celery import Celery
 from PIL import Image
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.artifact_store import (
@@ -77,6 +79,20 @@ def _artifact_root() -> Path:
     return _default_cache_root() / "artifacts"
 
 
+def _artifact_exists(session: Session, image_id: str, spec: ArtifactSpec) -> bool:
+    stmt = (
+        select(ArtifactRecord.id)
+        .where(
+            ArtifactRecord.image_id == image_id,
+            ArtifactRecord.artifact_type == spec.artifact_type,
+            ArtifactRecord.version_key == spec.version_key,
+            ArtifactRecord.status == "complete",
+        )
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none() is not None
+
+
 @celery_app.task(name="vibe_photos.task_queue.pre_process", acks_late=True)
 def pre_process(image_id: str) -> str:
     """Generate preprocessing artifacts for an image if they are missing."""
@@ -111,11 +127,11 @@ def pre_process(image_id: str) -> str:
 
         content_artifact = cast(ArtifactRecord, artifacts["content_hash_artifact"])
         phash_artifact = cast(ArtifactRecord, artifacts["phash_artifact"])
-        thumb_large = artifacts["thumb_large_spec"]
-        thumb_small = artifacts["thumb_small_spec"]
-        exif_spec = artifacts["exif_spec"]
-        embed_spec = artifacts["embedding_spec"]
-        caption_spec = artifacts["caption_spec"]
+        thumb_large = cast(ArtifactSpec, artifacts["thumb_large_spec"])
+        thumb_small = cast(ArtifactSpec, artifacts["thumb_small_spec"])
+        exif_spec = cast(ArtifactSpec, artifacts["exif_spec"])
+        embed_spec = cast(ArtifactSpec, artifacts["embedding_spec"])
+        caption_spec = cast(ArtifactSpec, artifacts["caption_spec"])
 
         detection_spec = ArtifactSpec(
             artifact_type="detector_regions",
@@ -198,21 +214,25 @@ def process(image_id: str) -> str:
     settings = _load_settings()
     cache_root = _default_cache_root()
     artifact_root = _artifact_root()
+    primary_path = _default_primary_db()
+
+    embed_spec = ArtifactSpec(
+        artifact_type="embedding",
+        model_name=settings.models.embedding.resolved_model_name(),
+        params={"device": settings.models.embedding.device, "batch_size": settings.models.embedding.batch_size},
+    )
 
     # Ensure cache exists; if missing, run preprocess first.
-    cache_ok = cache_root.exists()
-    emb_file = cache_root / "embeddings" / f"{image_id}.npy"
-    if not cache_ok or not emb_file.exists():
+    needs_preprocess = not cache_root.exists()
+    if not needs_preprocess:
+        with open_primary_session(primary_path) as session:
+            needs_preprocess = not _artifact_exists(session, image_id, embed_spec)
+
+    if needs_preprocess:
         pre_process(image_id)
 
-    primary_path = _default_primary_db()
     with open_primary_session(primary_path) as session:
         manager = ArtifactManager(session=session, root=artifact_root)
-        embed_spec = ArtifactSpec(
-            artifact_type="embedding",
-            model_name=settings.models.embedding.resolved_model_name(),
-            params={"device": settings.models.embedding.device, "batch_size": settings.models.embedding.batch_size},
-        )
         embedding = manager.ensure_artifact(
             image_id=image_id,
             spec=embed_spec,

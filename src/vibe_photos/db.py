@@ -53,6 +53,8 @@ class Image(Base):
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     exif_datetime: Mapped[str | None] = mapped_column(String, nullable=True)
     camera_model: Mapped[str | None] = mapped_column(String, nullable=True)
+    gps_latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gps_longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     hash_algo: Mapped[str] = mapped_column(String, nullable=False)
     phash: Mapped[str | None] = mapped_column(String, nullable=True)
     phash_algo: Mapped[str | None] = mapped_column(String, nullable=True)

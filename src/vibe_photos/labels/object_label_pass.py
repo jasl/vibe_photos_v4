@@ -55,6 +55,16 @@ def _load_region_rows(cache_session: Session, embedding_model_name: str) -> list
     ]
 
 
+def _resolve_region_embedding_path(cache_root: Path, rel_path: str) -> Path:
+    path_obj = Path(rel_path)
+    if path_obj.is_absolute():
+        return path_obj
+    candidate = cache_root / path_obj
+    if candidate.exists():
+        return candidate
+    return cache_root / "embeddings" / path_obj
+
+
 def _load_scene_labels(primary_session: Session, settings: Settings) -> dict[str, str]:
     """Return best scene label key per image_id for the active scene space."""
 
@@ -187,7 +197,7 @@ def run_object_label_pass(
         else:
             continue  # skip scenes outside whitelist/fallback
 
-        emb_path = cache_root / "embeddings" / embedding_rel
+        emb_path = _resolve_region_embedding_path(cache_root, embedding_rel)
         try:
             region_vec = np.load(emb_path).astype(np.float32)
         except Exception as exc:  # pragma: no cover - defensive

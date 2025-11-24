@@ -376,7 +376,7 @@ UI expectations:
 - Each card shows thumbnail + `scene_type` + boolean flags.
 - Detail page shows a logical path (for example, a path relative to the configured album root or a user-friendly label), size, mtime, EXIF when available, and classifier metadata; it MUST NOT expose absolute filesystem paths or `file://` URIs.
 - All image content (originals and thumbnails) is served via Flask routes keyed by `image_id` (such as `/image/<image_id>` or `/thumbnail/<image_id>`); templates SHOULD NOT embed raw OS paths.
-- If thumbnail caching is implemented, write generated thumbnails to `cache/images/thumbnails/` and have `GET /thumbnail/<image_id>` read from there.
+- If thumbnail caching is implemented, write generated thumbnails via the artifact store (for example, `cache/artifacts/<image_id>/thumbnail_large/<hash>/...`) and have `GET /thumbnail/<image_id>` read the recorded artifact path.
 
 ## 7. Suggested Package Layout & Entrypoints
 ```
@@ -424,7 +424,7 @@ project_root/
 - Preprocessing respects `config/settings.yaml` defaults for model IDs, devices, batch sizes, and pipeline flags, with CLI arguments overriding config values when supplied.
 - Re-running skips unchanged images; updates new/modified assets; flags missing paths appropriately.
 - Interrupted runs can resume from recorded checkpoints/batch cursors without reprocessing completed work.
-- Flask UI (`FLASK_APP=vibe_photos.webui uv run flask run`) loads list and detail pages with working filters and pagination, serving thumbnails from `cache/images/thumbnails/` when available. By default, detection is enabled; disable it via configuration for CPU-only environments.
+- Flask UI (`FLASK_APP=vibe_photos.webui uv run flask run`) loads list and detail pages with working filters and pagination, serving thumbnails from artifact-managed cache entries when available. By default, detection is enabled; disable it via configuration for CPU-only environments.
 
 ### Performance & Stability
 - Models load once; batches reuse loaded weights.

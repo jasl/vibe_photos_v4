@@ -8,18 +8,19 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from PIL import Image as PILImage
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
+from vibe_photos.artifact_store import ArtifactManager, ArtifactSpec
 from vibe_photos.cache_manifest import CACHE_FORMAT_VERSION, ensure_cache_manifest
 from vibe_photos.config import Settings, _normalize_siglip_label, load_settings
 from vibe_photos.db import (
+    ArtifactRecord,
     Image,
     ImageCaption,
     ImageEmbedding,
@@ -47,10 +48,32 @@ from vibe_photos.labels.duplicate_propagation import propagate_duplicate_labels
 from vibe_photos.labels.object_label_pass import run_object_label_pass
 from vibe_photos.labels.scene_label_pass import run_scene_label_pass
 from vibe_photos.ml.models import get_blip_caption_model, get_siglip_embedding_model
+from vibe_photos.ml.siglip_blip import SiglipBlipDetector
+from vibe_photos.preprocessing import (
+    ensure_preprocessing_artifacts,
+    extract_exif_and_gps,
+)
 from vibe_photos.scanner import FileInfo, scan_roots
-from vibe_photos.thumbnailing import save_thumbnail
 
 LOGGER = get_logger(__name__)
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _resolve_storage_path(path_str: str) -> Path:
+    path = Path(path_str)
+    if not path.is_absolute():
+        return _PROJECT_ROOT / path
+    return path
+
+
+def _relative_to_cache_root(cache_root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(cache_root))
+    except ValueError:
+        try:
+            return str(path.relative_to(_PROJECT_ROOT))
+        except ValueError:
+            return str(path)
 
 
 @dataclass
@@ -74,104 +97,7 @@ class ImageMeta(TypedDict):
 def _extract_exif_and_gps(
     image: PILImage.Image, datetime_format: str = "raw"
 ) -> tuple[str | None, str | None, dict[str, object] | None]:
-    """Extract EXIF datetime, camera model, and GPS coordinates from a PIL image.
-
-    Returns a tuple of ``(exif_datetime, camera_model, gps_payload)`` where the GPS payload,
-    when present, contains ``latitude`` and ``longitude`` in decimal degrees and associated
-    reference fields.
-    """
-
-    try:
-        from PIL import ExifTags as _ExifTags
-    except Exception:
-        return None, None, None
-
-    try:
-        exif = image.getexif()
-    except Exception:
-        return None, None, None
-
-    if not exif:
-        return None, None, None
-
-    exif_dict = dict(exif)
-    exif_by_name: dict[str, object] = {}
-    for tag_id, value in exif_dict.items():
-        name = _ExifTags.TAGS.get(tag_id, str(tag_id))
-        exif_by_name[name] = value
-
-    exif_datetime: str | None = None
-    camera_model: str | None = None
-
-    raw_dt = exif_by_name.get("DateTimeOriginal") or exif_by_name.get("DateTime")
-    if isinstance(raw_dt, str):
-        if datetime_format == "iso":
-            try:
-                # Common EXIF format: "YYYY:MM:DD HH:MM:SS"
-                dt = datetime.strptime(raw_dt, "%Y:%m:%d %H:%M:%S")
-                exif_datetime = dt.isoformat(timespec="seconds")
-            except Exception:
-                exif_datetime = raw_dt
-        else:
-            exif_datetime = raw_dt
-
-    model = exif_by_name.get("Model")
-    make = exif_by_name.get("Make")
-    if isinstance(model, str) and isinstance(make, str):
-        camera_model = f"{make} {model}".strip()
-    elif isinstance(model, str):
-        camera_model = model
-    elif isinstance(make, str):
-        camera_model = make
-
-    gps_info = exif_by_name.get("GPSInfo")
-    if not gps_info or not isinstance(gps_info, dict):
-        return exif_datetime, camera_model, None
-
-    gps_tags: dict[str, object] = {}
-    for key, value in gps_info.items():
-        name = _ExifTags.GPSTAGS.get(key, str(key))
-        gps_tags[name] = value
-
-    lat = gps_tags.get("GPSLatitude")
-    lat_ref = gps_tags.get("GPSLatitudeRef")
-    lon = gps_tags.get("GPSLongitude")
-    lon_ref = gps_tags.get("GPSLongitudeRef")
-
-    def _to_degrees(value: object) -> float | None:
-        if not isinstance(value, Sequence):
-            return None
-        if len(value) < 3:
-            return None
-        d, m, s = value[0], value[1], value[2]
-        try:
-            d_val = float(d)
-            m_val = float(m)
-            s_val = float(s)
-        except Exception:
-            return None
-        return d_val + (m_val / 60.0) + (s_val / 3600.0)
-
-    if not (lat and lon and isinstance(lat_ref, str) and isinstance(lon_ref, str)):
-        return exif_datetime, camera_model, None
-
-    lat_deg = _to_degrees(lat)
-    lon_deg = _to_degrees(lon)
-    if lat_deg is None or lon_deg is None:
-        return exif_datetime, camera_model, None
-
-    if lat_ref.upper() == "S":
-        lat_deg = -lat_deg
-    if lon_ref.upper() == "W":
-        lon_deg = -lon_deg
-
-    gps_payload: dict[str, object] = {
-        "latitude": lat_deg,
-        "longitude": lon_deg,
-        "latitude_ref": lat_ref,
-        "longitude_ref": lon_ref,
-    }
-    return exif_datetime, camera_model, gps_payload
+    return extract_exif_and_gps(image, datetime_format)
 
 
 def _siglip_label_group(
@@ -310,7 +236,6 @@ class PreprocessingPipeline:
                 _remove_path(cache_root / "captions" / f"{image_id}.json")
                 _remove_path(cache_root / "detections" / f"{image_id}.json")
                 _remove_path(cache_root / "regions" / f"{image_id}.json")
-                _remove_path(cache_root / "images" / "thumbnails" / f"{image_id}.jpg")
                 _remove_path(cache_root / "images" / "metadata" / f"{image_id}.json")
                 artifacts_dir = cache_root / "artifacts" / image_id
                 if artifacts_dir.exists():
@@ -364,7 +289,7 @@ class PreprocessingPipeline:
                     lambda: self._run_perceptual_hashing_and_duplicates(primary_session, cache_session),
                     True,
                 ),
-                ("thumbnails", lambda: self._run_thumbnails(primary_session), True),
+                ("preprocess_artifacts", lambda: self._run_preprocess_artifacts(primary_session), True),
                 (
                     "embeddings_and_captions",
                     lambda: self._run_embeddings_and_captions(primary_session, cache_session),
@@ -622,97 +547,128 @@ class PreprocessingPipeline:
             cache_session.commit()
         self._logger.info("scan_and_hash_complete", extra={"file_count": total_files})
 
-    def _run_thumbnails(self, primary_session: Session) -> None:
-        """Generate web-friendly thumbnails for active images under cache/images/thumbnails/."""
+    def _run_preprocess_artifacts(self, primary_session: Session) -> None:
+        """Ensure Celery-style preprocessing artifacts exist for all active images."""
 
         if self._cache_root is None:
             raise RuntimeError("cache_root is not initialized")
 
         cache_root = self._cache_root
-        thumbnails_dir = cache_root / "images" / "thumbnails"
-        thumbnails_dir.mkdir(parents=True, exist_ok=True)
-
-        self._logger.info("thumbnails_start", extra={"thumbnails_dir": str(thumbnails_dir)})
+        artifact_root = cache_root / "artifacts"
+        manager = ArtifactManager(session=primary_session, root=artifact_root)
+        detector = SiglipBlipDetector(settings=self._settings)
 
         rows = primary_session.execute(
-            select(Image.image_id, Image.primary_path).where(Image.status == "active")
+            select(Image.image_id, Image.primary_path).where(Image.status == "active").order_by(Image.image_id)
+        )
+        total_images = primary_session.execute(select(func.count()).where(Image.status == "active")).scalar_one()
+
+        processed = 0
+        errors = 0
+        progress_interval = max(1, int(total_images) // 20) if total_images else 0
+
+        self._logger.info(
+            "preprocess_artifacts_start",
+            extra={"artifact_root": str(artifact_root), "image_count": int(total_images)},
         )
 
-        total_thumbnails = primary_session.execute(
-            select(func.count()).where(Image.status == "active")
-        ).scalar_one()
-
-        created = 0
-        skipped = 0
-        processed = 0
-
-        progress_interval = max(1, int(total_thumbnails) // 20) if total_thumbnails else 0
-
-        try:
-            from PIL import Image as _ImageThumb
-        except Exception as exc:  # pragma: no cover - defensive
-            self._logger.error("thumbnail_pil_import_error", extra={"error": str(exc)})
-            return
-
-        max_side = max(1, int(self._settings.pipeline.thumbnail_size_large))
-        quality = int(self._settings.pipeline.thumbnail_quality)
+        metadata_updates = 0
 
         for row in rows:
             image_id = row.image_id
             path_str = row.primary_path
-            thumb_path = thumbnails_dir / f"{image_id}.jpg"
-
-            if thumb_path.exists():
-                skipped += 1
-                continue
+            image_path = Path(path_str)
 
             try:
-                image = _ImageThumb.open(path_str).convert("RGB")
-            except Exception as exc:
+                with PILImage.open(image_path) as pil_image:
+                    image_rgb = pil_image.convert("RGB")
+                    artifacts = ensure_preprocessing_artifacts(
+                        image_id=image_id,
+                        image=image_rgb,
+                        image_path=image_path,
+                        settings=self._settings,
+                        manager=manager,
+                        detector=detector,
+                    )
+                metadata_payload = artifacts.get("metadata_payload")
+                if isinstance(metadata_payload, dict) and self._update_image_metadata_from_payload(
+                    primary_session, image_id, metadata_payload
+                ):
+                    metadata_updates += 1
+                processed += 1
+                if progress_interval and (
+                    processed % progress_interval == 0 or processed == int(total_images)
+                ):
+                    percent = round(processed * 100.0 / max(int(total_images), 1), 1)
+                    self._logger.info(
+                        "preprocess_artifacts_progress %s/%s (%.1f%%)",
+                        processed,
+                        int(total_images),
+                        percent,
+                        extra={"processed": processed, "total": int(total_images), "percent": percent},
+                    )
+            except FileNotFoundError as exc:
+                errors += 1
                 self._logger.error(
-                    "thumbnail_image_open_error",
-                    extra={"image_id": image_id, "path": path_str, "error": str(exc)},
+                    "preprocess_artifact_path_missing",
+                    extra={"image_id": image_id, "path": str(image_path), "error": str(exc)},
                 )
-                continue
-
-            try:
-                save_thumbnail(image, thumb_path, max_side, quality)
-                created += 1
             except Exception as exc:  # pragma: no cover - defensive
+                errors += 1
                 self._logger.error(
-                    "thumbnail_generate_error",
-                    extra={"image_id": image_id, "path": path_str, "error": str(exc)},
+                    "preprocess_artifact_error",
+                    extra={"image_id": image_id, "path": str(image_path), "error": str(exc)},
                 )
-                try:
-                    if thumb_path.exists():
-                        thumb_path.unlink()
-                except OSError:
-                    pass
-                continue
 
-            processed += 1
-            if progress_interval and (
-                processed % progress_interval == 0 or processed == int(total_thumbnails)
-            ):
-                percent = round(processed * 100.0 / max(int(total_thumbnails), 1), 1)
-                self._logger.info(
-                    "thumbnails_progress %s/%s (%.1f%%)",
-                    processed,
-                    int(total_thumbnails),
-                    percent,
-                    extra={
-                        "processed": processed,
-                        "total": int(total_thumbnails),
-                        "created": created,
-                        "skipped_existing": skipped,
-                        "percent": percent,
-                    },
-                )
+        if metadata_updates:
+            primary_session.commit()
 
         self._logger.info(
-            "thumbnails_complete",
-            extra={"created": created, "skipped_existing": skipped, "thumbnails_dir": str(thumbnails_dir)},
+            "preprocess_artifacts_complete",
+            extra={
+                "processed": processed,
+                "errors": errors,
+                "artifact_root": str(artifact_root),
+                "metadata_updated": metadata_updates,
+            },
         )
+
+    def _update_image_metadata_from_payload(
+        self, session: Session, image_id: str, payload: dict[str, object]
+    ) -> bool:
+        """Persist EXIF/GPS metadata derived from preprocessing artifacts."""
+
+        row = session.get(Image, image_id)
+        if row is None:
+            return False
+
+        changed = False
+        exif_datetime = payload.get("exif_datetime")
+        camera_model = payload.get("camera_model")
+        gps_payload = payload.get("gps") or {}
+
+        if isinstance(exif_datetime, str) and exif_datetime != row.exif_datetime:
+            row.exif_datetime = exif_datetime
+            changed = True
+
+        if isinstance(camera_model, str) and camera_model != row.camera_model:
+            row.camera_model = camera_model
+            changed = True
+
+        lat = gps_payload.get("latitude") if isinstance(gps_payload, dict) else None
+        lon = gps_payload.get("longitude") if isinstance(gps_payload, dict) else None
+
+        if isinstance(lat, (int, float)) and lat != row.gps_latitude:
+            row.gps_latitude = float(lat)
+            changed = True
+        if isinstance(lon, (int, float)) and lon != row.gps_longitude:
+            row.gps_longitude = float(lon)
+            changed = True
+
+        if changed:
+            row.updated_at = time.time()
+            session.add(row)
+        return changed
 
     def _run_region_detection_and_reranking(
         self,
@@ -1168,38 +1124,39 @@ class PreprocessingPipeline:
             )
 
     def _run_embeddings_and_captions(self, primary_session: Session, cache_session: Session) -> None:
-        """Compute SigLIP embeddings and BLIP captions for canonical images."""
+        """Mirror artifact-backed embeddings/captions into the relational tables."""
 
         if self._cache_root is None:
             raise RuntimeError("cache_root is not initialized")
 
-        self._logger.info("embeddings_and_captions_start", extra={})
-
         cache_root = self._cache_root
+        self._logger.info("embeddings_and_captions_start", extra={})
 
         embedding_cfg = self._settings.models.embedding
         caption_cfg = self._settings.models.caption
-
-        embedding_model_name = embedding_cfg.resolved_model_name()
-        caption_model_name = caption_cfg.resolved_model_name()
-
-        siglip_processor, siglip_model, siglip_device = get_siglip_embedding_model(settings=self._settings)
-        blip_processor, blip_model, blip_device = get_blip_caption_model(settings=self._settings)
+        embedding_spec = ArtifactSpec(
+            artifact_type="embedding",
+            model_name=embedding_cfg.resolved_model_name(),
+            params={"device": embedding_cfg.device, "batch_size": embedding_cfg.batch_size},
+        )
+        caption_spec = ArtifactSpec(
+            artifact_type="caption",
+            model_name=caption_cfg.resolved_model_name(),
+            params={"device": caption_cfg.device},
+        )
 
         active_rows = primary_session.execute(
             select(Image.image_id, Image.primary_path).where(Image.status == "active").order_by(Image.image_id)
         )
-        paths_by_id: dict[str, str] = {row.image_id: row.primary_path for row in active_rows}
-
-        if not paths_by_id:
-            self._logger.info("embeddings_and_captions_noop", extra={})
-            return
-
-        process_ids = sorted(paths_by_id.keys())
+        process_ids = [row.image_id for row in active_rows]
 
         non_canonical_ids = self._load_non_canonical_image_ids(primary_session)
         if non_canonical_ids:
             process_ids = [image_id for image_id in process_ids if image_id not in non_canonical_ids]
+
+        if not process_ids:
+            self._logger.info("embeddings_and_captions_noop", extra={})
+            return
 
         if self._journal is not None and self._journal.stage == "embeddings_and_captions" and self._journal.cursor_image_id:
             cursor_id = self._journal.cursor_image_id
@@ -1210,256 +1167,183 @@ class PreprocessingPipeline:
                 extra={"cursor_image_id": cursor_id, "skipped": before - len(process_ids)},
             )
 
-        existing_embedding_ids = {
-            row.image_id
-            for row in cache_session.execute(
-                select(ImageEmbedding.image_id).where(ImageEmbedding.model_name == embedding_model_name)
-            )
-        }
+        embedding_map = self._load_artifact_map(primary_session, process_ids, embedding_spec)
+        caption_map = self._load_artifact_map(primary_session, process_ids, caption_spec)
 
-        existing_caption_ids = {
-            row.image_id
-            for row in cache_session.execute(
-                select(ImageCaption.image_id).where(ImageCaption.model_name == caption_model_name)
-            )
-        }
-
-        embedding_targets = [image_id for image_id in process_ids if image_id not in existing_embedding_ids]
-        caption_targets = [image_id for image_id in process_ids if image_id not in existing_caption_ids]
-
-        same_session = cache_session is primary_session
-
-        embedding_total = len(embedding_targets)
-        caption_total = len(caption_targets)
-
-        embeddings_dir = cache_root / "embeddings"
-        captions_dir = cache_root / "captions"
-        embeddings_dir.mkdir(parents=True, exist_ok=True)
-        captions_dir.mkdir(parents=True, exist_ok=True)
-
-        import numpy as np
-        import torch
-
-        now = time.time()
-
-        embedding_batch_size = max(1, embedding_cfg.batch_size)
         total_embeddings = 0
-        embedding_progress_interval = max(1, embedding_total // 20) if embedding_total else 0
-
-        for batch_start in range(0, embedding_total, embedding_batch_size):
-            batch_ids = embedding_targets[batch_start : batch_start + embedding_batch_size]
-            embedding_images: list[PILImage.Image] = []
-            valid_ids: list[str] = []
-
-            from PIL import Image as _Image
-
-            for image_id in batch_ids:
-                path_str = paths_by_id[image_id]
-                try:
-                    img = _Image.open(path_str).convert("RGB")
-                except Exception as exc:
-                    self._logger.error(
-                        "embedding_image_open_error",
-                        extra={"image_id": image_id, "path": path_str, "error": str(exc)},
-                    )
-                    continue
-
-                embedding_images.append(img)
-                valid_ids.append(image_id)
-
-            if embedding_images:
-                inputs = siglip_processor(images=embedding_images, return_tensors="pt")
-                inputs = inputs.to(siglip_device)
-
-                with torch.no_grad():
-                    features = siglip_model.get_image_features(**inputs)
-
-                for idx, image_id in enumerate(valid_ids):
-                    emb = features[idx]
-                    emb = emb / emb.norm(dim=-1, keepdim=True)
-                    vec = emb.detach().cpu().numpy().astype(np.float32)
-
-                    rel_path = f"{image_id}.npy"
-                    emb_path = embeddings_dir / rel_path
-                    np.save(emb_path, vec)
-
-                    meta_payload = {
-                        "image_id": image_id,
-                        "model_name": embedding_model_name,
-                        "model_backend": embedding_cfg.backend,
-                        "embedding_dim": int(vec.shape[-1]),
-                        "updated_at": now,
-                        "cache_format_version": CACHE_FORMAT_VERSION,
-                    }
-                    meta_path = embeddings_dir / f"{image_id}.json"
-                    meta_path.write_text(json.dumps(meta_payload), encoding="utf-8")
-
-                    values = {
-                        "image_id": image_id,
-                        "model_name": embedding_model_name,
-                        "embedding_path": rel_path,
-                        "embedding_dim": int(vec.shape[-1]),
-                        "model_backend": embedding_cfg.backend,
-                        "updated_at": now,
-                    }
-
-                    def _upsert_embedding(target_session: Session, payload: dict[str, object] = values) -> None:
-                        stmt = dialect_insert(target_session, ImageEmbedding).values(**payload)
-                        stmt = stmt.on_conflict_do_update(
-                            index_elements=[ImageEmbedding.image_id, ImageEmbedding.model_name],
-                            set_={
-                                "embedding_path": stmt.excluded.embedding_path,
-                                "embedding_dim": stmt.excluded.embedding_dim,
-                                "model_backend": stmt.excluded.model_backend,
-                                "updated_at": stmt.excluded.updated_at,
-                            },
-                        )
-                        target_session.execute(stmt)
-
-                    _upsert_embedding(cache_session)
-                    if not same_session:
-                        _upsert_embedding(primary_session)
-                    total_embeddings += 1
-
-            cache_session.commit()
-            if not same_session:
-                primary_session.commit()
-            if batch_ids:
-                save_run_journal(
-                    cache_root,
-                    RunJournalRecord(stage="embeddings_and_captions", cursor_image_id=batch_ids[-1], updated_at=time.time()),
-                )
-
-            if embedding_progress_interval:
-                processed_embeddings = min(batch_start + len(batch_ids), embedding_total)
-                if processed_embeddings % embedding_progress_interval == 0 or processed_embeddings == embedding_total:
-                    percent = round(
-                        processed_embeddings * 100.0 / max(embedding_total, 1),
-                        1,
-                    )
-                    self._logger.info(
-                        "embeddings_progress %s/%s (%.1f%%)",
-                        processed_embeddings,
-                        embedding_total,
-                        percent,
-                        extra={
-                            "processed": processed_embeddings,
-                            "total": embedding_total,
-                            "created": total_embeddings,
-                            "percent": percent,
-                        },
-                    )
-
-        caption_batch_size = max(1, caption_cfg.batch_size)
         total_captions = 0
-        caption_progress_interval = max(1, caption_total // 20) if caption_total else 0
 
-        from PIL import Image as _ImageCaption
-
-        for batch_start in range(0, caption_total, caption_batch_size):
-            batch_ids = caption_targets[batch_start : batch_start + caption_batch_size]
-            caption_images: list[_ImageCaption.Image] = []
-            caption_valid_ids: list[str] = []
-
-            for image_id in batch_ids:
-                path_str = paths_by_id[image_id]
-                try:
-                    img = _ImageCaption.open(path_str).convert("RGB")
-                except Exception as exc:
-                    self._logger.error(
-                        "caption_image_open_error",
-                        extra={"image_id": image_id, "path": path_str, "error": str(exc)},
-                    )
-                    continue
-
-                caption_images.append(img)
-                caption_valid_ids.append(image_id)
-
-            if caption_images:
-                inputs = blip_processor(images=caption_images, return_tensors="pt")
-                inputs = inputs.to(blip_device)
-
-                with torch.no_grad():
-                    generated_ids = blip_model.generate(**inputs)
-
-                for idx, image_id in enumerate(caption_valid_ids):
-                    token_ids = generated_ids[idx]
-                    caption_text = blip_processor.decode(token_ids, skip_special_tokens=True)
-
-                    rel_path = f"{image_id}.json"
-                    caption_path = captions_dir / rel_path
-                    payload = {
-                        "image_id": image_id,
-                        "caption": caption_text,
-                        "model_name": caption_model_name,
-                        "model_backend": caption_cfg.backend,
-                        "updated_at": now,
-                        "cache_format_version": CACHE_FORMAT_VERSION,
-                    }
-                    caption_path.write_text(json.dumps(payload), encoding="utf-8")
-
-                    values = {
-                        "image_id": image_id,
-                        "model_name": caption_model_name,
-                        "caption": caption_text,
-                        "model_backend": caption_cfg.backend,
-                        "updated_at": now,
-                    }
-
-                    def _upsert_caption(target_session: Session, payload: dict[str, object] = values) -> None:
-                        stmt = dialect_insert(target_session, ImageCaption).values(**payload)
-                        stmt = stmt.on_conflict_do_update(
-                            index_elements=[ImageCaption.image_id, ImageCaption.model_name],
-                            set_={
-                                "caption": stmt.excluded.caption,
-                                "model_backend": stmt.excluded.model_backend,
-                                "updated_at": stmt.excluded.updated_at,
-                            },
-                        )
-                        target_session.execute(stmt)
-
-                    _upsert_caption(cache_session)
-                    if not same_session:
-                        _upsert_caption(primary_session)
-                    total_captions += 1
-
-            cache_session.commit()
-            if not same_session:
-                primary_session.commit()
-
-            if batch_ids:
-                save_run_journal(
+        for image_id in process_ids:
+            artifact_record = embedding_map.get(image_id)
+            if artifact_record:
+                if self._sync_embedding_from_artifact(
+                    primary_session,
                     cache_root,
-                    RunJournalRecord(stage="embeddings_and_captions", cursor_image_id=batch_ids[-1], updated_at=time.time()),
+                    image_id,
+                    artifact_record,
+                    embedding_cfg,
+                ):
+                    total_embeddings += 1
+            else:
+                self._logger.warning(
+                    "embedding_artifact_missing",
+                    extra={"image_id": image_id, "artifact_type": embedding_spec.artifact_type},
                 )
 
-            if caption_progress_interval:
-                processed_captions = min(batch_start + len(batch_ids), caption_total)
-                if processed_captions % caption_progress_interval == 0 or processed_captions == caption_total:
-                    percent = round(
-                        processed_captions * 100.0 / max(caption_total, 1),
-                        1,
-                    )
-                    self._logger.info(
-                        "captions_progress %s/%s (%.1f%%)",
-                        processed_captions,
-                        caption_total,
-                        percent,
-                        extra={
-                            "processed": processed_captions,
-                            "total": caption_total,
-                            "created": total_captions,
-                            "percent": percent,
-                        },
-                    )
+            caption_record = caption_map.get(image_id)
+            if caption_record:
+                if self._sync_caption_from_artifact(
+                    primary_session,
+                    image_id,
+                    caption_record,
+                    caption_cfg,
+                ):
+                    total_captions += 1
+            else:
+                self._logger.debug(
+                    "caption_artifact_missing",
+                    extra={"image_id": image_id, "artifact_type": caption_spec.artifact_type},
+                )
 
-        cache_session.commit()
-        if not same_session:
-            primary_session.commit()
+            save_run_journal(
+                cache_root,
+                RunJournalRecord(stage="embeddings_and_captions", cursor_image_id=image_id, updated_at=time.time()),
+            )
+
+        save_run_journal(
+            cache_root,
+            RunJournalRecord(stage="embeddings_and_captions", cursor_image_id=None, updated_at=time.time()),
+        )
+        primary_session.commit()
         self._logger.info(
             "embeddings_and_captions_complete",
-            extra={"embeddings_created": total_embeddings, "captions_created": total_captions},
+            extra={"embeddings_synced": total_embeddings, "captions_synced": total_captions},
         )
+
+    def _sync_embedding_from_artifact(
+        self,
+        session: Session,
+        cache_root: Path,
+        image_id: str,
+        record: ArtifactRecord,
+        embedding_cfg: Any,
+    ) -> bool:
+        """Upsert an ImageEmbedding row from an existing artifact."""
+
+        resolved_path = _resolve_storage_path(record.storage_path)
+        rel_path = _relative_to_cache_root(cache_root, resolved_path)
+
+        try:
+            embedding_dim = self._load_embedding_dim(resolved_path)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._logger.error(
+                "embedding_artifact_load_error",
+                extra={"image_id": image_id, "path": str(resolved_path), "error": str(exc)},
+            )
+            return False
+
+        updated_at = float(record.updated_at or time.time())
+        values = {
+            "image_id": image_id,
+            "model_name": embedding_cfg.resolved_model_name(),
+            "embedding_path": rel_path,
+            "embedding_dim": int(embedding_dim),
+            "model_backend": embedding_cfg.backend,
+            "updated_at": updated_at,
+        }
+
+        stmt = dialect_insert(session, ImageEmbedding).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ImageEmbedding.image_id, ImageEmbedding.model_name],
+            set_={
+                "embedding_path": stmt.excluded.embedding_path,
+                "embedding_dim": stmt.excluded.embedding_dim,
+                "model_backend": stmt.excluded.model_backend,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        )
+        session.execute(stmt)
+        return True
+
+    def _load_embedding_dim(self, embedding_path: Path) -> int:
+        """Return the embedding dimensionality derived from artifact metadata or the .npy itself."""
+
+        meta_path = embedding_path.parent / "embedding_meta.json"
+        if meta_path.exists():
+            try:
+                payload = json.loads(meta_path.read_text(encoding="utf-8"))
+                dim_value = payload.get("embedding_dim")
+                if isinstance(dim_value, int):
+                    return dim_value
+                if isinstance(dim_value, (float, str)):
+                    return int(dim_value)
+            except Exception:
+                pass
+
+        import numpy as np
+
+        vec = np.load(embedding_path)
+        return int(vec.shape[-1])
+
+    def _sync_caption_from_artifact(
+        self,
+        session: Session,
+        image_id: str,
+        record: ArtifactRecord,
+        caption_cfg: Any,
+    ) -> bool:
+        """Upsert an ImageCaption row from an existing artifact."""
+
+        resolved_path = _resolve_storage_path(record.storage_path)
+        try:
+            caption_text = resolved_path.read_text(encoding="utf-8").strip()
+        except Exception as exc:
+            self._logger.error(
+                "caption_artifact_load_error",
+                extra={"image_id": image_id, "path": str(resolved_path), "error": str(exc)},
+            )
+            return False
+
+        updated_at = float(record.updated_at or time.time())
+        values = {
+            "image_id": image_id,
+            "model_name": caption_cfg.resolved_model_name(),
+            "caption": caption_text,
+            "model_backend": caption_cfg.backend,
+            "updated_at": updated_at,
+        }
+
+        stmt = dialect_insert(session, ImageCaption).values(**values)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[ImageCaption.image_id, ImageCaption.model_name],
+            set_={
+                "caption": stmt.excluded.caption,
+                "model_backend": stmt.excluded.model_backend,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        )
+        session.execute(stmt)
+        return True
+
+    def _load_artifact_map(
+        self,
+        session: Session,
+        image_ids: Sequence[str],
+        spec: ArtifactSpec,
+    ) -> dict[str, ArtifactRecord]:
+        """Return artifact rows keyed by image_id for the provided spec."""
+
+        if not image_ids:
+            return {}
+
+        stmt = select(ArtifactRecord).where(
+            ArtifactRecord.image_id.in_(image_ids),
+            ArtifactRecord.artifact_type == spec.artifact_type,
+            ArtifactRecord.version_key == spec.version_key,
+            ArtifactRecord.status == "complete",
+        )
+        rows = session.execute(stmt).scalars().all()
+        return {row.image_id: row for row in rows}
 
     def process_embedding_task(self, primary_session: Session, image_id: str) -> None:
         """Compute SigLIP embedding for a single image and persist it."""
@@ -1650,10 +1534,6 @@ class PreprocessingPipeline:
         if self._cache_root is None:
             raise RuntimeError("cache_root is not initialized")
 
-        cache_root = self._cache_root
-        metadata_dir = cache_root / "images" / "metadata"
-        metadata_dir.mkdir(parents=True, exist_ok=True)
-
         now = time.time()
 
         phash_query = (
@@ -1713,8 +1593,6 @@ class PreprocessingPipeline:
                 self._logger.error("exif_parse_error", extra={"image_id": image_id, "path": path_str, "error": str(exc)})
                 exif_datetime = None
                 camera_model = None
-                gps_payload = None
-
             try:
                 phash_hex = compute_perceptual_hash(image)
             except Exception as exc:  # pragma: no cover - defensive
@@ -1743,23 +1621,6 @@ class PreprocessingPipeline:
                 )
             )
             phash_updated += 1
-
-            metadata_payload = {
-                "image_id": image_id,
-                "primary_path": path_str,
-                "exif_datetime": exif_datetime,
-                "camera_model": camera_model,
-                "gps": gps_payload,
-                "updated_at": now,
-            }
-            try:
-                metadata_path = metadata_dir / f"{image_id}.json"
-                metadata_path.write_text(json.dumps(metadata_payload), encoding="utf-8")
-            except OSError as exc:
-                self._logger.error(
-                    "exif_metadata_write_error",
-                    extra={"image_id": image_id, "path": str(metadata_dir), "error": str(exc)},
-                )
 
         primary_session.commit()
         self._logger.info("phash_update_complete", extra={"updated_count": phash_updated})

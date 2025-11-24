@@ -192,11 +192,21 @@ def _load_image_embedding_paths(
     return mapping
 
 
+def _resolve_image_embedding_path(cache_root: Path, rel_path: str) -> Path:
+    path_obj = Path(rel_path)
+    if path_obj.is_absolute():
+        return path_obj
+    candidate = cache_root / path_obj
+    if candidate.exists():
+        return candidate
+    return cache_root / "embeddings" / path_obj
+
+
 def _load_vectors(cache_root: Path, path_map: dict[str, str]) -> tuple[list[np.ndarray], list[str]]:
     vectors: list[np.ndarray] = []
     valid_ids: list[str] = []
     for key, rel_path in path_map.items():
-        emb_path = cache_root / "embeddings" / rel_path
+        emb_path = _resolve_image_embedding_path(cache_root, rel_path)
         try:
             vec = np.load(emb_path).astype(np.float32)
         except Exception as exc:  # pragma: no cover - defensive
@@ -219,6 +229,7 @@ def _build_knn_graph(
     if not vectors:
         return {}
 
+    node_ids = list(node_ids)
     matrix = np.stack(vectors)
     sim_matrix = matrix @ matrix.T
     np.fill_diagonal(sim_matrix, 0.0)
@@ -245,6 +256,7 @@ def _extract_components(
     graph: dict[str, set[str]],
     min_size: int,
 ) -> list[list[str]]:
+    node_ids = list(node_ids)
     visited: set[str] = set()
     components: list[list[str]] = []
 

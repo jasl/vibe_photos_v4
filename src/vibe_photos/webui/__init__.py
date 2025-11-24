@@ -479,7 +479,15 @@ def image_detail(image_id: str) -> Any:
         caption_text = caption_row.caption
         caption_model = caption_row.model_name
 
-    # Near-duplicate images (both as anchor and as duplicate).
+    gps_latitude: float | None = image_row.gps_latitude
+    gps_longitude: float | None = image_row.gps_longitude
+
+    metadata_spec = ArtifactSpec(
+        artifact_type="metadata",
+        model_name="exif_summary",
+        params={"datetime_format": settings.pipeline.exif_datetime_format},
+    )
+    metadata_path_str: str | None = None
     near_duplicates: list[dict[str, Any]] = []
     with open_primary_session(primary_target) as session:
         anchor_rows = (
@@ -529,21 +537,33 @@ def image_detail(image_id: str) -> Any:
             meta["primary_path"] = other_image.primary_path
             near_duplicates.append(meta)
 
+        if metadata_path_str is None and (gps_latitude is None or gps_longitude is None):
+            metadata_path_str = session.execute(
+                select(ArtifactRecord.storage_path).where(
+                    ArtifactRecord.image_id == image_id,
+                    ArtifactRecord.artifact_type == metadata_spec.artifact_type,
+                    ArtifactRecord.version_key == metadata_spec.version_key,
+                    ArtifactRecord.status == "complete",
+                )
+            ).scalar_one_or_none()
+
     near_duplicates.sort(key=lambda item: (item.get("phash_distance", 0), item["image_id"]))
 
-    gps_latitude: float | None = None
-    gps_longitude: float | None = None
-    metadata_path = _get_cache_root() / "images" / "metadata" / f"{image_id}.json"
-    if metadata_path.exists():
+    if metadata_path_str and (gps_latitude is None or gps_longitude is None):
+        metadata_path = Path(metadata_path_str)
+        if not metadata_path.is_absolute():
+            metadata_path = _PROJECT_ROOT / metadata_path
         try:
             payload = json.loads(metadata_path.read_text(encoding="utf-8"))
             gps_payload = payload.get("gps") or {}
-            lat_val = gps_payload.get("latitude")
-            lon_val = gps_payload.get("longitude")
-            if isinstance(lat_val, (int, float)):
-                gps_latitude = float(lat_val)
-            if isinstance(lon_val, (int, float)):
-                gps_longitude = float(lon_val)
+            if gps_latitude is None:
+                lat_val = gps_payload.get("latitude")
+                if isinstance(lat_val, (int, float)):
+                    gps_latitude = float(lat_val)
+            if gps_longitude is None:
+                lon_val = gps_payload.get("longitude")
+                if isinstance(lon_val, (int, float)):
+                    gps_longitude = float(lon_val)
         except Exception as exc:  # pragma: no cover - defensive
             LOGGER.error(
                 "metadata_load_error",
@@ -638,17 +658,15 @@ def image_thumbnail(image_id: str) -> Any:
         )
 
     primary_target = _get_primary_db_target()
-    cache_root = _get_cache_root()
 
     with open_primary_session(primary_target) as session:
-        row = session.execute(
-            select(Image.primary_path, Image.phash).where(and_(Image.image_id == image_id, Image.status == "active"))
-        ).first()
-        if row is None:
+        path_row = session.execute(
+            select(Image.primary_path).where(and_(Image.image_id == image_id, Image.status == "active"))
+        ).scalar_one_or_none()
+        if path_row is None:
             abort(404)
 
-        path_str = row.primary_path
-        phash_hex = row.phash
+        path_str = path_row
 
     thumb_path: Path | None = None
     with open_primary_session(primary_target) as cache_session:
@@ -666,10 +684,6 @@ def image_thumbnail(image_id: str) -> Any:
                 candidate = _PROJECT_ROOT / candidate
             thumb_path = candidate if candidate.exists() else None
 
-    if thumb_path is None:
-        legacy_cache_path = cache_root / "images" / "thumbnails" / f"{image_id}.jpg"
-        thumb_path = legacy_cache_path if legacy_cache_path.exists() else None
-
     if thumb_path is not None:
         try:
             return send_file(thumb_path)
@@ -683,23 +697,6 @@ def image_thumbnail(image_id: str) -> Any:
                 "thumbnail_send_error",
                 extra={"image_id": image_id, "path": str(thumb_path), "error": str(exc)},
             )
-
-    # Backward-compatibility: fall back to legacy pHash-keyed thumbnails if present.
-    if phash_hex:
-        legacy_thumb_path = cache_root / "images" / "thumbnails" / f"{phash_hex}.jpg"
-        if legacy_thumb_path.exists():
-            try:
-                return send_file(legacy_thumb_path)
-            except FileNotFoundError as exc:
-                LOGGER.warning(
-                    "thumbnail_legacy_file_missing",
-                    extra={"image_id": image_id, "path": str(legacy_thumb_path), "error": str(exc)},
-                )
-            except Exception as exc:
-                LOGGER.error(
-                    "thumbnail_send_error",
-                    extra={"image_id": image_id, "path": str(legacy_thumb_path), "error": str(exc)},
-                )
 
     try:
         return send_file(path_str)
