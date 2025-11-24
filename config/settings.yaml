@@ -188,8 +188,8 @@ object:
     - "object.food.water"
     - "object.food.sauce"
   remap:
-    "object.food.glass of drink": "object.food.drink"
-    "object.electronics.phone": "object.electronics.smartphone"
+    "object.food.glass of drink": "object.drink"
+    "object.electronics.phone": "object.electronics.phone"
 
 cluster:
   image:

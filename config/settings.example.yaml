@@ -191,8 +191,8 @@ object:
     - "object.food.water"
     - "object.food.sauce"
   remap:                   # {"object.old": "object.new"} to consolidate noisy labels
-    "object.food.glass of drink": "object.food.drink"
-    "object.electronics.phone": "object.electronics.smartphone"
+    "object.food.glass of drink": "object.drink"
+    "object.electronics.phone": "object.electronics.phone"
 
 cluster:
   image:
