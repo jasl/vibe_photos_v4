@@ -44,6 +44,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - EXIF and GPS metadata are parsed during preprocessing and surfaced in the debug UI, but the on-disk metadata format is minimal and may evolve as later milestones add richer EXIF/sidecar handling.
 - The preprocessing pipeline is resumable via a JSON run journal in `cache/run_journal.json`; it now skips completed stages and resumes batch cursors. Celery (`vibe_photos.task_queue`) is available for durable `pre_process`/`process`/`post_process` workers, while the single-process loop remains the default local entrypoint.
 - Cache validity is gated by the manifest version rather than by a standalone cache database; cache roots are filesystem directories only.
+- Cache root resolution now lives in `vibe_photos.cache_helpers.resolve_cache_root` (moved out of `vibe_photos.db_helpers` to drop the DB coupling).
 - Caption-aware primary-region fallback in the detection stage assumes that BLIP captions have already been computed and written to `image_caption` for any image that runs detection. Future incremental “detection-only” entry points must either preserve this ordering (captions first) or gracefully disable/adjust caption-based fallbacks to avoid surprising gaps in primary regions.
 
 #### Future technical improvements (beyond M1)

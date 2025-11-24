@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactSpec
+from vibe_photos.cache_helpers import resolve_cache_root
 from vibe_photos.config import load_settings
 from vibe_photos.db import (
     ArtifactRecord,
@@ -25,7 +26,6 @@ from vibe_photos.db import (
     Region,
     open_primary_session,
 )
-from vibe_photos.db_helpers import resolve_cache_root
 from vibe_photos.labels.scene_schema import (
     ATTRIBUTE_LABEL_KEYS,
     normalize_scene_filter,

@@ -13,9 +13,9 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.append(str(SRC_ROOT))
 
 from utils.logging import get_logger  # noqa: E402
+from vibe_photos.cache_helpers import resolve_cache_root  # noqa: E402
 from vibe_photos.config import load_settings  # noqa: E402
 from vibe_photos.db import open_primary_session  # noqa: E402
-from vibe_photos.db_helpers import resolve_cache_root  # noqa: E402
 
 LOGGER = get_logger(__name__)
 

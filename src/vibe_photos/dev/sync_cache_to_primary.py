@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
+from vibe_photos.cache_helpers import resolve_cache_root
 from vibe_photos.config import load_settings
 from vibe_photos.db import (
     ImageCaption,
@@ -17,10 +18,7 @@ from vibe_photos.db import (
     ImageNearDuplicate,
     ImageScene,
 )
-from vibe_photos.db_helpers import (
-    dialect_insert,
-    resolve_cache_root,
-)
+from vibe_photos.db_helpers import dialect_insert
 
 LOGGER = get_logger(__name__)
 

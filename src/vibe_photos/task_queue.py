@@ -20,6 +20,7 @@ from vibe_photos.artifact_store import (
     ArtifactSpec,
     hash_file,
 )
+from vibe_photos.cache_helpers import resolve_cache_root
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import (
     ArtifactRecord,
@@ -28,7 +29,6 @@ from vibe_photos.db import (
     open_primary_session,
 )
 from vibe_photos.db import Image as ImageRow
-from vibe_photos.db_helpers import resolve_cache_root
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.pipeline import PreprocessingPipeline
 from vibe_photos.preprocessing import ensure_preprocessing_artifacts

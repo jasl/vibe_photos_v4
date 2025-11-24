@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
+from vibe_photos.cache_helpers import resolve_cache_root
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import (
     Label,
@@ -21,7 +22,6 @@ from vibe_photos.db import (
     RegionEmbedding,
     open_primary_session,
 )
-from vibe_photos.db_helpers import resolve_cache_root
 from vibe_photos.labels.repository import LabelRepository
 
 LOGGER = get_logger(__name__, extra={"command": "object_label_pass"})

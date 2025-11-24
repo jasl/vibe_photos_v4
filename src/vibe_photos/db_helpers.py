@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -27,23 +26,6 @@ def normalize_database_url(target: str) -> str:
     raise ValueError(f"Unsupported database dialect {url.drivername!r}; expected postgresql with an explicit database name")
 
 
-def resolve_cache_root(target: str | Path) -> Path:
-    """Resolve a filesystem cache root, enforcing directory-only inputs."""
-
-    raw = str(target).strip()
-    if not raw:
-        raise ValueError("cache target cannot be empty")
-
-    if "://" in raw:
-        raise ValueError("cache roots must be filesystem paths; URLs are not supported")
-
-    path = Path(raw).resolve()
-    if path.suffix == ".db":
-        raise ValueError("cache root must be a directory, not a database file path")
-
-    return path
-
-
 def dialect_insert(session: Session, table: Any) -> Any:
     """Return a dialect-aware INSERT statement supporting ON CONFLICT."""
 
@@ -60,6 +42,5 @@ def dialect_insert(session: Session, table: Any) -> Any:
 
 __all__ = [
     "normalize_database_url",
-    "resolve_cache_root",
     "dialect_insert",
 ]
