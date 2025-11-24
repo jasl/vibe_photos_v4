@@ -1650,8 +1650,9 @@ class PreprocessingPipeline:
 
         now = time.time()
 
-        rows = primary_session.execute(
-            select(Image.image_id, Image.primary_path).where(
+        phash_query = (
+            select(Image.image_id, Image.primary_path)
+            .where(
                 and_(
                     Image.status == "active",
                     or_(
@@ -1665,7 +1666,16 @@ class PreprocessingPipeline:
                     ),
                 )
             )
+            .order_by(Image.image_id)
         )
+
+        # Ensure concurrent Celery workers lock rows in a consistent order on Postgres to
+        # avoid deadlocks when multiple pipelines recompute pHash simultaneously.
+        bind = primary_session.get_bind()
+        if bind is not None and getattr(bind.dialect, "name", "") == "postgresql":
+            phash_query = phash_query.with_for_update(skip_locked=True)
+
+        rows = primary_session.execute(phash_query)
 
         phash_updated = 0
         for row in rows:

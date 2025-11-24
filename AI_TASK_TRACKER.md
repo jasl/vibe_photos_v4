@@ -36,6 +36,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - Region detection now includes: (1) class-agnostic NMS to merge highly overlapping boxes; (2) a configurable priority heuristic combining detector score, normalized box area, and distance to image center; (3) caption-based fallback regions for cases where detection misses an obvious primary object (e.g., drinks in front of background food); and (4) priority-aware filtering of low-value secondary regions so the database and UI focus on a small number of high-quality boxes per image. Priority is not stored in the database but is recomputed in the Web UI using the same heuristic for transparency and tuning.
 - Shared preprocessing steps live in `src/vibe_photos/preprocessing.py` and back both Celery workers and the `src/vibe_photos/dev/process.py --image-path` single-image helper for local runs.
 - Caption-based primary-region fallback now derives keywords from `models.siglip_labels.label_groups` by default (`models.detection.caption_primary_use_label_groups`), eliminating the duplicate `caption_primary_keywords` block while still allowing overrides when needed.
+- pHash recomputation now orders rows and uses skip-locked row locks on PostgreSQL to keep concurrent Celery workers from deadlocking when updating `images`.
 
 #### M1 — Known PoC / placeholder areas
 
