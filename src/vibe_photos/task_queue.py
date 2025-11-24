@@ -269,7 +269,9 @@ def process(image_id: str) -> str:
     with open_primary_session(primary_path) as primary_session:
         row = primary_session.get(ImageRow, image_id)
         if row is not None and row.status == "active":
-            pipeline._near_duplicate_dirty.add(image_id)  # type: ignore[attr-defined]
+            row.near_duplicate_dirty = True
+            primary_session.add(row)
+            primary_session.commit()
 
     pipeline.run(roots=[], primary_db_path=primary_path, cache_db_path=cache_path)
 

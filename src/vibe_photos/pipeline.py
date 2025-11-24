@@ -263,8 +263,6 @@ class PreprocessingPipeline:
         self._logger = get_logger(__name__, extra={"component": "preprocess"})
         self._cache_root: Path | None = None
         self._journal: RunJournalRecord | None = None
-        self._near_duplicate_dirty: set[str] = set()
-        self._force_near_duplicate_rebuild: bool = False
 
     def _stage_start_index(self, stage_names: Sequence[str]) -> int:
         """Return the first stage index to execute based on the run journal."""
@@ -283,26 +281,31 @@ class PreprocessingPipeline:
         return current_idx
 
     def _purge_cache_entries(self, image_ids: Sequence[str], cache_session: Session | None) -> None:
-        """Remove cached artifacts/rows in the cache DB for the provided image IDs."""
+        """Remove cached artifacts/rows in the cache DB for the provided image IDs.
+
+        The cache database is treated as a feature store; duplicate relationships
+        live in the primary database only and are invalidated via per-image flags
+        on the primary ``Image`` rows.
+        """
 
         ids = list({str(image_id) for image_id in image_ids})
         if not ids:
             return
 
         if cache_session is not None:
-            cache_session.execute(delete(ImageEmbedding).where(ImageEmbedding.image_id.in_(ids)))
-            cache_session.execute(delete(ImageCaption).where(ImageCaption.image_id.in_(ids)))
-            cache_session.execute(delete(ImageScene).where(ImageScene.image_id.in_(ids)))
-            cache_session.execute(delete(Region).where(Region.image_id.in_(ids)))
-            for image_id in ids:
-                cache_session.execute(
-                    delete(RegionEmbedding).where(RegionEmbedding.region_id.like(f"{image_id}#%"))
-                )
-            cache_session.execute(
-                delete(ImageNearDuplicate).where(
-                    or_(ImageNearDuplicate.anchor_image_id.in_(ids), ImageNearDuplicate.duplicate_image_id.in_(ids))
-                )
-            )
+            # Use chunked deletes to avoid exceeding SQLite's bound-parameter limit
+            # when invalidating large libraries.
+            chunk_size = 400
+            for offset in range(0, len(ids), chunk_size):
+                chunk = ids[offset : offset + chunk_size]
+                cache_session.execute(delete(ImageEmbedding).where(ImageEmbedding.image_id.in_(chunk)))
+                cache_session.execute(delete(ImageCaption).where(ImageCaption.image_id.in_(chunk)))
+                cache_session.execute(delete(ImageScene).where(ImageScene.image_id.in_(chunk)))
+                cache_session.execute(delete(Region).where(Region.image_id.in_(chunk)))
+                for image_id in chunk:
+                    cache_session.execute(
+                        delete(RegionEmbedding).where(RegionEmbedding.region_id.like(f"{image_id}#%"))
+                    )
             cache_session.commit()
 
         cache_root = self._cache_root
@@ -318,8 +321,6 @@ class PreprocessingPipeline:
                 artifacts_dir = cache_root / "artifacts" / image_id
                 if artifacts_dir.exists():
                     shutil.rmtree(artifacts_dir, ignore_errors=True)
-
-            self._near_duplicate_dirty.update(ids)
 
     def run(self, roots: Sequence[Path], primary_db_path: Path | str, cache_db_path: Path) -> None:
         """Run the preprocessing pipeline for the given album roots.
@@ -499,6 +500,7 @@ class PreprocessingPipeline:
                     old_image.primary_path = primary_path
                     old_image.status = status
                     old_image.updated_at = now
+                    old_image.near_duplicate_dirty = True
                     primary_session.add(old_image)
 
                 if old_image_id is not None:
@@ -529,6 +531,7 @@ class PreprocessingPipeline:
                 existing.hash_algo = CONTENT_HASH_ALGO
                 existing.status = status
                 existing.updated_at = now
+                existing.near_duplicate_dirty = True
                 primary_session.add(existing)
             else:
                 all_paths_json = json.dumps([path_str])
@@ -552,11 +555,11 @@ class PreprocessingPipeline:
                         status="active",
                         error_message=None,
                         schema_version=1,
+                        near_duplicate_dirty=True,
                     )
                 )
 
             path_to_image_id[path_str] = new_image_id
-            self._near_duplicate_dirty.add(new_image_id)
 
             processed_files += 1
             if progress_interval and (
@@ -1636,7 +1639,7 @@ class PreprocessingPipeline:
 
         self._run_region_detection_and_reranking(primary_session, target_image_ids=[image_id])
 
-    def _run_perceptual_hashing_and_duplicates(self, primary_session: Session, cache_session: Session) -> None:
+    def _run_perceptual_hashing_and_duplicates(self, primary_session: Session, _cache_session: Session) -> None:
         """Compute perceptual hashes and rebuild near-duplicate groups."""
 
         self._logger.info("phash_and_duplicates_start", extra={})
@@ -1795,15 +1798,27 @@ class PreprocessingPipeline:
         items.sort(key=lambda item: item["mtime"], reverse=True)
         phash_map: dict[str, ImageMeta] = {str(item["image_id"]): item for item in items}
 
-        dirty_ids = {image_id for image_id in self._near_duplicate_dirty if image_id in phash_map}
+        dirty_ids = {
+            row.image_id
+            for row in primary_session.execute(
+                select(Image.image_id).where(
+                    and_(
+                        Image.status == "active",
+                        Image.phash.is_not(None),
+                        Image.phash_algo == PHASH_ALGO,
+                        Image.near_duplicate_dirty.is_(True),
+                    )
+                )
+            )
+        }
 
-        existing_pairs = set(
+        existing_pairs = {
             (
                 row.anchor_image_id,
                 row.duplicate_image_id,
             )
-            for row in cache_session.execute(select(ImageNearDuplicate)).scalars()
-        )
+            for row in primary_session.execute(select(ImageNearDuplicate)).scalars()
+        }
 
         if not existing_pairs:
             dirty_ids = set(phash_map.keys())
@@ -1812,16 +1827,24 @@ class PreprocessingPipeline:
             self._logger.info("phash_and_duplicates_skip", extra={"reason": "no_dirty_ids"})
             return
 
-        cache_session.execute(
-            delete(ImageNearDuplicate).where(
-                or_(ImageNearDuplicate.anchor_image_id.in_(dirty_ids), ImageNearDuplicate.duplicate_image_id.in_(dirty_ids))
-            )
-        )
-        primary_session.execute(
-            delete(ImageNearDuplicate).where(
-                or_(ImageNearDuplicate.anchor_image_id.in_(dirty_ids), ImageNearDuplicate.duplicate_image_id.in_(dirty_ids))
-            )
-        )
+        # SQLite enforces a relatively small limit on the number of bound variables
+        # in a single statement (commonly 999). Large libraries can easily exceed
+        # this when deleting by IN (...) for both anchor and duplicate columns, so
+        # chunk the deletes to stay under that limit while keeping behavior the
+        # same. Near-duplicate edges are persisted in the primary database only.
+        dirty_id_list = list(dirty_ids)
+        if dirty_id_list:
+            chunk_size = 400
+            for offset in range(0, len(dirty_id_list), chunk_size):
+                chunk = dirty_id_list[offset : offset + chunk_size]
+                primary_session.execute(
+                    delete(ImageNearDuplicate).where(
+                        or_(
+                            ImageNearDuplicate.anchor_image_id.in_(chunk),
+                            ImageNearDuplicate.duplicate_image_id.in_(chunk),
+                        )
+                    )
+                )
 
         pairs_to_add: set[tuple[str, str]] = set()
         pair_count = 0
@@ -1849,14 +1872,6 @@ class PreprocessingPipeline:
                     continue
                 pairs_to_add.add(pair)
 
-                cache_session.add(
-                    ImageNearDuplicate(
-                        anchor_image_id=anchor_id,
-                        duplicate_image_id=duplicate_id,
-                        phash_distance=distance,
-                        created_at=now,
-                    )
-                )
                 primary_session.add(
                     ImageNearDuplicate(
                         anchor_image_id=anchor_id,
@@ -1867,13 +1882,15 @@ class PreprocessingPipeline:
                 )
                 pair_count += 1
                 if pair_count % 1000 == 0:
-                    cache_session.commit()
                     primary_session.commit()
 
-        cache_session.commit()
         primary_session.commit()
 
-        self._near_duplicate_dirty.clear()
+        # Clear dirty flags now that near-duplicate relationships are rebuilt.
+        primary_session.execute(
+            update(Image).where(Image.near_duplicate_dirty.is_(True)).values(near_duplicate_dirty=False)
+        )
+        primary_session.commit()
 
         groups_created, memberships_created = self._rebuild_duplicate_groups(primary_session, image_meta)
 

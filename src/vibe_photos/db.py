@@ -62,6 +62,7 @@ class Image(Base):
     status: Mapped[str] = mapped_column(String, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    near_duplicate_dirty: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     __table_args__ = (
         Index("idx_images_primary_path", "primary_path"),
