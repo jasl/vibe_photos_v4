@@ -16,11 +16,10 @@ from vibe_photos.db import (
     ImageEmbedding,
     ImageNearDuplicate,
     ImageScene,
-    dialect_insert,
     open_cache_session,
     open_primary_session,
-    sqlite_path_from_target,
 )
+from vibe_photos.db_helpers import dialect_insert, sqlite_path_from_target
 
 LOGGER = get_logger(__name__)
 

@@ -15,11 +15,8 @@ from PIL import Image
 from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactManager
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import (
-    open_cache_session,
-    open_primary_session,
-    sqlite_path_from_target,
-)
+from vibe_photos.db import open_cache_session, open_primary_session
+from vibe_photos.db_helpers import sqlite_path_from_target
 from vibe_photos.hasher import compute_content_hash
 from vibe_photos.labels.build_object_prototypes import build_object_prototypes
 from vibe_photos.labels.object_label_pass import run_object_label_pass

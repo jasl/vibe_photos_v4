@@ -50,6 +50,7 @@ Database Configuration
 ----------------------
 
 - `config/settings.yml` now includes a `databases` block. By default the primary database points at the local Postgres + pgvector service defined in `docker-compose.yml`, while the cache database remains `sqlite:///cache/index.db` for portability.
+- The default primary DSN is `postgresql+psycopg://vibe:vibe@localhost:5432/vibe_primary`, matching the docker-compose service credentials; override the user/host/dbname as needed.
 - Start the backing services with `docker compose up postgres redis` (or the full stack) before running the pipeline.
 - Override `databases.primary_url` / `databases.cache_url` per environment as needed; all CLIs and services now accept DB URLs in addition to file paths.
 

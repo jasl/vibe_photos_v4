@@ -21,8 +21,8 @@ from vibe_photos.db import (
     RegionEmbedding,
     open_cache_session,
     open_primary_session,
-    sqlite_path_from_target,
 )
+from vibe_photos.db_helpers import sqlite_path_from_target
 from vibe_photos.labels.repository import LabelRepository
 
 LOGGER = get_logger(__name__, extra={"command": "object_label_pass"})

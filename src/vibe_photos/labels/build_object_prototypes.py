@@ -12,12 +12,8 @@ from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import (
-    Label,
-    LabelAlias,
-    open_primary_session,
-    sqlite_path_from_target,
-)
+from vibe_photos.db import Label, LabelAlias, open_primary_session
+from vibe_photos.db_helpers import sqlite_path_from_target
 from vibe_photos.ml.models import get_siglip_embedding_model
 
 LOGGER = get_logger(__name__, extra={"command": "build_object_prototypes"})
