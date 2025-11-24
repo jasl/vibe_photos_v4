@@ -1136,12 +1136,12 @@ class PreprocessingPipeline:
         embedding_spec = ArtifactSpec(
             artifact_type="embedding",
             model_name=embedding_cfg.resolved_model_name(),
-            params={"device": embedding_cfg.device, "batch_size": embedding_cfg.batch_size},
+            params={},
         )
         caption_spec = ArtifactSpec(
             artifact_type="caption",
             model_name=caption_cfg.resolved_model_name(),
-            params={"device": caption_cfg.device},
+            params={},
         )
 
         active_rows = primary_session.execute(

@@ -217,7 +217,7 @@ def process(image_id: str) -> str:
     embed_spec = ArtifactSpec(
         artifact_type="embedding",
         model_name=settings.models.embedding.resolved_model_name(),
-        params={"device": settings.models.embedding.device, "batch_size": settings.models.embedding.batch_size},
+        params={},
     )
 
     # Ensure cache exists; if missing, run preprocess first.
@@ -317,7 +317,7 @@ def post_process(image_id: str) -> str:
         embed_spec = ArtifactSpec(
             artifact_type="embedding",
             model_name=settings.models.embedding.resolved_model_name(),
-            params={"device": settings.models.embedding.device, "batch_size": settings.models.embedding.batch_size},
+            params={},
         )
         embedding = manager.ensure_artifact(
             image_id=image_id,

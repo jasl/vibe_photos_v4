@@ -317,7 +317,7 @@ def ensure_preprocessing_artifacts(
     embed_spec = ArtifactSpec(
         artifact_type="embedding",
         model_name=settings.models.embedding.resolved_model_name(),
-        params={"device": settings.models.embedding.device, "batch_size": settings.models.embedding.batch_size},
+        params={},
     )
     embedding = manager.ensure_artifact(
         image_id=image_id,
@@ -329,7 +329,7 @@ def ensure_preprocessing_artifacts(
     caption_spec = ArtifactSpec(
         artifact_type="caption",
         model_name=settings.models.caption.resolved_model_name(),
-        params={"device": settings.models.caption.device},
+        params={},
     )
     caption_artifact = manager.ensure_artifact(
         image_id=image_id,
