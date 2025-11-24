@@ -57,7 +57,7 @@ Status: ready for implementation (implements reviewed guidance for the first mil
 ```
 
 Run modes:
-- CLI processing entry point (`uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-root cache/] [--batch-size ... --device ...]`) for scan + hash + classify + embeddings/captions; `--cache-root` now directly selects the cache directory (the legacy `--cache-db` flag remains as an alias). Batch size/device are read from `config/settings.yaml` with CLI flags acting as overrides when provided.
+- CLI processing entry point (`uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-root cache/] [--batch-size ... --device ...]`) for scan + hash + classify + embeddings/captions; `--cache-root` directly selects the cache directory and falls back to `cache.root` from `config/settings.yaml`. Batch size/device are read from `config/settings.yaml` with CLI flags acting as overrides when provided.
 - Flask app for manual inspection during development.
 - A cache manifest under `cache/manifest.json` versions model/config settings; preprocessing stages trust cache artifacts only when the manifest matches the active `cache_format_version`, and a run journal in `cache/run_journal.json` supports resumable single-process runs.
 
@@ -249,7 +249,7 @@ pipeline:
 ### 5.0 CLI Parameters
 - `--root`: one or more album root directories to scan (required; may be passed multiple times).
 - `--db`: path to the primary operational SQLite database (optional, defaults to `data/index.db`).
-- `--cache-root`: path/URL used to locate the cache directory on disk (optional, defaults to the legacy `cache/index.db` sentinel). The `--cache-db` flag is retained as a backwards-compatible alias.
+- `--cache-root`: path/URL used to locate the cache directory on disk (optional, defaults to `cache.root`, which resolves to the configured cache directory or legacy `cache/index.db` sentinel).
 - `--batch-size`: override the batch size from `config/settings.yaml` for model inference.
 - `--device`: override the device from `config/settings.yaml` (for example `cpu`, `cuda`, `mps`).
 
@@ -410,8 +410,8 @@ project_root/
       m1_development_plan.md  # this blueprint
 ```
 
-- M1 processing CLI: `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-root cache/] [--batch-size ... --device ...]`, using `config/settings.yaml` as the source of defaults with CLI flags overriding when provided (the `--cache-db` alias still works).
-- When `--cache-root` is omitted, the preprocessing CLI uses `cache/index.db` as the default cache-root sentinel.
+- M1 processing CLI: `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-root cache/] [--batch-size ... --device ...]`, using `config/settings.yaml` as the source of defaults with CLI flags overriding when provided.
+- When `--cache-root` is omitted, the preprocessing CLI resolves the cache directory from `cache.root` and falls back to the historical `cache/index.db` sentinel when that path points at a directory.
 - Flask Web UI: `FLASK_APP=vibe_photos.webui uv run flask run` for manual inspection during development.
 
 ## 8. Acceptance Criteria

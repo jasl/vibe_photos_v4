@@ -288,11 +288,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--cache-root",
-        "--cache-db",
         type=str,
         default=None,
         dest="cache_root",
-        help="Cache root containing embeddings. Defaults to the directory derived from databases.cache_url.",
+        help="Cache root containing embeddings. Defaults to the directory derived from cache.root.",
     )
     parser.add_argument("--label-space", type=str, default="object_v1", help="Label space version for assignments.")
     parser.add_argument("--prototype", type=str, default="object_v1", help="Prototype file name (without .npz).")
@@ -303,7 +302,7 @@ def main() -> None:
     args = parse_args()
     settings = load_settings()
     primary_target = args.data_db or settings.databases.primary_url
-    cache_target_input = args.cache_root or settings.databases.cache_url
+    cache_target_input = args.cache_root or settings.cache.root
     cache_target = normalize_cache_target(cache_target_input)
     cache_root = sqlite_path_from_target(cache_target).parent
 

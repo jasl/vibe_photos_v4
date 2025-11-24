@@ -46,7 +46,7 @@ def _default_primary_db() -> str:
 
 def _default_cache_root() -> Path:
     settings = _load_settings()
-    cache_target = normalize_cache_target(settings.databases.cache_url)
+    cache_target = normalize_cache_target(settings.cache.root)
     cache_path = sqlite_path_from_target(cache_target)
     return cache_path.parent
 

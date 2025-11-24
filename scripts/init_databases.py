@@ -15,7 +15,10 @@ if str(SRC_ROOT) not in sys.path:
 from utils.logging import get_logger  # noqa: E402
 from vibe_photos.config import load_settings  # noqa: E402
 from vibe_photos.db import open_primary_session  # noqa: E402
-from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target  # noqa: E402
+from vibe_photos.db_helpers import (  # noqa: E402
+    normalize_cache_target,
+    sqlite_path_from_target,
+)
 
 LOGGER = get_logger(__name__)
 
@@ -54,11 +57,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--cache-root",
-        "--cache-db",
         dest="cache_root",
         type=str,
         default=None,
-        help="Cache root URL or path. Defaults to databases.cache_url in settings.yaml.",
+        help="Cache root URL or path. Defaults to cache.root in settings.yaml.",
     )
     return parser.parse_args()
 
@@ -67,7 +69,7 @@ def main() -> None:
     args = parse_args()
     settings = load_settings()
     primary_target = args.data_db or settings.databases.primary_url
-    cache_input = args.cache_root or settings.databases.cache_url
+    cache_input = args.cache_root or settings.cache.root
     cache_target = normalize_cache_target(cache_input)
     cache_path = sqlite_path_from_target(cache_target)
     cache_root = cache_path.parent if cache_path.suffix == ".db" and cache_path.name != "" else cache_path

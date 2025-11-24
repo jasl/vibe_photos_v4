@@ -368,10 +368,16 @@ class ClusterConfig:
 
 @dataclass
 class DatabaseConfig:
-    """Database connection targets for primary and cache stores."""
+    """Database connection targets for the primary store."""
 
     primary_url: str = "postgresql+psycopg://vibe:vibe@localhost:5432/vibe_primary"
-    cache_url: str = "sqlite:///cache/index.db"
+
+
+@dataclass
+class CacheConfig:
+    """Filesystem cache settings."""
+
+    root: str = "cache"
 
 
 @dataclass
@@ -448,6 +454,7 @@ class Settings:
     """Top-level application settings."""
 
     databases: DatabaseConfig = field(default_factory=DatabaseConfig)
+    cache: CacheConfig = field(default_factory=CacheConfig)
     models: ModelsConfig = field(default_factory=ModelsConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     queues: QueueConfig = field(default_factory=QueueConfig)
@@ -487,9 +494,15 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     db_cfg = settings.databases
     if isinstance(databases_raw.get("primary_url"), str):
         db_cfg.primary_url = databases_raw["primary_url"]
-    cache_value = databases_raw.get("cache_url")
-    if isinstance(cache_value, str):
-        db_cfg.cache_url = cache_value
+
+    cache_raw = _as_dict(raw.get("cache"))
+    cache_cfg = settings.cache
+    if isinstance(cache_raw.get("root"), str):
+        cache_cfg.root = cache_raw["root"]
+    else:
+        legacy_cache_value = databases_raw.get("cache_url")
+        if isinstance(legacy_cache_value, str):
+            cache_cfg.root = legacy_cache_value
 
     models_raw = _as_dict(raw.get("models"))
     embedding_raw = _as_dict(models_raw.get("embedding"))

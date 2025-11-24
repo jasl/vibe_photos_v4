@@ -23,6 +23,7 @@ from vibe_photos.db import (
     RegionEmbedding,
     open_primary_session,
 )
+from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target
 
 LOGGER = get_logger(__name__)
 
@@ -65,7 +66,11 @@ def _invalidate_cache_dirs(cache_root: Path, stages: set[Stage]) -> None:
 
 
 def main(
-    cache_root: Path = typer.Option(Path("cache"), help="Cache root containing cache/index.db."),
+    cache_root: Path | None = typer.Option(
+        None,
+        "--cache-root",
+        help="Cache root containing cache/index.db; defaults to cache.root from settings.yaml.",
+    ),
     stages: Iterable[Stage] = typer.Option(
         ["all"],
         "--stage",
@@ -80,6 +85,11 @@ def main(
 ) -> None:
     """Invalidate cached artifacts for selected stages."""
 
+    settings = load_settings()
+    if cache_root is None:
+        cache_target = normalize_cache_target(settings.cache.root)
+        cache_path = sqlite_path_from_target(cache_target)
+        cache_root = cache_path.parent
     cache_root = cache_root.resolve()
     raw_stages = set(stages or ["all"])
     selected: set[Stage] = {cast(Stage, stage) for stage in raw_stages}
@@ -89,7 +99,6 @@ def main(
         LOGGER.info("cache_full_reset", extra={"cache_root": str(cache_root)})
         return
 
-    settings = load_settings()
     db_target = settings.databases.primary_url
     with open_primary_session(db_target) as session:
         _invalidate_db_tables(session, selected)

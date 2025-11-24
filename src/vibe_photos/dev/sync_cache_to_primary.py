@@ -140,8 +140,7 @@ def main(
     cache_root: str | None = typer.Option(
         None,
         "--cache-root",
-        "--cache-db",
-        help="Cache root URL or path. Defaults to databases.cache_url in settings.yaml.",
+        help="Cache root URL or path. Defaults to cache.root in settings.yaml.",
     ),
     db: str | None = typer.Option(
         None,
@@ -155,7 +154,7 @@ def main(
     """Copy cache tables into the primary DB."""
 
     settings = load_settings()
-    cache_target_raw = cache_root or settings.databases.cache_url
+    cache_target_raw = cache_root or settings.cache.root
     cache_target = normalize_cache_target(cache_target_raw)
     cache_path = sqlite_path_from_target(cache_target)
     primary_target = db or settings.databases.primary_url

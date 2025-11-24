@@ -104,7 +104,7 @@ def parse_args() -> argparse.Namespace:
         "--cache-root",
         type=str,
         default=None,
-        help="Cache root where prototypes will be stored. Defaults to the directory derived from databases.cache_url.",
+        help="Cache root where prototypes will be stored. Defaults to the directory derived from cache.root.",
     )
     parser.add_argument(
         "--output-name",
@@ -119,7 +119,7 @@ def main() -> None:
     args = parse_args()
     settings = load_settings()
     primary_target = args.db or settings.databases.primary_url
-    cache_input = args.cache_root or settings.databases.cache_url
+    cache_input = args.cache_root or settings.cache.root
     normalized_cache = normalize_cache_target(cache_input)
     cache_root = sqlite_path_from_target(normalized_cache).parent
 

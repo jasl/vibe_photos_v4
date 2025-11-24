@@ -90,8 +90,7 @@ def main(
     cache_root_arg: str | None = typer.Option(
         None,
         "--cache-root",
-        "--cache-db",
-        help="Cache root URL or path (defaults to databases.cache_url in settings.yaml).",
+        help="Cache root URL or path (defaults to cache.root in settings.yaml).",
     ),
     image_path: Path | None = typer.Option(
         None,
@@ -139,7 +138,7 @@ def main(
     settings = _apply_cli_overrides(settings, batch_size=batch_size, device=device)
 
     primary_target = db or settings.databases.primary_url
-    cache_target_raw = cache_root_arg or settings.databases.cache_url
+    cache_target_raw = cache_root_arg or settings.cache.root
     cache_target = normalize_cache_target(cache_target_raw)
     cache_sentinel = sqlite_path_from_target(cache_target)
     cache_root = cache_sentinel.parent

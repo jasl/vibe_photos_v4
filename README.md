@@ -49,10 +49,10 @@ On Linux or Windows machines with a compatible NVIDIA GPU and CUDA 13.0:
 Database Configuration
 ----------------------
 
-- `config/settings.yml` now includes a `databases` block. By default the primary database points at the local Postgres + pgvector service defined in `docker-compose.yml`. The `databases.cache_url` value is still accepted, but it now serves only to derive the on-disk cache root (for example `sqlite:///cache/index.db` resolves to `cache/`); no secondary database is used at runtime.
+- `config/settings.yml` now includes a `databases` block (for the primary DSN) and a `cache` block (for the filesystem root that stores embeddings/captions/detections). The legacy `databases.cache_url` key is still parsed for backward compatibility, but `cache.root` is the canonical setting going forward.
 - The default primary DSN is `postgresql+psycopg://vibe:vibe@localhost:5432/vibe_primary`, matching the docker-compose service credentials; override the user/host/dbname as needed.
 - Start the backing services with `docker compose up postgres redis` (or the full stack) before running the pipeline.
-- Override `databases.primary_url` / `databases.cache_url` per environment as needed; all CLIs and services now accept DB URLs in addition to file paths.
+- Override `databases.primary_url` / `cache.root` per environment as needed; all CLIs and services now accept DB URLs in addition to file paths.
 
 Primary DB Backup & Restore
 ---------------------------
@@ -84,7 +84,7 @@ Key options:
 
 - `--root`: one or more album root directories to scan (may be passed multiple times).
 - `--db`: primary database URL or path (defaults to `databases.primary_url` in `config/settings.yaml`).
-- `--cache-root`: cache root URL or path (defaults to `databases.cache_url`, which resolves to a cache directory such as `cache/`). The legacy `--cache-db` flag remains as an alias for backward compatibility.
+- `--cache-root`: cache root URL or path (defaults to `cache.root`, which resolves to a cache directory such as `cache/` or a legacy `cache/index.db` sentinel).
 - `--batch-size`: override the model batch size from `config/settings.yaml`.
 - `--device`: override the model device (for example `cpu`, `cuda`, or `mps`).
 - `--image-path`: process a single image using the shared preprocessing steps and write artifacts under the cache root.

@@ -6,7 +6,19 @@
 
 databases:
   primary_url: "postgresql+psycopg://vibe:vibe@localhost:5432/vibe_primary"
-  cache_url: "sqlite:///cache/index.db"
+
+cache:
+  root: "cache"
+
+queues:
+  broker_url: "redis://localhost:6379/0"
+  result_backend: "redis://localhost:6379/1"
+  preprocess_queue: "pre_process"
+  main_queue: "process"
+  post_process_queue: "post_process"
+  default_concurrency: 1     # single-worker to avoid model duplication
+  post_process_concurrency: 1
+  backfill_batch_size: 128
 
 models:
   embedding:
@@ -191,13 +203,3 @@ cluster:
     k: 20
     sim_threshold: 0.82
     min_size: 3
-
-queues:
-  broker_url: "redis://localhost:6379/0"
-  result_backend: "redis://localhost:6379/1"
-  preprocess_queue: "pre_process"
-  main_queue: "process"
-  post_process_queue: "post_process"
-  default_concurrency: 1     # single-worker to avoid model duplication
-  post_process_concurrency: 1
-  backfill_batch_size: 128
