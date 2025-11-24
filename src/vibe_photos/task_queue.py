@@ -28,7 +28,7 @@ from vibe_photos.db import (
     open_primary_session,
 )
 from vibe_photos.db import Image as ImageRow
-from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target
+from vibe_photos.db_helpers import resolve_cache_root
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.pipeline import PreprocessingPipeline
 from vibe_photos.preprocessing import ensure_preprocessing_artifacts
@@ -48,9 +48,7 @@ def _default_primary_db() -> str:
 
 def _default_cache_root() -> Path:
     settings = _load_settings()
-    cache_target = normalize_cache_target(settings.cache.root)
-    cache_path = sqlite_path_from_target(cache_target)
-    return cache_path.parent
+    return resolve_cache_root(settings.cache.root)
 
 
 def _init_celery() -> Celery:

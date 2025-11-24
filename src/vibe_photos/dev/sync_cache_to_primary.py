@@ -18,11 +18,7 @@ from vibe_photos.db import (
     ImageScene,
     open_primary_session,
 )
-from vibe_photos.db_helpers import (
-    dialect_insert,
-    normalize_cache_target,
-    sqlite_path_from_target,
-)
+from vibe_photos.db_helpers import dialect_insert
 
 LOGGER = get_logger(__name__)
 
@@ -137,10 +133,10 @@ def _sync_duplicates(src_session: Session, dst_session: Session) -> int:
 
 
 def main(
-    cache_root: str | None = typer.Option(
+    cache_db: str | None = typer.Option(
         None,
-        "--cache-root",
-        help="Cache root URL or path. Defaults to cache.root in settings.yaml.",
+        "--cache-db",
+        help="Cache database URL (PostgreSQL). Defaults to databases.primary_url in settings.yaml.",
     ),
     db: str | None = typer.Option(
         None,
@@ -154,13 +150,11 @@ def main(
     """Copy cache tables into the primary DB."""
 
     settings = load_settings()
-    cache_target_raw = cache_root or settings.cache.root
-    cache_target = normalize_cache_target(cache_target_raw)
-    cache_path = sqlite_path_from_target(cache_target)
+    cache_db_url = cache_db or settings.databases.primary_url
     primary_target = db or settings.databases.primary_url
 
     selected = set(tables or ["all"])
-    with open_primary_session(cache_target) as src, open_primary_session(primary_target) as dst:
+    with open_primary_session(cache_db_url) as src, open_primary_session(primary_target) as dst:
         total = 0
         if "embeddings" in selected or "all" in selected:
             total += _sync_embeddings(src, dst)
@@ -176,7 +170,7 @@ def main(
         extra={
             "tables": sorted(selected),
             "rows_synced": total,
-            "cache_root": str(cache_path.parent),
+            "cache_db": str(cache_db_url),
             "db": str(primary_target),
         },
     )

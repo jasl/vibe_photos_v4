@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Lock
-from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -17,19 +16,16 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     delete,
-    event,
     text,
 )
 from sqlalchemy.engine import Engine
 from sqlalchemy.engine.url import make_url
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from utils.logging import get_logger
 from vibe_photos.db_helpers import (
     dialect_insert,
     normalize_database_url,
-    sqlite_path_from_target,
 )
 
 LOGGER = get_logger(__name__)
@@ -380,16 +376,6 @@ _ENGINE_CACHE: dict[str, Engine] = {}
 _ENGINE_LOCK = Lock()
 
 
-def _ensure_parent_directory(path: Path) -> None:
-    """Ensure the parent directory for a database file exists."""
-
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        LOGGER.error("db_parent_directory_error", extra={"path": str(path), "error": str(exc)})
-        raise
-
-
 def _get_engine(target: str | Path) -> Engine:
     """Return a cached SQLAlchemy engine for the provided target, creating schema if needed."""
 
@@ -404,53 +390,22 @@ def _get_engine(target: str | Path) -> Engine:
             return engine
 
         sa_url = make_url(normalized)
-        is_sqlite = sa_url.drivername.startswith("sqlite")
-
-        engine_kwargs: dict[str, object] = {"future": True}
-        if is_sqlite:
-            if sa_url.database and sa_url.database not in {":memory:"}:
-                _ensure_parent_directory(Path(sa_url.database))
-            engine_kwargs["connect_args"] = {"timeout": 30.0}
-        else:
-            engine_kwargs["pool_pre_ping"] = True
-
-        engine = create_engine(normalized, **engine_kwargs)
-
-        if is_sqlite:
-
-            @event.listens_for(engine, "connect")
-            def _set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:  # type: ignore[override]
-                """Configure SQLite for better concurrent access."""
-
-                cursor = dbapi_connection.cursor()
-                try:
-                    cursor.execute("PRAGMA journal_mode=WAL")
-                    cursor.execute("PRAGMA busy_timeout = 30000")
-                finally:
-                    cursor.close()
-
-        try:
-            Base.metadata.create_all(engine)
-        except OperationalError as exc:
-            # In highly concurrent startup (e.g., multiple Celery workers) another
-            # process may create tables between SQLite's existence check and the
-            # CREATE TABLE statement. Treat "already exists" as a benign race.
-            message = str(exc).lower()
-            if "already exists" in message:
-                LOGGER.info(
-                    "db_create_all_table_exists_race",
-                    extra={"target": normalized, "error": str(exc)},
-                )
-            else:
-                raise
-
         if sa_url.drivername.startswith("postgresql"):
+            engine = create_engine(normalized, future=True, pool_pre_ping=True)
+
+            Base.metadata.create_all(engine)
+
             try:
                 with engine.begin() as conn:
                     conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             except Exception as exc:  # pragma: no cover - defensive guard
                 LOGGER.error("db_vector_extension_error", extra={"url": str(sa_url), "error": str(exc)})
                 raise
+        elif sa_url.drivername.startswith("sqlite"):
+            engine = create_engine(normalized, future=True)
+            Base.metadata.create_all(engine)
+        else:  # pragma: no cover - defensive guard for unsupported dialects
+            raise ValueError(f"Unsupported database dialect {sa_url.drivername!r}; expected postgresql or sqlite")
 
         _ENGINE_CACHE[normalized] = engine
         return engine
@@ -493,6 +448,5 @@ __all__ = [
     "LabelAssignment",
     "open_primary_session",
     "dialect_insert",
-    "sqlite_path_from_target",
     "reset_cache_tables",
 ]

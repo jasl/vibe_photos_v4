@@ -10,14 +10,14 @@ This guide turns the requirements and solution design into a staged implementati
      - Extracts metadata (time, file stats, EXIF, GPS).
      - Computes fingerprints (hashes, perceptual hashes) and near‑duplicate groups.
      - Runs the initial perception models (SigLIP/BLIP and, where feasible, detection).
-   - Store all results in caches and a SQLite database for reuse.
+   - Store all results in caches and the PostgreSQL database for reuse.
 2. **M2 — Perception Quality & Labeling**
    - Improve recognition quality and label hygiene on top of M1:
      - Iterate on SigLIP label sets and grouping to reduce manual maintenance and improve coverage.
      - Refine detection + SigLIP/BLIP thresholds, blacklists, and remapping to reduce noisy object/product labels.
      - Establish small but realistic evaluation sets and metrics for coarse categories and object‑level recognition.
 3. **M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)**
-   - Move from SQLite to PostgreSQL/pgvector and build search/tools on top of the improved perception stack.
+   - Harden the PostgreSQL/pgvector stack and build search/tools on top of the improved perception stack.
    - Containerize the stack with `docker-compose` (API, workers, DB, Redis, UI).
    - Introduce Redis and background worker stack.
 4. **M4 — Learning & Personalization**
@@ -43,7 +43,7 @@ src/
 
 Supporting directories (see `DIRECTORY_STRUCTURE.md`):
 
-- `data/` — Runtime DB files for SQLite (M1/M2) and optional exports.
+- `data/` — Runtime database exports/backups for PostgreSQL deployments.
 - `cache/` — Normalized images, thumbnails, detections, captions, embeddings.
 - `models/` — Downloaded model weights and tokenizer/processor assets.
 - `log/` — Structured application logs.
@@ -67,12 +67,12 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - Model choices and batch sizes.
 - Database:
   - Follow the canonical M1 schema defined in `blueprints/m1/m1_development_plan.md`:
-    - A primary operational database under `data/index.db` (SQLite era) or PostgreSQL/pgvector (current builds) for canonical image metadata (`images` table with content hash and perceptual hash fields).
-    - A cache root under `cache/` (historically addressed via `cache/index.db`) for:
+    - A primary operational database backed by PostgreSQL/pgvector for canonical image metadata (`images` table with content hash and perceptual hash fields).
+    - A cache root under `cache/` for:
       - Lightweight scene classification outputs (`image_scene`) serialized as JSON plus mirrored rows in the primary DB.
       - Embedding and caption tables (`image_embedding`, `image_caption`) stored in the primary DB with vectors on disk.
       - Near-duplicate relationships (`image_near_duplicate`) derived from `images.phash`, persisted in the primary DB.
-  - Cache directories are rebuildable from artifacts plus the primary database; treat the legacy SQLite path only as a sentinel for cache location.
+  - Cache directories are rebuildable from artifacts plus the primary database.
 - Image preprocessing:
   - Normalize images (orientation, color profile) and generate:
     - Web‑friendly thumbnails (e.g. 512×512).
@@ -98,7 +98,7 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - BLIP captions.
   - Where feasible (depending on hardware and priorities), add:
     - Grounding DINO / OWL‑ViT detection and SigLIP re‑ranking.
-  - Store all outputs in the SQLite DB and JSON caches under `cache/`.
+  - Store all outputs in the PostgreSQL DB and JSON caches under `cache/`.
 - Concurrency & robustness:
   - Provide both a single-process CLI (`vibe_photos.dev.process`) and an optional Celery-based worker model (`vibe_photos.task_queue` + `vibe_photos.dev.enqueue_celery`) appropriate for local runs.
   - Support resumable processing:

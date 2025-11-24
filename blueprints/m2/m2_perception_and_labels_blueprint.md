@@ -39,7 +39,7 @@ M1 已经完成了一条稳定的本地预处理流水线：
 ### 2.1 In Scope
 
 - **存储与基础设施**
-  - 继续使用现有的 **SQLite + cache** 结构，不引入 PostgreSQL / pgvector（留给 M3）。
+  - 继续使用现有的 **PostgreSQL + 文件系统 cache** 结构（SQLite 仅为历史背景，不再作为运行时目标）。
   - 不大改 Celery / pipeline 基础框架，只在现有阶段上重排职责、加新任务。
 
 - **感知质量目标**

@@ -25,7 +25,7 @@ from vibe_photos.db import (
     Region,
     open_primary_session,
 )
-from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target
+from vibe_photos.db_helpers import resolve_cache_root
 from vibe_photos.labels.scene_schema import (
     ATTRIBUTE_LABEL_KEYS,
     normalize_scene_filter,
@@ -46,9 +46,7 @@ def _get_primary_db_target() -> str | Path:
 
 def _get_cache_root() -> Path:
     settings = load_settings()
-    cache_target = normalize_cache_target(settings.cache.root)
-    cache_path = sqlite_path_from_target(cache_target)
-    return cache_path.parent
+    return resolve_cache_root(settings.cache.root)
 
 
 def _is_checked(value: str | None) -> bool:

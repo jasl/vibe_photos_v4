@@ -21,7 +21,7 @@ from vibe_photos.db import (
     RegionEmbedding,
     open_primary_session,
 )
-from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target
+from vibe_photos.db_helpers import resolve_cache_root
 from vibe_photos.labels.repository import LabelRepository
 
 LOGGER = get_logger(__name__, extra={"command": "object_label_pass"})
@@ -301,7 +301,7 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         dest="cache_root",
-        help="Cache root containing embeddings. Defaults to the directory derived from cache.root.",
+        help="Cache root directory containing embeddings. Defaults to cache.root.",
     )
     parser.add_argument("--label-space", type=str, default="object_v1", help="Label space version for assignments.")
     parser.add_argument("--prototype", type=str, default="object_v1", help="Prototype file name (without .npz).")
@@ -313,8 +313,7 @@ def main() -> None:
     settings = load_settings()
     primary_target = args.data_db or settings.databases.primary_url
     cache_target_input = args.cache_root or settings.cache.root
-    cache_target = normalize_cache_target(cache_target_input)
-    cache_root = sqlite_path_from_target(cache_target).parent
+    cache_root = resolve_cache_root(cache_target_input)
 
     with open_primary_session(primary_target) as primary_session:
         cache_session = primary_session

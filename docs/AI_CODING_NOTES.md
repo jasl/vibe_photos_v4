@@ -42,13 +42,12 @@ are written for coding AIs implementing Phase Final pipelines.
 
 ## 5. Caching and Database Separation
 
-- All model outputs (embeddings, captions, detections) MUST be stored:
-  - In versioned JSON or NPY files under `cache/` as the primary source
-    of truth.
-  - In a SQLite database as a cache-backed view over those artifacts for query
-    and indexing.
-- The database schema is allowed to evolve; cache formats must remain
-  stable across migrations so databases can be rebuilt quickly.
+- All model outputs (embeddings, captions, detections) MUST be stored as
+  versioned JSON or NPY files under `cache/` as the primary source of truth.
+- PostgreSQL is the only supported database; it records references and
+  derived metadata for the cached artifacts but is not the cache itself.
+- Cache formats must remain stable across migrations so the database can be
+  rebuilt quickly when schema changes occur.
 - Cache artifacts must include:
   - Model name and backend.
   - Preprocessing or pipeline version.

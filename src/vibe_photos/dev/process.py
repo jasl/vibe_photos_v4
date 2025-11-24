@@ -16,7 +16,7 @@ from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactManager
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import open_primary_session
-from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target
+from vibe_photos.db_helpers import resolve_cache_root
 from vibe_photos.hasher import compute_content_hash
 from vibe_photos.labels.build_object_prototypes import build_object_prototypes
 from vibe_photos.labels.object_label_pass import run_object_label_pass
@@ -139,9 +139,7 @@ def main(
 
     primary_target = db or settings.databases.primary_url
     cache_target_raw = cache_root_arg or settings.cache.root
-    cache_target = normalize_cache_target(cache_target_raw)
-    cache_sentinel = sqlite_path_from_target(cache_target)
-    cache_root = cache_sentinel.parent
+    cache_root = resolve_cache_root(cache_target_raw)
 
     if image_path:
         resolved_id = ensure_artifacts_for_image(

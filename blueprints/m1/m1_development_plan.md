@@ -62,9 +62,9 @@ Run modes:
 - A cache manifest under `cache/manifest.json` versions model/config settings; preprocessing stages trust cache artifacts only when the manifest matches the active `cache_format_version`, and a run journal in `cache/run_journal.json` supports resumable single-process runs.
 
 ## 4. Data Model
-M1 originally targeted two SQLite databases; modern deployments use Postgres for the primary database while retaining the same schema. The former `cache/index.db` path now only indicates where cache files live on disk.
-- A **primary operational database** (SQLite `data/index.db` in early prototypes, PostgreSQL in current builds) stores canonical image metadata, model outputs, near-duplicate relationships, and run state. This database is the only one that production-facing services (CLI, Web UI, future APIs) MUST read and write.
-- A **cache root** under `cache/` stores derived vectors/JSON artifacts. The legacy `cache/index.db` SQLite file is kept only as a sentinel path for compatibility; production services SHOULD NOT treat it as a secondary database.
+M1 originally targeted two SQLite databases; modern deployments use PostgreSQL for the primary database and treat the cache purely as a filesystem directory tree.
+- A **primary operational database** (PostgreSQL in current builds; SQLite only in historical prototypes) stores canonical image metadata, model outputs, near-duplicate relationships, and run state. This database is the only one that production-facing services (CLI, Web UI, future APIs) MUST read and write.
+- A **cache root** under `cache/` stores derived vectors/JSON artifacts. There is no SQLite cache database; the directory itself is the cache boundary.
 
 ### Hash Strategy: Content vs Perceptual
 M1 uses two distinct hash types:
