@@ -488,11 +488,8 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     if isinstance(databases_raw.get("primary_url"), str):
         db_cfg.primary_url = databases_raw["primary_url"]
     cache_value = databases_raw.get("cache_url")
-    projection_legacy_value = databases_raw.get("projection_url")
     if isinstance(cache_value, str):
         db_cfg.cache_url = cache_value
-    elif isinstance(projection_legacy_value, str):
-        db_cfg.cache_url = projection_legacy_value
 
     models_raw = _as_dict(raw.get("models"))
     embedding_raw = _as_dict(models_raw.get("embedding"))
