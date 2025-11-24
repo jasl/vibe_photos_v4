@@ -12,7 +12,7 @@ M1 已经完成了一条稳定的本地预处理流水线：
 
 - **感知输出（features）**：SigLIP 全图 embedding、BLIP caption、OWL‑ViT region 检测、pHash。
 - **轻量分类**：基于 SigLIP 的 coarse scene + 布尔属性（has_text / has_person / is_document / is_screenshot）。
-- **SQLite + cache**：以 SQLite（`data/index.db` + `cache/index.db`）为主，模型输出大多落在 cache 文件中，并有投影表便于查询。
+- **Cache + primary DB**：感知结果写入主数据库（M1 时代为 `data/index.db`，Phase Final 迁移到 Postgres），缓存文件位于 `cache/` 目录（历史上通过 `cache/index.db` 定位，如今仅作哨兵）。
 - **Flask QA UI**：支持按 coarse scene 和布尔属性筛图。
 
 在此基础上，**M2 的核心目标**是：
@@ -469,7 +469,7 @@ CREATE TABLE cluster_membership (
 
 遵循「cache 存放预处理/模型特征的可复用缓存，data 存放 process 阶段的语义输出」：
 
-- `cache/index.db`：预处理与模型前向直接产出的特征/中间结果（如 `regions`、`region_embedding` 以及未来的 image embedding 等），来自原图+推理，可长期复用，必要时可全量重建。
+- `cache/` 目录：存放预处理与模型前向直接产出的特征/中间结果对应的向量、JSON、缩略图等文件（如 `regions`、`region_embedding` 以及 image embedding）。借助主库中的元数据即可定位这些文件，必要时可通过清空 cache 目录全量重建。
 - `data/index.db`：主库，承载 `labels`、`label_aliases`、`label_assignment`（含自动/人工）、聚类结果（`image_similarity_cluster`、`cluster_membership`）、其它 process 计算产物。需要时通过重跑 process（读取 cache 特征）即可再生成。
 - 任务层不做跨库 JOIN；process 任务读取 cache、计算后直接写 data。cache 可随时重建，重建后跑一次 process 可恢复 data（人工标签除外）。
 - 数据库初始化通过 `scripts/` 目录下的独立脚本一次性创建所需表（原型阶段不做向后兼容），并在 `init_project.sh` 中调用，后续可演进到版本化迁移工具。
@@ -583,7 +583,7 @@ M2 在感知层不过度追求全新模型，而是围绕现有 SigLIP / BLIP / 
 #### 5.1.5 特征存储（可选）
 
 上述 face_count、screenshot_score、document_score 等中间特征可以只在 scene/attribute pass 内存中使用；  
-为了便于后续系统化调参与评估，推荐在 cache DB（当前为 `cache/index.db`）中增加轻量的 image‑level feature 表，将这些标量以 JSON 形式存储：
+为了便于后续系统化调参与评估，推荐在主数据库中增加轻量的 image‑level feature 表，将这些标量以 JSON 形式存储（`cache/index.db` 仅作为缓存根目录的占位符存在）：
 
 ```sql
 CREATE TABLE image_features (
@@ -805,7 +805,7 @@ M2 只在数据结构层面预留：
          - `{"from_region": region_id, "sim_rank": idx, "margin": margin}`。
 - 典型函数签名可类似：
   - `run_object_label_pass(settings, cache_root, cache_session, label_space_ver="object_v1", prototype_name="object_v1", embedding_model_name=...)`；
-  - 其中 `cache_session` 负责操作主库中与 label 层相关的表（`labels / label_aliases / label_assignment`），`regions / region_embedding` 则按 4.4 约定从 cache DB 提供视图或投影表。
+  - 其中 `cache_session`（现在与 primary session 相同）负责操作所有相关表（`labels / label_aliases / label_assignment / regions / region_embedding`），缓存根目录仅提供向量/JSON 文件。
 - 在 pipeline 串联上，推荐在 detection 阶段（写完 `regions + region_embedding`）之后、scene label pass 之前增加一个 Object Label Pass stage（例如 `run_object_label_pass`），确保下游 clustering 和 QA UI 可以直接使用 object 标签。
 
 ### 6.3 标签层约束与合法组合
@@ -1119,7 +1119,7 @@ M2 不要求完整交互 UI，但结构上预留：
 
 本节将 M2 拆成可以逐步落地的几个阶段，尽量保持每一步「增量」「可回滚」。
 
-主流程建议：process 任务直接读取 `cache/index.db` 的特征/中间结果，计算后写入 `data/index.db`（不跨库 JOIN）；若重建 cache，仅需重跑 preprocess + process，即可恢复 data（人工标签除外）。
+主流程建议：process 任务直接读取 cache 目录中的特征/中间结果（通过数据库元数据定位），计算后写入主库（不跨库 JOIN）；若重建 cache，仅需重跑 preprocess + process，即可恢复 data（人工标签除外）。
 
 ### 9.1 M2‑A: 统一标签层（Label Layer Foundation）
 

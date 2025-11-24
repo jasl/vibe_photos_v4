@@ -20,7 +20,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - [x] Normalize images and generate thumbnails / web-friendly versions. (A preprocessing stage now writes configurable JPEG thumbnails (default 256×256 small, 1024×1024 large) to `cache/images/thumbnails/`, keyed by `image_id`; `/thumbnail/<image_id>` reads from the cache with a fallback to originals. Full normalized copies under `cache/images/processed/` remain future work.)
 - [x] Extract EXIF, capture time, GPS (when present), and file timestamps. (EXIF datetime and camera model are populated on `images` rows during preprocessing; a metadata sidecar is written to `cache/images/metadata/<image_id>.json` with parsed GPS coordinates when present, and the Flask UI displays these fields.)
 - [x] Compute file hashes and perceptual hashes; record near-duplicate relationships. (Content hashes and pHash-based near-duplicate groups are implemented in `src/vibe_photos/hasher.py` and `_run_perceptual_hashing_and_duplicates` in `src/vibe_photos/pipeline.py`; pHash is recomputed only when missing/algorithm changes, and near-duplicate pairs are incremental—dirty images drop their old pairs and recompute against active images, full pass only when the table is empty.)
-- [x] Integrate SigLIP embeddings and BLIP captions; cache results. (Implemented in `_run_embeddings_and_captions` with NPY/JSON caches under `cache/` and cache tables in SQLite.)
+- [x] Integrate SigLIP embeddings and BLIP captions; cache results. (Implemented in `_run_embeddings_and_captions` with NPY/JSON caches under `cache/` and metadata persisted in the primary database.)
 - [x] (Optional) Integrate Grounding DINO / OWL-ViT detection and SigLIP re-ranking. (OWL-ViT + SigLIP region re-ranking and JSON caches are implemented; enabled via `models.detection.enabled` and `pipeline.run_detection` settings.)
 - [x] Consolidated preprocessing orchestration onto Celery task queues; the legacy SQLite `preprocess_task` queue and associated enqueue/worker CLIs have been removed in favor of `vibe_photos.task_queue` and `vibe_photos.dev.enqueue_celery`.
 - [x] Add a Celery-backed enqueue helper to scan directories and push `pre_process`/`process`/`post_process` jobs to dedicated queues (`vibe_photos.dev.enqueue_celery`).
@@ -30,7 +30,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 
 #### M1 — Extras beyond the original plan
 
-- OWL-ViT region detection with SigLIP-based label re-ranking is fully wired into the pipeline, with results stored in the feature-only `regions`/`region_embedding` tables (cache DB) and JSON caches under `cache/regions/`. SigLIP re-ranking now applies confidence and margin thresholds and only refines labels within the same semantic group as the original detector label; if a detector label cannot be grouped confidently, the region keeps only the detector output (no cross-category overrides such as random `AirPods` on food regions).
+- OWL-ViT region detection with SigLIP-based label re-ranking is fully wired into the pipeline, with results stored in the feature-only `regions`/`region_embedding` tables in the primary database and JSON caches under `cache/regions/`. SigLIP re-ranking now applies confidence and margin thresholds and only refines labels within the same semantic group as the original detector label; if a detector label cannot be grouped confidently, the region keeps only the detector output (no cross-category overrides such as random `AirPods` on food regions).
 - A standalone SigLIP+BLIP helper (`SiglipBlipDetector` in `src/vibe_photos/ml/siglip_blip.py`) is available for ad-hoc zero-shot classification + captioning outside the main pipeline.
 - The Flask debug UI exposes additional filters such as duplicate-hiding, near-duplicate facets, and region-label filtering on top of the planned scene/attribute filters.
 - Region detection now includes: (1) class-agnostic NMS to merge highly overlapping boxes; (2) a configurable priority heuristic combining detector score, normalized box area, and distance to image center; (3) caption-based fallback regions for cases where detection misses an obvious primary object (e.g., drinks in front of background food); and (4) priority-aware filtering of low-value secondary regions so the database and UI focus on a small number of high-quality boxes per image. Priority is not stored in the database but is recomputed in the Web UI using the same heuristic for transparency and tuning.
@@ -43,7 +43,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - Full image normalization and storage under `cache/images/processed/` is not yet implemented; only thumbnails are generated in the preprocessing pipeline today.
 - EXIF and GPS metadata are parsed during preprocessing and surfaced in the debug UI, but the on-disk metadata format is minimal and may evolve as later milestones add richer EXIF/sidecar handling.
 - The preprocessing pipeline is resumable via a JSON run journal in `cache/run_journal.json`; it now skips completed stages and resumes batch cursors. Celery (`vibe_photos.task_queue`) is available for durable `pre_process`/`process`/`post_process` workers, while the single-process loop remains the default local entrypoint.
-- The cache database (`cache/index.db`) is populated alongside cache artifacts; cache validity is gated by the manifest version rather than by a separate rebuild path.
+- `cache/index.db` now exists only as a sentinel path for cache roots; cache validity is gated by the manifest version rather than by a separate rebuild path.
 - Caption-aware primary-region fallback in the detection stage assumes that BLIP captions have already been computed and written to `image_caption` for any image that runs detection. Future incremental “detection-only” entry points must either preserve this ordering (captions first) or gracefully disable/adjust caption-based fallbacks to avoid surprising gaps in primary regions.
 
 #### Future technical improvements (beyond M1)
@@ -54,12 +54,12 @@ This file tracks high-level implementation tasks and their status for the Phase 
 ### M2 — Perception Quality & Labeling
 
 - [x] Introduce M2 label layer schema + seeds (scene/attr/object) and build SigLIP text prototypes (`uv run python -m vibe_photos.labels.build_object_prototypes`).
-- [x] Refactor detection pass to feature-only: write `regions` + `region_embedding` in cache DB, drop in-pass label refinement.
+- [x] Refactor detection pass to feature-only: write `regions` + `region_embedding` in the primary database, drop in-pass label refinement.
 - [x] Add region zero-shot object label pass (CLI) that writes `label_assignment` for regions and aggregated images with configurable score/margin.
 - [ ] Improve SigLIP label dictionaries and grouping to reduce manual maintenance of `settings.models.siglip_labels` and cover common creator scenarios (electronics, food, documents, screenshots).
 - [ ] Tighten detection thresholds and add label blacklist/remapping to suppress low-information or noisy nouns in region and image-level labels.
 - [ ] Run targeted evaluations on a labeled subset (≈1k photos) to measure coarse category accuracy, object/product recall, and failure patterns; capture findings in `blueprints/phase_final/knowledge/lessons_learned.md`.
-- [x] Add lightweight tools (CLI or notebooks) to inspect per-label distributions and confusion cases, wired against the existing SQLite + cache stack. (See `python -m vibe_photos.eval.labels --gt samples/ground_truth.json`.)
+- [x] Add lightweight tools (CLI or notebooks) to inspect per-label distributions and confusion cases, wired against the current PostgreSQL + cache stack. (See `python -m vibe_photos.eval.labels --gt samples/ground_truth.json`.)
 
 ### M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)
 

@@ -16,10 +16,13 @@ from vibe_photos.db import (
     ImageEmbedding,
     ImageNearDuplicate,
     ImageScene,
-    open_cache_session,
     open_primary_session,
 )
-from vibe_photos.db_helpers import dialect_insert, sqlite_path_from_target
+from vibe_photos.db_helpers import (
+    dialect_insert,
+    normalize_cache_target,
+    sqlite_path_from_target,
+)
 
 LOGGER = get_logger(__name__)
 
@@ -134,10 +137,11 @@ def _sync_duplicates(src_session: Session, dst_session: Session) -> int:
 
 
 def main(
-    cache_db: str | None = typer.Option(
+    cache_root: str | None = typer.Option(
         None,
+        "--cache-root",
         "--cache-db",
-        help="Cache database URL or path. Defaults to databases.cache_url in settings.yaml.",
+        help="Cache root URL or path. Defaults to databases.cache_url in settings.yaml.",
     ),
     db: str | None = typer.Option(
         None,
@@ -151,12 +155,13 @@ def main(
     """Copy cache tables into the primary DB."""
 
     settings = load_settings()
-    cache_target = cache_db or settings.databases.cache_url
+    cache_target_raw = cache_root or settings.databases.cache_url
+    cache_target = normalize_cache_target(cache_target_raw)
     cache_path = sqlite_path_from_target(cache_target)
     primary_target = db or settings.databases.primary_url
 
     selected = set(tables or ["all"])
-    with open_cache_session(cache_path) as src, open_primary_session(primary_target) as dst:
+    with open_primary_session(cache_target) as src, open_primary_session(primary_target) as dst:
         total = 0
         if "embeddings" in selected or "all" in selected:
             total += _sync_embeddings(src, dst)
@@ -169,7 +174,12 @@ def main(
 
     LOGGER.info(
         "cache_sync_complete",
-        extra={"tables": sorted(selected), "rows_synced": total, "cache_db": str(cache_path), "db": str(primary_target)},
+        extra={
+            "tables": sorted(selected),
+            "rows_synced": total,
+            "cache_root": str(cache_path.parent),
+            "db": str(primary_target),
+        },
     )
 
 

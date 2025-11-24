@@ -23,11 +23,10 @@ from vibe_photos.db import (
     ArtifactRecord,
     PostProcessResult,
     ProcessResult,
-    open_cache_session,
     open_primary_session,
 )
 from vibe_photos.db import Image as ImageRow
-from vibe_photos.db_helpers import sqlite_path_from_target
+from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target
 from vibe_photos.ml.siglip_blip import SiglipBlipDetector
 from vibe_photos.pipeline import PreprocessingPipeline
 from vibe_photos.preprocessing import ensure_preprocessing_artifacts
@@ -47,23 +46,26 @@ def _default_primary_db() -> str:
 
 def _default_cache_db() -> Path:
     settings = _load_settings()
-    return sqlite_path_from_target(settings.databases.cache_url)
+    cache_target = normalize_cache_target(settings.databases.cache_url)
+    return sqlite_path_from_target(cache_target)
 
 
 def _init_celery() -> Celery:
     settings = _load_settings()
     app = Celery("vibe_photos")
-    app.conf.broker_url = settings.queues.broker_url
-    app.conf.result_backend = settings.queues.result_backend
-    app.conf.worker_concurrency = settings.queues.default_concurrency
-    app.conf.worker_prefetch_multiplier = 1
-    app.conf.task_acks_late = True
-    app.conf.task_default_queue = settings.queues.preprocess_queue
-    app.conf.task_routes = {
-        "vibe_photos.task_queue.pre_process": {"queue": settings.queues.preprocess_queue},
-        "vibe_photos.task_queue.process": {"queue": settings.queues.main_queue},
-        "vibe_photos.task_queue.post_process": {"queue": settings.queues.post_process_queue},
-    }
+    app.conf.update(
+        broker_url=settings.queues.broker_url,
+        result_backend=settings.queues.result_backend,
+        worker_concurrency=settings.queues.default_concurrency,
+        worker_prefetch_multiplier=1,
+        task_acks_late=True,
+        task_default_queue=settings.queues.preprocess_queue,
+        task_routes={
+            "vibe_photos.task_queue.pre_process": {"queue": settings.queues.preprocess_queue},
+            "vibe_photos.task_queue.process": {"queue": settings.queues.main_queue},
+            "vibe_photos.task_queue.post_process": {"queue": settings.queues.post_process_queue},
+        },
+    )
     return app
 
 
@@ -80,10 +82,9 @@ def pre_process(image_id: str) -> str:
 
     settings = _load_settings()
     primary_path = _default_primary_db()
-    cache_path = _default_cache_db()
     artifact_root = _artifact_root()
 
-    with open_primary_session(primary_path) as primary_session, open_cache_session(cache_path) as cache_session:
+    with open_primary_session(primary_path) as primary_session:
         row = primary_session.get(ImageRow, image_id)
         if row is None:
             LOGGER.warning("task_image_missing", extra={"image_id": image_id})
@@ -95,7 +96,7 @@ def pre_process(image_id: str) -> str:
             return image_id
 
         image = Image.open(image_path).convert("RGB")
-        manager = ArtifactManager(session=cache_session, root=artifact_root)
+        manager = ArtifactManager(session=primary_session, root=artifact_root)
         detector = SiglipBlipDetector(settings=settings)
 
         artifacts = ensure_preprocessing_artifacts(
@@ -195,15 +196,17 @@ def process(image_id: str) -> str:
 
     settings = _load_settings()
     cache_path = _default_cache_db()
+    cache_root = cache_path.parent
     artifact_root = _artifact_root()
 
     # Ensure cache exists; if missing, run preprocess first.
-    cache_ok = cache_path.exists()
-    emb_file = cache_path.parent / "embeddings" / f"{image_id}.npy"
+    cache_ok = cache_root.exists()
+    emb_file = cache_root / "embeddings" / f"{image_id}.npy"
     if not cache_ok or not emb_file.exists():
         pre_process(image_id)
 
-    with open_cache_session(cache_path) as session:
+    primary_path = _default_primary_db()
+    with open_primary_session(primary_path) as session:
         manager = ArtifactManager(session=session, root=artifact_root)
         embed_spec = ArtifactSpec(
             artifact_type="embedding",
@@ -254,12 +257,12 @@ def process(image_id: str) -> str:
     # duplicates when they are missing or configuration has changed, so it is
     # safe (though potentially heavy) to call from each process() invocation.
     settings = _load_settings()
-    primary_path = _default_primary_db()
     cache_path = _default_cache_db()
+    primary_path = _default_primary_db()
 
     LOGGER.info(
         "label_pipeline_start",
-        extra={"primary_db": str(primary_path), "cache_db": str(cache_path)},
+        extra={"primary_db": str(primary_path), "cache_root": str(cache_path.parent)},
     )
 
     pipeline = PreprocessingPipeline(settings=settings)
@@ -289,9 +292,9 @@ def post_process(image_id: str) -> str:
         LOGGER.info("post_process_disabled", extra={"image_id": image_id})
         return image_id
 
-    cache_path = _default_cache_db()
     artifact_root = _artifact_root()
-    with open_cache_session(cache_path) as session:
+    primary_path = _default_primary_db()
+    with open_primary_session(primary_path) as session:
         manager = ArtifactManager(session=session, root=artifact_root)
         embed_spec = ArtifactSpec(
             artifact_type="embedding",

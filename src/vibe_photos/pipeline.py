@@ -29,7 +29,6 @@ from vibe_photos.db import (
     ImageScene,
     Region,
     RegionEmbedding,
-    open_cache_session,
     open_primary_session,
 )
 from vibe_photos.db_helpers import dialect_insert
@@ -281,12 +280,7 @@ class PreprocessingPipeline:
         return current_idx
 
     def _purge_cache_entries(self, image_ids: Sequence[str], cache_session: Session | None) -> None:
-        """Remove cached artifacts/rows in the cache DB for the provided image IDs.
-
-        The cache database is treated as a feature store; duplicate relationships
-        live in the primary database only and are invalidated via per-image flags
-        on the primary ``Image`` rows.
-        """
+        """Remove cached artifacts/rows for the provided image IDs."""
 
         ids = list({str(image_id) for image_id in image_ids})
         if not ids:
@@ -332,7 +326,7 @@ class PreprocessingPipeline:
         Args:
             roots: Album root directories to scan.
             primary_db_path: Connection target for the primary operational database.
-            cache_db_path: Path to the cache database for model outputs.
+            cache_db_path: Path used to locate the cache root for on-disk artifacts (historically `cache/index.db`).
         """
 
         cache_root = cache_db_path.parent
@@ -357,7 +351,8 @@ class PreprocessingPipeline:
                 extra={"stage": journal.stage, "cursor_image_id": journal.cursor_image_id},
             )
 
-        with open_primary_session(primary_db_path) as primary_session, open_cache_session(cache_db_path) as cache_session:
+        with open_primary_session(primary_db_path) as primary_session:
+            cache_session = primary_session
             stage_plan: list[tuple[str, Callable[[], None], bool]] = [
                 (
                     "scan_and_hash",
@@ -575,7 +570,7 @@ class PreprocessingPipeline:
                 )
 
         primary_session.commit()
-        if cache_session:
+        if cache_session and cache_session is not primary_session:
             cache_session.commit()
 
         if invalidated_ids:
@@ -623,7 +618,7 @@ class PreprocessingPipeline:
             primary_session.add(image)
 
         primary_session.commit()
-        if cache_session:
+        if cache_session and cache_session is not primary_session:
             cache_session.commit()
         self._logger.info("scan_and_hash_complete", extra={"file_count": total_files})
 
@@ -763,7 +758,7 @@ class PreprocessingPipeline:
         region_emb_dir.mkdir(parents=True, exist_ok=True)
 
         # Fallback: if no cache session is provided (e.g., single-image task),
-        # reuse the primary session to avoid crashes, but cache DB is preferred.
+        # reuse the primary session because feature tables now live in the primary DB.
         cache_session = cache_session or primary_session
 
         try:
@@ -1232,6 +1227,8 @@ class PreprocessingPipeline:
         embedding_targets = [image_id for image_id in process_ids if image_id not in existing_embedding_ids]
         caption_targets = [image_id for image_id in process_ids if image_id not in existing_caption_ids]
 
+        same_session = cache_session is primary_session
+
         embedding_total = len(embedding_targets)
         caption_total = len(caption_targets)
 
@@ -1320,11 +1317,13 @@ class PreprocessingPipeline:
                         target_session.execute(stmt)
 
                     _upsert_embedding(cache_session)
-                    _upsert_embedding(primary_session)
+                    if not same_session:
+                        _upsert_embedding(primary_session)
                     total_embeddings += 1
 
             cache_session.commit()
-            primary_session.commit()
+            if not same_session:
+                primary_session.commit()
             if batch_ids:
                 save_run_journal(
                     cache_root,
@@ -1420,11 +1419,13 @@ class PreprocessingPipeline:
                         target_session.execute(stmt)
 
                     _upsert_caption(cache_session)
-                    _upsert_caption(primary_session)
+                    if not same_session:
+                        _upsert_caption(primary_session)
                     total_captions += 1
 
             cache_session.commit()
-            primary_session.commit()
+            if not same_session:
+                primary_session.commit()
 
             if batch_ids:
                 save_run_journal(
@@ -1453,6 +1454,8 @@ class PreprocessingPipeline:
                     )
 
         cache_session.commit()
+        if not same_session:
+            primary_session.commit()
         self._logger.info(
             "embeddings_and_captions_complete",
             extra={"embeddings_created": total_embeddings, "captions_created": total_captions},

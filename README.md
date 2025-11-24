@@ -49,7 +49,7 @@ On Linux or Windows machines with a compatible NVIDIA GPU and CUDA 13.0:
 Database Configuration
 ----------------------
 
-- `config/settings.yml` now includes a `databases` block. By default the primary database points at the local Postgres + pgvector service defined in `docker-compose.yml`, while the cache database remains `sqlite:///cache/index.db` for portability.
+- `config/settings.yml` now includes a `databases` block. By default the primary database points at the local Postgres + pgvector service defined in `docker-compose.yml`. The `databases.cache_url` value is still accepted, but it now serves only to derive the on-disk cache root (for example `sqlite:///cache/index.db` resolves to `cache/`); no secondary database is used at runtime.
 - The default primary DSN is `postgresql+psycopg://vibe:vibe@localhost:5432/vibe_primary`, matching the docker-compose service credentials; override the user/host/dbname as needed.
 - Start the backing services with `docker compose up postgres redis` (or the full stack) before running the pipeline.
 - Override `databases.primary_url` / `databases.cache_url` per environment as needed; all CLIs and services now accept DB URLs in addition to file paths.
@@ -74,7 +74,7 @@ For local runs, the recommended and simplest path is a single-process Typer CLI:
 
 - `vibe_photos.dev.process` — scans album roots, populates the primary database
   (PostgreSQL by default, configured via `databases.primary_url`), and writes all versioned cache artifacts
-  for embeddings, captions, thumbnails, detections, regions, and scene labels into the cache database.
+  for embeddings, captions, thumbnails, detections, regions, and scene labels under the cache root on disk.
 
 Basic single-process run:
 
@@ -84,15 +84,13 @@ Key options:
 
 - `--root`: one or more album root directories to scan (may be passed multiple times).
 - `--db`: primary database URL or path (defaults to `databases.primary_url` in `config/settings.yaml`).
-- `--cache-db`: cache database URL or path (defaults to `databases.cache_url`, which remains SQLite for portability).
+- `--cache-root`: cache root URL or path (defaults to `databases.cache_url`, which resolves to a cache directory such as `cache/`). The legacy `--cache-db` flag remains as an alias for backward compatibility.
 - `--batch-size`: override the model batch size from `config/settings.yaml`.
 - `--device`: override the model device (for example `cpu`, `cuda`, or `mps`).
-- `--image-path`: process a single image into the cache database using shared preprocessing steps.
+- `--image-path`: process a single image using the shared preprocessing steps and write artifacts under the cache root.
 - `--image-id`: optional explicit `image_id` when `--image-path` is used; defaults to the content hash.
 
-`cache/index.db` is a cache of *pre_process* outputs (embeddings, captions, detections, scenes) and is safe to discard; `process` stages read
-from this cache and may copy into the primary DB when required.
-Serve/UI/API should read from the primary Postgres database (configured via `databases.primary_url`); use the sync helper (below) to copy cache tables into primary when needed.
+`cache/index.db` now exists only as a sentinel path that determines where cache files live on disk. All structured metadata (embeddings, captions, scenes, regions, near duplicates, etc.) is stored directly in the primary database, while vectors/JSON payloads remain under `cache/`. Serve/UI/API components should read from the primary database, and cache directories can be purged when the manifest changes.
 
 What a single-process run does:
 
@@ -100,20 +98,19 @@ What a single-process run does:
   hashes (`image_id`) and file metadata.
 - Computes perceptual hashes (`phash`) and builds near-duplicate groups:
   - pHash is recomputed when missing or algorithm changes.
-  - Near-duplicate pairs are incremental: new or content-changed images delete their old pairs and recompute against all active images; if the table is empty, a full pass runs once. Results are written to `image_near_duplicate` in both cache and primary DBs.
+  - Near-duplicate pairs are incremental: new or content-changed images delete their old pairs and recompute against all active images; if the table is empty, a full pass runs once. Results are written to `image_near_duplicate` in the primary DB.
 - Generates JPEG thumbnails under `cache/images/thumbnails/` and writes EXIF and
   GPS metadata JSON under `cache/images/metadata/`.
 - Runs SigLIP embeddings and BLIP captions for canonical images and stores:
   - Embedding vectors under `cache/embeddings/<image_id>.npy`.
   - Embedding metadata under `cache/embeddings/<image_id>.json`.
   - Caption payloads under `cache/captions/<image_id>.json`.
-- Corresponding cache rows in `image_embedding` and `image_caption` (stored in `cache/index.db`; downstream steps may copy to `data/index.db` if needed).
+- Corresponding metadata rows in `image_embedding` and `image_caption` (stored in the primary database).
 - Computes lightweight scene classification attributes and mirrors them into the
-  label layer while retaining the legacy `image_scene` cache table (rows written
-  to `cache/index.db`).
+  label layer via the primary `image_scene` table.
 - Optionally runs OWL-ViT based region detection (when enabled in settings) and
   writes region metadata under `cache/regions/<image_id>.json` plus feature-only
-  `regions` / `region_embedding` tables in `cache/index.db`. Object / cluster
+  `regions` / `region_embedding` tables in the primary database. Object / cluster
   labels are produced later via label passes, not in the detection step.
 - Object label pass respects `object.zero_shot.scene_whitelist` and optional
   `scene_fallback_labels` to avoid noisy predictions on screenshots/documents.
@@ -223,7 +220,7 @@ The cache layer is versioned via a manifest file:
 Going forward:
 
 - When the manifest contents change (for example model swap or cache format bump),
-  the pipeline clears cache artifacts and `cache/index.db` before writing a fresh
+  the pipeline clears cached artifacts under `cache/` before writing a fresh
   manifest, forcing regeneration on the next run.
 - When `cache_format_version` changes, older cache directories are treated as
   untrusted. Re-run the preprocessing pipeline to regenerate compatible cache data
@@ -232,11 +229,12 @@ Going forward:
 Notes and Limitations
 ---------------------
 
-- `cache/index.db` is the cache DB for pre_process outputs and can be safely
-  discarded; cached model outputs should be considered authoritative there, and
-  `process` stages copy needed subsets into `data/index.db` for API/UI use.
+- `cache/index.db` now serves only as a sentinel path to derive the on-disk cache
+  root. All structured cache metadata (embeddings, captions, scenes, regions,
+  near-duplicates, etc.) lives in the primary database, while the actual vectors,
+  captions, thumbnails, and JSON payloads remain on disk under `cache/`.
 - Use `uv run python -m vibe_photos.dev.clear_cache --stage <...>` to invalidate
-  specific cache stages (or `--full-reset` to clear all caches and cache/index.db).
-- When a file’s content hash changes, its cache artifacts and near-duplicate pairs in `cache/index.db` are invalidated and rebuilt on the next run; primary DB rows remain intact for auditability.
+  specific cache stages (or `--full-reset` to clear all caches and the sentinel file).
+- When a file’s content hash changes, its cache artifacts and near-duplicate pairs on disk are invalidated and rebuilt on the next run; primary DB rows remain intact for auditability.
 - All paths in this document are relative to the project root; commands should
   be executed from the repository root with the virtual environment activated.

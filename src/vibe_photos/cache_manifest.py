@@ -119,7 +119,7 @@ def load_cache_manifest(cache_root: Path) -> CacheManifest | None:
 
 
 def clear_cache_artifacts(cache_root: Path) -> None:
-    """Remove cache DB and generated artifacts when the manifest changes."""
+    """Remove generated cache artifacts when the manifest changes."""
 
     for subdir in _CACHE_SUBDIRS:
         path = cache_root / subdir

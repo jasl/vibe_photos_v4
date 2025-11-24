@@ -193,7 +193,7 @@ class ClusterMembership(Base):
 
 
 class Region(Base):
-    """Detection regions persisted in the cache DB (feature layer only).
+    """Detection regions persisted in the feature-layer tables.
 
     The schema follows the M2 blueprint and is intentionally free of any semantic
     labels. It records bounding boxes plus detector provenance; label passes add
@@ -461,13 +461,6 @@ def open_primary_session(target: str | Path) -> Session:
     return Session(engine, future=True)
 
 
-def open_cache_session(target: str | Path) -> Session:
-    """Open a SQLAlchemy session for the cache database."""
-
-    engine = _get_engine(target)
-    return Session(engine, future=True)
-
-
 def reset_cache_tables(session: Session) -> None:
     """Remove cache tables for a clean rebuild when re-running the pipeline."""
 
@@ -497,7 +490,6 @@ __all__ = [
     "LabelAlias",
     "LabelAssignment",
     "open_primary_session",
-    "open_cache_session",
     "dialect_insert",
     "sqlite_path_from_target",
     "reset_cache_tables",

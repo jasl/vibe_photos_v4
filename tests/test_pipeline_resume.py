@@ -35,7 +35,6 @@ def test_pipeline_skips_completed_and_resumes_next_stage(monkeypatch, tmp_path):
     pipeline = PreprocessingPipeline(settings=settings)
 
     monkeypatch.setattr("vibe_photos.pipeline.open_primary_session", _dummy_session)
-    monkeypatch.setattr("vibe_photos.pipeline.open_cache_session", _dummy_session)
 
     executed: list[str] = []
     pipeline._run_scan_and_hash = _stub_stage(executed, "scan_and_hash")  # type: ignore[assignment]
@@ -63,7 +62,6 @@ def test_pipeline_resumes_stage_from_cursor(monkeypatch, tmp_path):
     pipeline = PreprocessingPipeline(settings=settings)
 
     monkeypatch.setattr("vibe_photos.pipeline.open_primary_session", _dummy_session)
-    monkeypatch.setattr("vibe_photos.pipeline.open_cache_session", _dummy_session)
 
     executed: list[str] = []
     pipeline._run_scan_and_hash = _stub_stage(executed, "scan_and_hash")  # type: ignore[assignment]

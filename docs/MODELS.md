@@ -164,7 +164,7 @@ Where `Detection` includes:
 Detections should be stored under:
 
 - JSON cache file per photo under `cache/regions/` (for rebuilds).
-- The feature-only `regions` + `region_embedding` tables in SQLite (cache DB)
+- The feature-only `regions` + `region_embedding` tables in the primary database
   via the ORM models in `src/vibe_photos/db.py`.
 
 ## 4. OCR (Out of Scope for M1)

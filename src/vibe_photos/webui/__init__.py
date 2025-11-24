@@ -23,10 +23,9 @@ from vibe_photos.db import (
     Label,
     LabelAssignment,
     Region,
-    open_cache_session,
     open_primary_session,
 )
-from vibe_photos.db_helpers import sqlite_path_from_target
+from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target
 from vibe_photos.labels.scene_schema import (
     ATTRIBUTE_LABEL_KEYS,
     normalize_scene_filter,
@@ -47,7 +46,8 @@ def _get_primary_db_target() -> str | Path:
 
 def _get_cache_db_path() -> Path:
     settings = load_settings()
-    return sqlite_path_from_target(settings.databases.cache_url)
+    cache_target = normalize_cache_target(settings.databases.cache_url)
+    return sqlite_path_from_target(cache_target)
 
 
 def _get_cache_root() -> Path:
@@ -322,11 +322,8 @@ def image_detail(image_id: str) -> Any:
     primary_path_str = image_row.primary_path
     logical_name = Path(primary_path_str).name
 
-    region_rows: list[Region] = []
-    cache_db_path = _get_cache_db_path()
-    if cache_db_path.exists():
-        with open_cache_session(cache_db_path) as cache_session:
-            region_rows = list(cache_session.execute(select(Region).where(Region.image_id == image_id)).scalars().all())
+    with open_primary_session(primary_target) as cache_session:
+        region_rows = list(cache_session.execute(select(Region).where(Region.image_id == image_id)).scalars().all())
     region_ids = [region.id for region in region_rows]
 
     with open_primary_session(primary_target) as session:
@@ -644,7 +641,6 @@ def image_thumbnail(image_id: str) -> Any:
         )
 
     primary_target = _get_primary_db_target()
-    cache_db_path = _get_cache_db_path()
     cache_root = _get_cache_root()
 
     with open_primary_session(primary_target) as session:
@@ -658,7 +654,7 @@ def image_thumbnail(image_id: str) -> Any:
         phash_hex = row.phash
 
     thumb_path: Path | None = None
-    with open_cache_session(cache_db_path) as cache_session:
+    with open_primary_session(primary_target) as cache_session:
         artifact_row = cache_session.execute(
             select(ArtifactRecord.storage_path).where(
                 ArtifactRecord.image_id == image_id,

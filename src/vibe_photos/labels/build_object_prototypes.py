@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from utils.logging import get_logger
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import Label, LabelAlias, open_primary_session
-from vibe_photos.db_helpers import sqlite_path_from_target
+from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target
 from vibe_photos.ml.models import get_siglip_embedding_model
 
 LOGGER = get_logger(__name__, extra={"command": "build_object_prototypes"})
@@ -104,7 +104,7 @@ def parse_args() -> argparse.Namespace:
         "--cache-root",
         type=str,
         default=None,
-        help="Cache root where prototypes will be stored. Defaults to the cache DB directory.",
+        help="Cache root where prototypes will be stored. Defaults to the directory derived from databases.cache_url.",
     )
     parser.add_argument(
         "--output-name",
@@ -119,10 +119,9 @@ def main() -> None:
     args = parse_args()
     settings = load_settings()
     primary_target = args.db or settings.databases.primary_url
-    if args.cache_root:
-        cache_root = Path(args.cache_root)
-    else:
-        cache_root = sqlite_path_from_target(settings.databases.cache_url).parent
+    cache_input = args.cache_root or settings.databases.cache_url
+    normalized_cache = normalize_cache_target(cache_input)
+    cache_root = sqlite_path_from_target(normalized_cache).parent
 
     with open_primary_session(primary_target) as session:
         build_object_prototypes(session=session, settings=settings, cache_root=cache_root, output_name=args.output_name)

@@ -15,8 +15,8 @@ from PIL import Image
 from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactManager
 from vibe_photos.config import Settings, load_settings
-from vibe_photos.db import open_cache_session, open_primary_session
-from vibe_photos.db_helpers import sqlite_path_from_target
+from vibe_photos.db import open_primary_session
+from vibe_photos.db_helpers import normalize_cache_target, sqlite_path_from_target
 from vibe_photos.hasher import compute_content_hash
 from vibe_photos.labels.build_object_prototypes import build_object_prototypes
 from vibe_photos.labels.object_label_pass import run_object_label_pass
@@ -48,6 +48,7 @@ def ensure_artifacts_for_image(
     *,
     image_id: str | None = None,
     artifact_root: Path | None = None,
+    db_target: str | Path | None = None,
 ) -> str:
     """Create preprocessing artifacts for a single image using shared steps."""
 
@@ -55,7 +56,7 @@ def ensure_artifacts_for_image(
     root = artifact_root or cache_db.parent / "artifacts"
     detector = SiglipBlipDetector(settings=settings)
 
-    with open_cache_session(cache_db) as cache_session:
+    with open_primary_session(db_target or cache_db) as cache_session:
         manager = ArtifactManager(session=cache_session, root=root)
         image = Image.open(image_path).convert("RGB")
         ensure_preprocessing_artifacts(
@@ -87,8 +88,9 @@ def main(
     ),
     cache_db: str | None = typer.Option(
         None,
+        "--cache-root",
         "--cache-db",
-        help="Cache database URL or path. Defaults to databases.cache_url in settings.yaml.",
+        help="Cache root URL or path (defaults to databases.cache_url in settings.yaml).",
     ),
     image_path: Path | None = typer.Option(
         None,
@@ -97,7 +99,7 @@ def main(
         dir_okay=False,
         exists=True,
         readable=True,
-        help="Process a single image into the cache database using shared preprocessing steps.",
+        help="Process a single image (writing artifacts under the cache root) using shared preprocessing steps.",
     ),
     image_id: str | None = typer.Option(
         None,
@@ -136,7 +138,8 @@ def main(
     settings = _apply_cli_overrides(settings, batch_size=batch_size, device=device)
 
     primary_target = db or settings.databases.primary_url
-    cache_target = cache_db or settings.databases.cache_url
+    cache_target_raw = cache_db or settings.databases.cache_url
+    cache_target = normalize_cache_target(cache_target_raw)
     cache_db_path = sqlite_path_from_target(cache_target)
 
     if image_path:
@@ -145,10 +148,11 @@ def main(
             cache_db=cache_db_path,
             settings=settings,
             image_id=image_id,
+            db_target=primary_target,
         )
         LOGGER.info(
             "single_image_process_complete",
-            extra={"image_id": resolved_id, "image_path": str(image_path), "cache_db": str(cache_db_path)},
+            extra={"image_id": resolved_id, "image_path": str(image_path), "cache_root": str(cache_db_path.parent)},
         )
 
         if run_object_labels:
@@ -157,7 +161,8 @@ def main(
             space = label_space or settings.label_spaces.object_current
             proto_path = cache_root / "label_text_prototypes" / f"{proto_name}.npz"
 
-            with open_primary_session(primary_target) as primary_session, open_cache_session(cache_db_path) as cache_session:
+            with open_primary_session(primary_target) as primary_session:
+                cache_session = primary_session
                 if not proto_path.exists():
                     build_object_prototypes(
                         session=primary_session,
@@ -185,7 +190,8 @@ def main(
         space = label_space or settings.label_spaces.object_current
         proto_path = cache_root / "label_text_prototypes" / f"{proto_name}.npz"
 
-        with open_primary_session(primary_target) as primary_session, open_cache_session(cache_db_path) as cache_session:
+        with open_primary_session(primary_target) as primary_session:
+            cache_session = primary_session
             if not proto_path.exists():
                 build_object_prototypes(
                     session=primary_session,

@@ -31,11 +31,11 @@ Status: ready for implementation (implements reviewed guidance for the first mil
 
 4. **SigLIP embeddings & BLIP captions**
    - Compute SigLIP embeddings and BLIP captions for canonical images.
-   - Persist primary results under `cache/embeddings/` and `cache/captions/`, with SQLite cache tables for inspection and lightweight search.
+   - Persist vectors under `cache/embeddings/` and `cache/captions/`, with metadata stored in the primary database for inspection and lightweight search.
 
 5. **Near-duplicate grouping**
    - Use perceptual hashes (`phash`) and a fixed Hamming-distance threshold to group visually similar images into near-duplicate sets.
-   - Persist near-duplicate relationships into `image_near_duplicate` in `cache/index.db` for later cleanup and UX flows.
+   - Persist near-duplicate relationships into `image_near_duplicate` in the primary database for later cleanup and UX flows.
 
 ### Out of Scope (M1)
 - Object-level tagging (`pizza`, `iPhone`, `MacBook Pro`), similarity search and ranking.
@@ -57,14 +57,14 @@ Status: ready for implementation (implements reviewed guidance for the first mil
 ```
 
 Run modes:
-- CLI processing entry point (`uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-db cache/index.db] [--batch-size ... --device ...]`) for scan + hash + classify + embeddings/captions; batch size/device are read from `config/settings.yaml` with CLI flags acting as overrides when provided.
+- CLI processing entry point (`uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-root cache/] [--batch-size ... --device ...]`) for scan + hash + classify + embeddings/captions; `--cache-root` now directly selects the cache directory (the legacy `--cache-db` flag remains as an alias). Batch size/device are read from `config/settings.yaml` with CLI flags acting as overrides when provided.
 - Flask app for manual inspection during development.
 - A cache manifest under `cache/manifest.json` versions model/config settings; preprocessing stages trust cache artifacts only when the manifest matches the active `cache_format_version`, and a run journal in `cache/run_journal.json` supports resumable single-process runs.
 
-## 4. Data Model (SQLite)
-M1 uses two SQLite databases:
-- A **primary operational database** at `data/index.db` for canonical image metadata, model outputs, near-duplicate relationships, and run state. This database is the only one that production-facing services (CLI, Web UI, future APIs) MUST read and write.
-- A **cache database** at `cache/index.db` that MAY mirror the same schema for experimentation or ad-hoc analysis. It is considered disposable and is repopulated during preprocessing runs when the cache manifest matches the current `cache_format_version`; production services SHOULD NOT depend on it.
+## 4. Data Model
+M1 originally targeted two SQLite databases; modern deployments use Postgres for the primary database while retaining the same schema. The former `cache/index.db` path now only indicates where cache files live on disk.
+- A **primary operational database** (SQLite `data/index.db` in early prototypes, PostgreSQL in current builds) stores canonical image metadata, model outputs, near-duplicate relationships, and run state. This database is the only one that production-facing services (CLI, Web UI, future APIs) MUST read and write.
+- A **cache root** under `cache/` stores derived vectors/JSON artifacts. The legacy `cache/index.db` SQLite file is kept only as a sentinel path for compatibility; production services SHOULD NOT treat it as a secondary database.
 
 ### Hash Strategy: Content vs Perceptual
 M1 uses two distinct hash types:
@@ -126,7 +126,7 @@ Deletion semantics in M1:
 - When some paths disappear but at least one valid path remains, the row stays `status = "active"` and the missing paths are removed from `all_paths`.
 - This ensures that a logical image remains active as long as it is present under any configured root.
 
-### `image_scene` table (cache DB: `cache/index.db`)
+### `image_scene` table (primary DB; legacy cache path `cache/index.db`)
 Stores lightweight pre-classification outputs derived from cached detection files under `cache/detections/`.
 
 ```sql
@@ -150,7 +150,7 @@ CREATE INDEX IF NOT EXISTS idx_image_scene_is_screenshot ON image_scene(is_scree
 CREATE INDEX IF NOT EXISTS idx_image_scene_is_document ON image_scene(is_document);
 ```
 
-### `image_embedding` table (cache DB: `cache/index.db`)
+### `image_embedding` table (primary DB; legacy cache path `cache/index.db`)
 Stores metadata for per-image SigLIP embeddings sourced from cache files under `cache/embeddings/`; the schema allows multiple embeddings per image keyed by `model_name`.
 
 ```sql
@@ -167,7 +167,7 @@ CREATE TABLE IF NOT EXISTS image_embedding (
 CREATE INDEX IF NOT EXISTS idx_image_embedding_model_name ON image_embedding(model_name);
 ```
 
-### `image_caption` table (cache DB: `cache/index.db`)
+### `image_caption` table (primary DB; legacy cache path `cache/index.db`)
 Stores BLIP caption outputs sourced from cache files under `cache/captions/`; the schema allows multiple captions per image keyed by `model_name`.
 
 ```sql
@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS image_caption (
 CREATE INDEX IF NOT EXISTS idx_image_caption_model_name ON image_caption(model_name);
 ```
 
-### `image_near_duplicate` table (cache DB: `cache/index.db`)
+### `image_near_duplicate` table (primary DB; legacy cache path `cache/index.db`)
 Stores near-duplicate relationships derived from `images.phash`. This table is fully rebuildable from the `images` table and the pHash algorithm.
 
 ```sql
@@ -249,7 +249,7 @@ pipeline:
 ### 5.0 CLI Parameters
 - `--root`: one or more album root directories to scan (required; may be passed multiple times).
 - `--db`: path to the primary operational SQLite database (optional, defaults to `data/index.db`).
-- `--cache-db`: path to the cache SQLite database for model outputs (optional, defaults to `cache/index.db`).
+- `--cache-root`: path/URL used to locate the cache directory on disk (optional, defaults to the legacy `cache/index.db` sentinel). The `--cache-db` flag is retained as a backwards-compatible alias.
 - `--batch-size`: override the batch size from `config/settings.yaml` for model inference.
 - `--device`: override the device from `config/settings.yaml` (for example `cpu`, `cuda`, `mps`).
 
@@ -315,7 +315,7 @@ pipeline:
 - Write embeddings and captions primarily to cache:
   - Embeddings under `cache/embeddings/<image_id>.npy` (embedding vector + model metadata and preprocessing version).
   - Captions under `cache/captions/<image_id>.json` (caption text + model metadata + timestamps).
-- Project these cached results into the cache SQLite database (`cache/index.db`) using the `image_embedding` and `image_caption` tables to support lightweight search and inspection; cache tables are written during preprocessing when the cache manifest matches the active format version.
+- Project these cached results into the primary database using the `image_embedding` and `image_caption` tables to support lightweight search and inspection; cache metadata is written during preprocessing when the cache manifest matches the active format version.
 - When `skip_duplicates_for_heavy_models=True` in `Settings.pipeline`, only run embeddings and captions for canonical representatives of duplicate/near-duplicate groups:
   - Exact duplicates (identical `image_id`) share one canonical representative.
   - Near-duplicates discovered via `image_near_duplicate` (anchor/duplicate relationships) reuse the anchor image's embeddings and captions.
@@ -345,7 +345,7 @@ pipeline:
   - When the configured algorithm version changes (for example from `"phash64-v2"` to `"phash64-v3"`), select rows where `phash_algo != current_algo` and recompute.
 - Near-duplicate grouping:
   - Define near-duplicates using the Hamming distance between 64-bit `phash` values: two active images are considered near-duplicates when `distance(phash_a, phash_b) <= 16` (repository default; override via `pipeline.phash_hamming_threshold`).
-  - The current implementation rebuilds pairs for dirty images by comparing against all active pHashes (no prefix buckets). Anchors are selected by newer `mtime` (tie-break on `image_id`); pairs are written to both `cache/index.db` and `data/index.db` and are incremental unless the table is empty.
+  - The current implementation rebuilds pairs for dirty images by comparing against all active pHashes (no prefix buckets). Anchors are selected by newer `mtime` (tie-break on `image_id`); pairs are written to the primary database and are incremental unless the table is empty.
   - Heavy-model gating relies on `duplicate_image_id` membership; change detection clears prior pairs for dirty IDs before recomputing.
   - Bucketing by high pHash bits remains a future optimization if scale/perf requires it.
 
@@ -410,18 +410,17 @@ project_root/
       m1_development_plan.md  # this blueprint
 ```
 
-- M1 processing CLI: `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-db cache/index.db] [--batch-size ... --device ...]`, using `config/settings.yaml` as the source of defaults with CLI flags overriding when provided.
-- When `--cache-db` is omitted, the preprocessing CLI uses `cache/index.db` as the default cache database path.
+- M1 processing CLI: `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-root cache/] [--batch-size ... --device ...]`, using `config/settings.yaml` as the source of defaults with CLI flags overriding when provided (the `--cache-db` alias still works).
+- When `--cache-root` is omitted, the preprocessing CLI uses `cache/index.db` as the default cache-root sentinel.
 - Flask Web UI: `FLASK_APP=vibe_photos.webui uv run flask run` for manual inspection during development.
 
 ## 8. Acceptance Criteria
 ### Functional
-- `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db --cache-db cache/index.db --batch-size 16 --device cpu|cuda`:
+- `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db --cache-root cache/ --batch-size 16 --device cpu|cuda`:
   - Populates `images` with active assets, content hashes (`image_id`), and perceptual hashes (`phash`) for all decodable images.
   - Populates `image_scene` for active images and writes corresponding cache files under `cache/detections/`; records errors without stopping.
-  - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 16` by default) and persists them into `image_near_duplicate` in both cache and primary databases.
-  - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 16` by default) and persists them into `image_near_duplicate` in both `cache/index.db` and `data/index.db`; anchors are chosen by `mtime` and tie-broken by `image_id`.
-- Computes SigLIP embeddings and BLIP captions for canonical images and persists them under `cache/embeddings/` and `cache/captions/`, with cache rows written into `image_embedding` and `image_caption`.
+  - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 16` by default) and persists them into `image_near_duplicate` in the primary database; anchors are chosen by `mtime` and tie-broken by `image_id`.
+- Computes SigLIP embeddings and BLIP captions for canonical images and persists them under `cache/embeddings/` and `cache/captions/`, with metadata written into `image_embedding` and `image_caption`.
 - Preprocessing respects `config/settings.yaml` defaults for model IDs, devices, batch sizes, and pipeline flags, with CLI arguments overriding config values when supplied.
 - Re-running skips unchanged images; updates new/modified assets; flags missing paths appropriately.
 - Interrupted runs can resume from recorded checkpoints/batch cursors without reprocessing completed work.

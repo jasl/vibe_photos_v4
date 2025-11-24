@@ -12,7 +12,6 @@ from vibe_photos.db import (
     LabelAssignment,
     Region,
     RegionEmbedding,
-    open_cache_session,
     open_primary_session,
 )
 from vibe_photos.labels.object_label_pass import run_object_label_pass
@@ -33,7 +32,6 @@ def _make_proto(cache_root: Path, label_ids: list[int], label_keys: list[str]) -
 
 def test_object_pass_respects_scene_filters(tmp_path: Path) -> None:
     data_db = tmp_path / "data.db"
-    cache_db = tmp_path / "cache.db"
     cache_root = tmp_path / "cache"
     cache_root.mkdir(parents=True, exist_ok=True)
 
@@ -43,7 +41,8 @@ def test_object_pass_respects_scene_filters(tmp_path: Path) -> None:
     settings.object.zero_shot.scene_whitelist = ["scene.food"]
     settings.object.zero_shot.scene_fallback_labels = {"scene.screenshot": ["object.electronics.laptop"]}
 
-    with open_primary_session(data_db) as primary, open_cache_session(cache_db) as cache_session:
+    with open_primary_session(data_db) as primary:
+        cache_session = primary
         seed_labels(primary)
         primary.commit()
 

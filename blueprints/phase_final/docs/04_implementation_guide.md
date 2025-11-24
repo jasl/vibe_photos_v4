@@ -65,14 +65,14 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
     - Input photo roots (local folders, NAS mounts).
     - Output directories for caches and thumbnails.
     - Model choices and batch sizes.
-- Database (SQLite):
+- Database:
   - Follow the canonical M1 schema defined in `blueprints/m1/m1_development_plan.md`:
-    - A primary operational database under `data/index.db` for canonical image metadata (`images` table with content hash and perceptual hash fields).
-    - A cache database under `cache/index.db` for:
-      - Lightweight scene classification outputs (`image_scene`).
-      - Embedding and caption tables (`image_embedding`, `image_caption`).
-      - Near-duplicate relationships (`image_near_duplicate`) derived from `images.phash`.
-  - All cache tables are rebuildable from caches under `cache/` and the primary database; treat SQLite as a cache layer over durable artifacts.
+    - A primary operational database under `data/index.db` (SQLite era) or PostgreSQL/pgvector (current builds) for canonical image metadata (`images` table with content hash and perceptual hash fields).
+    - A cache root under `cache/` (historically addressed via `cache/index.db`) for:
+      - Lightweight scene classification outputs (`image_scene`) serialized as JSON plus mirrored rows in the primary DB.
+      - Embedding and caption tables (`image_embedding`, `image_caption`) stored in the primary DB with vectors on disk.
+      - Near-duplicate relationships (`image_near_duplicate`) derived from `images.phash`, persisted in the primary DB.
+  - Cache directories are rebuildable from artifacts plus the primary database; treat the legacy SQLite path only as a sentinel for cache location.
 - Image preprocessing:
   - Normalize images (orientation, color profile) and generate:
     - Web‑friendly thumbnails (e.g. 512×512).
@@ -160,8 +160,8 @@ To start M1 development, build on the existing groundwork in the following order
      - Optional derived fields to gate detection/OCR work (for example, only run detection for electronics/food/document/screenshots).
 4. **Design and implement the initial SQLite schema**
    - Start from the canonical M1 schema in `blueprints/m1/m1_development_plan.md`:
-     - `images` in `data/index.db` (paths, `image_id` content hash, `phash`/`phash_algo`/`phash_updated_at`, timestamps, EXIF).
-     - `image_scene`, `image_embedding`, `image_caption`, and `image_near_duplicate` in `cache/index.db` as cache tables derived from cached artifacts and `images`.
+    - `images` in `data/index.db` (paths, `image_id` content hash, `phash`/`phash_algo`/`phash_updated_at`, timestamps, EXIF).
+    - `image_scene`, `image_embedding`, `image_caption`, and `image_near_duplicate` in the primary database, with vectors/JSON artifacts mirrored under `cache/`.
    - Keep schema changes localized and treat caches under `cache/` as the durable source of truth for recomputing databases.
 5. **Add a minimal CLI for running M1**
    - Implement a Typer‑based CLI under `src/` to:

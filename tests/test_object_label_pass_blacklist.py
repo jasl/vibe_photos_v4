@@ -11,7 +11,6 @@ from vibe_photos.db import (
     LabelAssignment,
     Region,
     RegionEmbedding,
-    open_cache_session,
     open_primary_session,
 )
 from vibe_photos.labels.object_label_pass import run_object_label_pass
@@ -40,7 +39,6 @@ def _write_proto(cache_root: Path, label_ids: list[int]) -> None:
 
 def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
     data_db = tmp_path / "data.db"
-    cache_db = tmp_path / "cache.db"
     cache_root = tmp_path / "cache"
 
     settings = Settings()
@@ -48,7 +46,8 @@ def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
     settings.label_spaces.scene_current = "scene_v1"
     settings.object.zero_shot.scene_whitelist = ["scene.product"]
 
-    with open_primary_session(data_db) as primary, open_cache_session(cache_db) as cache_session:
+    with open_primary_session(data_db) as primary:
+        cache_session = primary
         seed_labels(primary)
         primary.commit()
 

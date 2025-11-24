@@ -53,7 +53,7 @@ def sqlite_path_from_target(target: str | Path) -> Path:
 
     database = url.database or ""
     if database == ":memory:":
-        raise ValueError("in-memory SQLite databases are not supported for the cache DB")
+        raise ValueError("in-memory SQLite URLs are not supported for cache roots")
 
     db_path = Path(database)
     if not db_path.is_absolute():
@@ -76,4 +76,28 @@ def dialect_insert(session: Session, table: Any) -> Any:
     raise NotImplementedError(f"Unsupported dialect for upsert: {name}")
 
 
-__all__ = ["normalize_database_url", "sqlite_path_from_target", "dialect_insert"]
+def normalize_cache_target(target: str | Path) -> str:
+    """Return a cache DB target string, accepting cache roots or legacy DB paths."""
+
+    if isinstance(target, Path):
+        base = target
+    else:
+        raw = str(target).strip()
+        if not raw:
+            raise ValueError("cache target cannot be empty")
+        if "://" in raw:
+            return raw
+        base = Path(raw)
+
+    resolved = base.resolve()
+    if resolved.suffix == ".db":
+        return str(resolved)
+    return str((resolved / "index.db").resolve())
+
+
+__all__ = [
+    "normalize_database_url",
+    "sqlite_path_from_target",
+    "normalize_cache_target",
+    "dialect_insert",
+]

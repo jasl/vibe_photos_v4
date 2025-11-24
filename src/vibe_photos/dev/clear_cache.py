@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.cache_manifest import clear_cache_artifacts
+from vibe_photos.config import load_settings
 from vibe_photos.db import (
     ImageCaption,
     ImageEmbedding,
@@ -20,7 +21,7 @@ from vibe_photos.db import (
     ImageScene,
     Region,
     RegionEmbedding,
-    open_cache_session,
+    open_primary_session,
 )
 
 LOGGER = get_logger(__name__)
@@ -88,8 +89,9 @@ def main(
         LOGGER.info("cache_full_reset", extra={"cache_root": str(cache_root)})
         return
 
-    db_path = cache_root / "index.db"
-    with open_cache_session(db_path) as session:
+    settings = load_settings()
+    db_target = settings.databases.primary_url
+    with open_primary_session(db_target) as session:
         _invalidate_db_tables(session, selected)
 
     _invalidate_cache_dirs(cache_root, selected)

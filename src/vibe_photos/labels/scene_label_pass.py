@@ -87,7 +87,8 @@ def _upsert_image_scene(
         target_session.execute(stmt)
 
     _upsert(cache_session)
-    _upsert(primary_session)
+    if cache_session is not primary_session:
+        _upsert(primary_session)
 
 
 def _write_scene_assignment(
@@ -198,6 +199,8 @@ def run_scene_label_pass(
     total = len(target_ids)
     progress_interval = max(1, total // 20) if total else 0
 
+    same_session = cache_session is primary_session
+
     for batch_start in range(0, total, batch_size):
         batch_ids = target_ids[batch_start : batch_start + batch_size]
         embeddings: list[torch.Tensor] = []
@@ -255,7 +258,8 @@ def run_scene_label_pass(
             )
 
         cache_session.commit()
-        primary_session.commit()
+        if not same_session:
+            primary_session.commit()
 
         processed += len(valid_ids)
         if update_cursor and valid_ids:
