@@ -21,7 +21,7 @@ def normalize_database_url(target: str) -> str:
 
     url = make_url(raw)
     if url.drivername.startswith("postgresql") and url.database:
-        return str(url)
+        return str(raw)
 
     raise ValueError(f"Unsupported database dialect {url.drivername!r}; expected postgresql with an explicit database name")
 
