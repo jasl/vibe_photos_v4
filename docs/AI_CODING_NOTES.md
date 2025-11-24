@@ -45,7 +45,7 @@ are written for coding AIs implementing Phase Final pipelines.
 - All model outputs (embeddings, captions, detections) MUST be stored:
   - In versioned JSON or NPY files under `cache/` as the primary source
     of truth.
-  - In a SQLite database as a projection over those caches for query
+  - In a SQLite database as a cache-backed view over those artifacts for query
     and indexing.
 - The database schema is allowed to evolve; cache formats must remain
   stable across migrations so databases can be rebuilt quickly.

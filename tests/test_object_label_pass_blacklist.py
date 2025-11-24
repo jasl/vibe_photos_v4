@@ -11,8 +11,8 @@ from vibe_photos.db import (
     LabelAssignment,
     Region,
     RegionEmbedding,
+    open_cache_session,
     open_primary_session,
-    open_projection_session,
 )
 from vibe_photos.labels.object_label_pass import run_object_label_pass
 from vibe_photos.labels.repository import LabelRepository
@@ -48,7 +48,7 @@ def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
     settings.label_spaces.scene_current = "scene_v1"
     settings.object.zero_shot.scene_whitelist = ["scene.product"]
 
-    with open_primary_session(data_db) as primary, open_projection_session(cache_db) as projection:
+    with open_primary_session(data_db) as primary, open_cache_session(cache_db) as cache_session:
         seed_labels(primary)
         primary.commit()
 
@@ -75,7 +75,7 @@ def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
         primary.commit()
 
         # Region + embedding aligned to old label
-        projection.add(
+        cache_session.add(
             Region(
                 id="img1#0",
                 image_id="img1",
@@ -95,7 +95,7 @@ def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
         vec = np.zeros(4, dtype=np.float32)
         vec[0] = 1.0
         np.save(emb_path, vec)
-        projection.add(
+        cache_session.add(
             RegionEmbedding(
                 region_id="img1#0",
                 model_name=settings.models.embedding.resolved_model_name(),
@@ -105,7 +105,7 @@ def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
                 updated_at=1.0,
             )
         )
-        projection.commit()
+        cache_session.commit()
 
         _write_proto(cache_root, [label_old.id, label_new.id])
 
@@ -114,7 +114,7 @@ def test_object_pass_applies_blacklist_and_remap(tmp_path: Path) -> None:
 
         run_object_label_pass(
             primary_session=primary,
-            projection_session=projection,
+            cache_session=cache_session,
             settings=settings,
             cache_root=cache_root,
             label_space_ver="object_v1",

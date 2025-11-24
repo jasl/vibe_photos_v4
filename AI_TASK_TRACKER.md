@@ -20,11 +20,11 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - [x] Normalize images and generate thumbnails / web-friendly versions. (A preprocessing stage now writes configurable JPEG thumbnails (default 256×256 small, 1024×1024 large) to `cache/images/thumbnails/`, keyed by `image_id`; `/thumbnail/<image_id>` reads from the cache with a fallback to originals. Full normalized copies under `cache/images/processed/` remain future work.)
 - [x] Extract EXIF, capture time, GPS (when present), and file timestamps. (EXIF datetime and camera model are populated on `images` rows during preprocessing; a metadata sidecar is written to `cache/images/metadata/<image_id>.json` with parsed GPS coordinates when present, and the Flask UI displays these fields.)
 - [x] Compute file hashes and perceptual hashes; record near-duplicate relationships. (Content hashes and pHash-based near-duplicate groups are implemented in `src/vibe_photos/hasher.py` and `_run_perceptual_hashing_and_duplicates` in `src/vibe_photos/pipeline.py`; pHash is recomputed only when missing/algorithm changes, and near-duplicate pairs are incremental—dirty images drop their old pairs and recompute against active images, full pass only when the table is empty.)
-- [x] Integrate SigLIP embeddings and BLIP captions; cache results. (Implemented in `_run_embeddings_and_captions` with NPY/JSON caches under `cache/` and projections in SQLite.)
+- [x] Integrate SigLIP embeddings and BLIP captions; cache results. (Implemented in `_run_embeddings_and_captions` with NPY/JSON caches under `cache/` and cache tables in SQLite.)
 - [x] (Optional) Integrate Grounding DINO / OWL-ViT detection and SigLIP re-ranking. (OWL-ViT + SigLIP region re-ranking and JSON caches are implemented; enabled via `models.detection.enabled` and `pipeline.run_detection` settings.)
 - [x] Consolidated preprocessing orchestration onto Celery task queues; the legacy SQLite `preprocess_task` queue and associated enqueue/worker CLIs have been removed in favor of `vibe_photos.task_queue` and `vibe_photos.dev.enqueue_celery`.
 - [x] Add a Celery-backed enqueue helper to scan directories and push `pre_process`/`process`/`post_process` jobs to dedicated queues (`vibe_photos.dev.enqueue_celery`).
-- [x] Define a stable, versioned on-disk format for preprocessing caches under `cache/` that is decoupled from the database schema. (A cache manifest (`cache/manifest.json`) and per-image JSON sidecars now version embeddings, captions, detections, and regions; projection tables are populated during pipeline runs and rely on the manifest for trust.)
+- [x] Define a stable, versioned on-disk format for preprocessing caches under `cache/` that is decoupled from the database schema. (A cache manifest (`cache/manifest.json`) and per-image JSON sidecars now version embeddings, captions, detections, and regions; cache tables are populated during pipeline runs and rely on the manifest for trust.)
 - [x] Build a simple Flask-based debug UI to list canonical photos and show per-photo preprocessing details and similar images. (Implemented in `src/vibe_photos/webui/__init__.py` with templates under `src/vibe_photos/webui/templates`.)
 - [x] Standardize database access on SQLAlchemy ORM/Core models and prohibit new raw SQL usage in pipeline and web UI.
 
@@ -42,7 +42,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - Full image normalization and storage under `cache/images/processed/` is not yet implemented; only thumbnails are generated in the preprocessing pipeline today.
 - EXIF and GPS metadata are parsed during preprocessing and surfaced in the debug UI, but the on-disk metadata format is minimal and may evolve as later milestones add richer EXIF/sidecar handling.
 - The preprocessing pipeline is resumable via a JSON run journal in `cache/run_journal.json`; it now skips completed stages and resumes batch cursors. Celery (`vibe_photos.task_queue`) is available for durable `pre_process`/`process`/`post_process` workers, while the single-process loop remains the default local entrypoint.
-- The projection database (`cache/index.db`) is populated alongside cache artifacts; cache validity is gated by the manifest version rather than by a separate rebuild path.
+- The cache database (`cache/index.db`) is populated alongside cache artifacts; cache validity is gated by the manifest version rather than by a separate rebuild path.
 - Caption-aware primary-region fallback in the detection stage assumes that BLIP captions have already been computed and written to `image_caption` for any image that runs detection. Future incremental “detection-only” entry points must either preserve this ordering (captions first) or gracefully disable/adjust caption-based fallbacks to avoid surprising gaps in primary regions.
 
 #### Future technical improvements (beyond M1)
@@ -62,7 +62,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 
 ### M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)
 
-- [ ] Design PostgreSQL schema and migrations based on the M1/M2 SQLite projections and Phase Final specs.
+- [ ] Design PostgreSQL schema and migrations based on the M1/M2 SQLite cache tables and Phase Final specs.
 - [ ] Implement search and inspection APIs backed by PostgreSQL + pgvector (hybrid text + vector + filters).
 - [ ] Define a `docker-compose` stack (API, workers, DB, Redis, UI) suitable for PC/NAS deployment and wire the existing preprocessing pipeline into this stack.
 

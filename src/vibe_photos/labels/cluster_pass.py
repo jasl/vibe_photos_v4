@@ -32,7 +32,7 @@ LOGGER = get_logger(__name__, extra={"component": "cluster_pass"})
 def run_image_cluster_pass(
     *,
     primary_session: Session,
-    projection_session: Session,
+    cache_session: Session,
     settings: Settings,
     cache_root: Path,
 ) -> tuple[int, int]:
@@ -56,7 +56,7 @@ def run_image_cluster_pass(
         return 0, 0
 
     embedding_model = settings.models.embedding.resolved_model_name()
-    embedding_map = _load_image_embedding_paths(projection_session, embedding_model, target_ids)
+    embedding_map = _load_image_embedding_paths(cache_session, embedding_model, target_ids)
     vectors, valid_ids = _load_vectors(cache_root, embedding_map)
     if len(valid_ids) < int(params.min_size):
         LOGGER.info("image_cluster_skip", extra={"reason": "insufficient_embeddings"})
@@ -99,7 +99,7 @@ def run_image_cluster_pass(
 def run_region_cluster_pass(
     *,
     primary_session: Session,
-    projection_session: Session,
+    cache_session: Session,
     settings: Settings,
     cache_root: Path,
 ) -> tuple[int, int]:
@@ -108,7 +108,7 @@ def run_region_cluster_pass(
     method = "siglip_region_knn_v1"
     params = settings.cluster.region
 
-    region_rows = projection_session.execute(
+    region_rows = cache_session.execute(
         select(
             RegionEmbedding.region_id,
             RegionEmbedding.embedding_path,
@@ -180,9 +180,9 @@ def _load_scene_filtered_images(primary_session: Session, settings: Settings, sc
 
 
 def _load_image_embedding_paths(
-    projection_session: Session, model_name: str, target_ids: Sequence[str]
+    cache_session: Session, model_name: str, target_ids: Sequence[str]
 ) -> dict[str, str]:
-    rows = projection_session.execute(
+    rows = cache_session.execute(
         select(ImageEmbedding.image_id, ImageEmbedding.embedding_path).where(ImageEmbedding.model_name == model_name)
     )
     mapping: dict[str, str] = {}

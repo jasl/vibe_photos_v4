@@ -31,7 +31,7 @@ Status: ready for implementation (implements reviewed guidance for the first mil
 
 4. **SigLIP embeddings & BLIP captions**
    - Compute SigLIP embeddings and BLIP captions for canonical images.
-   - Persist primary results under `cache/embeddings/` and `cache/captions/`, with SQLite projections for inspection and lightweight search.
+   - Persist primary results under `cache/embeddings/` and `cache/captions/`, with SQLite cache tables for inspection and lightweight search.
 
 5. **Near-duplicate grouping**
    - Use perceptual hashes (`phash`) and a fixed Hamming-distance threshold to group visually similar images into near-duplicate sets.
@@ -64,7 +64,7 @@ Run modes:
 ## 4. Data Model (SQLite)
 M1 uses two SQLite databases:
 - A **primary operational database** at `data/index.db` for canonical image metadata, model outputs, near-duplicate relationships, and run state. This database is the only one that production-facing services (CLI, Web UI, future APIs) MUST read and write.
-- A **projection database** at `cache/index.db` that MAY mirror the same schema for experimentation or ad-hoc analysis. It is considered disposable and is repopulated during preprocessing runs when the cache manifest matches the current `cache_format_version`; production services SHOULD NOT depend on it.
+- A **cache database** at `cache/index.db` that MAY mirror the same schema for experimentation or ad-hoc analysis. It is considered disposable and is repopulated during preprocessing runs when the cache manifest matches the current `cache_format_version`; production services SHOULD NOT depend on it.
 
 ### Hash Strategy: Content vs Perceptual
 M1 uses two distinct hash types:
@@ -126,8 +126,8 @@ Deletion semantics in M1:
 - When some paths disappear but at least one valid path remains, the row stays `status = "active"` and the missing paths are removed from `all_paths`.
 - This ensures that a logical image remains active as long as it is present under any configured root.
 
-### `image_scene` table (projection DB: `cache/index.db`)
-Stores lightweight pre-classification outputs as a projection over cached detection files under `cache/detections/`.
+### `image_scene` table (cache DB: `cache/index.db`)
+Stores lightweight pre-classification outputs derived from cached detection files under `cache/detections/`.
 
 ```sql
 CREATE TABLE IF NOT EXISTS image_scene (
@@ -150,8 +150,8 @@ CREATE INDEX IF NOT EXISTS idx_image_scene_is_screenshot ON image_scene(is_scree
 CREATE INDEX IF NOT EXISTS idx_image_scene_is_document ON image_scene(is_document);
 ```
 
-### `image_embedding` table (projection DB: `cache/index.db`)
-Stores metadata for per-image SigLIP embeddings as a projection over cache files under `cache/embeddings/`; the schema allows multiple embeddings per image keyed by `model_name`.
+### `image_embedding` table (cache DB: `cache/index.db`)
+Stores metadata for per-image SigLIP embeddings sourced from cache files under `cache/embeddings/`; the schema allows multiple embeddings per image keyed by `model_name`.
 
 ```sql
 CREATE TABLE IF NOT EXISTS image_embedding (
@@ -167,8 +167,8 @@ CREATE TABLE IF NOT EXISTS image_embedding (
 CREATE INDEX IF NOT EXISTS idx_image_embedding_model_name ON image_embedding(model_name);
 ```
 
-### `image_caption` table (projection DB: `cache/index.db`)
-Stores BLIP caption outputs as a projection over cache files under `cache/captions/`; the schema allows multiple captions per image keyed by `model_name`.
+### `image_caption` table (cache DB: `cache/index.db`)
+Stores BLIP caption outputs sourced from cache files under `cache/captions/`; the schema allows multiple captions per image keyed by `model_name`.
 
 ```sql
 CREATE TABLE IF NOT EXISTS image_caption (
@@ -183,7 +183,7 @@ CREATE TABLE IF NOT EXISTS image_caption (
 CREATE INDEX IF NOT EXISTS idx_image_caption_model_name ON image_caption(model_name);
 ```
 
-### `image_near_duplicate` table (projection DB: `cache/index.db`)
+### `image_near_duplicate` table (cache DB: `cache/index.db`)
 Stores near-duplicate relationships derived from `images.phash`. This table is fully rebuildable from the `images` table and the pHash algorithm.
 
 ```sql
@@ -249,7 +249,7 @@ pipeline:
 ### 5.0 CLI Parameters
 - `--root`: one or more album root directories to scan (required; may be passed multiple times).
 - `--db`: path to the primary operational SQLite database (optional, defaults to `data/index.db`).
-- `--cache-db`: path to the projection/cache SQLite database for model outputs (optional, defaults to `cache/index.db`).
+- `--cache-db`: path to the cache SQLite database for model outputs (optional, defaults to `cache/index.db`).
 - `--batch-size`: override the batch size from `config/settings.yaml` for model inference.
 - `--device`: override the device from `config/settings.yaml` (for example `cpu`, `cuda`, `mps`).
 
@@ -315,7 +315,7 @@ pipeline:
 - Write embeddings and captions primarily to cache:
   - Embeddings under `cache/embeddings/<image_id>.npy` (embedding vector + model metadata and preprocessing version).
   - Captions under `cache/captions/<image_id>.json` (caption text + model metadata + timestamps).
-- Project these cached results into the projection SQLite database (`cache/index.db`) using the `image_embedding` and `image_caption` tables to support lightweight search and inspection; projection tables are written during preprocessing when the cache manifest matches the active format version.
+- Project these cached results into the cache SQLite database (`cache/index.db`) using the `image_embedding` and `image_caption` tables to support lightweight search and inspection; cache tables are written during preprocessing when the cache manifest matches the active format version.
 - When `skip_duplicates_for_heavy_models=True` in `Settings.pipeline`, only run embeddings and captions for canonical representatives of duplicate/near-duplicate groups:
   - Exact duplicates (identical `image_id`) share one canonical representative.
   - Near-duplicates discovered via `image_near_duplicate` (anchor/duplicate relationships) reuse the anchor image's embeddings and captions.
@@ -411,7 +411,7 @@ project_root/
 ```
 
 - M1 processing CLI: `uv run python -m vibe_photos.dev.process --root <album> --db data/index.db [--cache-db cache/index.db] [--batch-size ... --device ...]`, using `config/settings.yaml` as the source of defaults with CLI flags overriding when provided.
-- When `--cache-db` is omitted, the preprocessing CLI uses `cache/index.db` as the default projection/cache database path.
+- When `--cache-db` is omitted, the preprocessing CLI uses `cache/index.db` as the default cache database path.
 - Flask Web UI: `FLASK_APP=vibe_photos.webui uv run flask run` for manual inspection during development.
 
 ## 8. Acceptance Criteria
@@ -421,7 +421,7 @@ project_root/
   - Populates `image_scene` for active images and writes corresponding cache files under `cache/detections/`; records errors without stopping.
   - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 16` by default) and persists them into `image_near_duplicate` in both cache and primary databases.
   - Computes near-duplicate groups based on `phash` Hamming distance (threshold `<= 16` by default) and persists them into `image_near_duplicate` in both `cache/index.db` and `data/index.db`; anchors are chosen by `mtime` and tie-broken by `image_id`.
-  - Computes SigLIP embeddings and BLIP captions for canonical images and persists them under `cache/embeddings/` and `cache/captions/`, with projections into `image_embedding` and `image_caption`.
+- Computes SigLIP embeddings and BLIP captions for canonical images and persists them under `cache/embeddings/` and `cache/captions/`, with cache rows written into `image_embedding` and `image_caption`.
 - Preprocessing respects `config/settings.yaml` defaults for model IDs, devices, batch sizes, and pipeline flags, with CLI arguments overriding config values when supplied.
 - Re-running skips unchanged images; updates new/modified assets; flags missing paths appropriately.
 - Interrupted runs can resume from recorded checkpoints/batch cursors without reprocessing completed work.

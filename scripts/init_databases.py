@@ -14,7 +14,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from utils.logging import get_logger  # noqa: E402
 from vibe_photos.config import load_settings  # noqa: E402
-from vibe_photos.db import open_primary_session, open_projection_session  # noqa: E402
+from vibe_photos.db import open_cache_session, open_primary_session  # noqa: E402
 
 LOGGER = get_logger(__name__)
 
@@ -26,7 +26,7 @@ def _init_primary_db(target: str | Path) -> None:
 
 
 def _init_cache_db(target: str | Path) -> None:
-    session = open_projection_session(target)
+    session = open_cache_session(target)
     session.close()
     LOGGER.info("init_cache_db_ok", extra={"target": str(target)})
 
@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
         "--cache-db",
         type=str,
         default=None,
-        help="Projection database URL or path. Defaults to databases.projection_url in settings.yaml.",
+        help="Cache database URL or path. Defaults to databases.cache_url in settings.yaml.",
     )
     return parser.parse_args()
 
@@ -52,7 +52,7 @@ def main() -> None:
     args = parse_args()
     settings = load_settings()
     primary_target = args.data_db or settings.databases.primary_url
-    cache_target = args.cache_db or settings.databases.projection_url
+    cache_target = args.cache_db or settings.databases.cache_url
     _init_primary_db(primary_target)
     _init_cache_db(cache_target)
     LOGGER.info(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -101,6 +102,51 @@ class DetectionModelConfig:
 
 
 _INFLECT_ENGINE: Any | None = None
+
+
+def _project_root() -> Path:
+    """Best-effort detection of the repository root for config discovery."""
+
+    module_path = Path(__file__).resolve()
+    try:
+        return module_path.parents[2]
+    except IndexError:  # pragma: no cover - defensive fallback
+        return module_path.parent
+
+
+def _build_default_settings_paths() -> list[Path]:
+    """Return candidate settings paths ordered by preference."""
+
+    cwd_candidate = (Path.cwd() / "config" / "settings.yaml").resolve()
+    repo_candidate = (_project_root() / "config" / "settings.yaml").resolve()
+
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in (cwd_candidate, repo_candidate):
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        candidates.append(candidate)
+    return candidates
+
+
+_DEFAULT_SETTINGS_PATHS = _build_default_settings_paths()
+
+
+def _resolve_settings_path(settings_path: Path | str | None) -> Path:
+    """Determine which settings file to load, honoring overrides."""
+
+    if settings_path:
+        return Path(settings_path).expanduser().resolve()
+
+    env_override = os.getenv("VIBE_PHOTOS_SETTINGS")
+    if env_override:
+        return Path(env_override).expanduser().resolve()
+
+    for candidate in _DEFAULT_SETTINGS_PATHS:
+        if candidate.exists():
+            return candidate
+    return _DEFAULT_SETTINGS_PATHS[0]
 
 
 def _get_inflect_engine() -> Any:
@@ -322,10 +368,10 @@ class ClusterConfig:
 
 @dataclass
 class DatabaseConfig:
-    """Database connection targets for primary and projection stores."""
+    """Database connection targets for primary and cache stores."""
 
     primary_url: str = "sqlite:///data/index.db"
-    projection_url: str = "sqlite:///cache/index.db"
+    cache_url: str = "sqlite:///cache/index.db"
 
 
 @dataclass
@@ -424,7 +470,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     The loader is deliberately defensive: if the file is missing or malformed,
     it returns a :class:`Settings` instance populated with default values.
     """
-    path = settings_path or Path("config/settings.yaml")
+    path = _resolve_settings_path(settings_path)
     settings = Settings()
 
     if not path.exists() or not path.is_file():
@@ -441,8 +487,12 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     db_cfg = settings.databases
     if isinstance(databases_raw.get("primary_url"), str):
         db_cfg.primary_url = databases_raw["primary_url"]
-    if isinstance(databases_raw.get("projection_url"), str):
-        db_cfg.projection_url = databases_raw["projection_url"]
+    cache_value = databases_raw.get("cache_url")
+    projection_legacy_value = databases_raw.get("projection_url")
+    if isinstance(cache_value, str):
+        db_cfg.cache_url = cache_value
+    elif isinstance(projection_legacy_value, str):
+        db_cfg.cache_url = projection_legacy_value
 
     models_raw = _as_dict(raw.get("models"))
     embedding_raw = _as_dict(models_raw.get("embedding"))

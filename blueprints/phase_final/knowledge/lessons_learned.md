@@ -26,7 +26,7 @@ This file captures key insights from previous iterations and the updated Phase F
   - Design the perception pipeline to be pluggable so models can evolve without rewriting the rest of the system.
 - Cache aggressively:
   - Thumbnails, detections, captions, embeddings, and (future) OCR results should be cached under `cache/` and reused across runs.
-  - Treat caches as durable artifacts and databases as projections; updating schemas should prefer rebuilds from cache (using a manifest version) over ad‑hoc migration scripts when feasible.
+- Treat caches as durable artifacts and databases as cache layers; updating schemas should prefer rebuilds from cache (using a manifest version) over ad-hoc migration scripts when feasible.
 
 ## 3. Process Improvements
 

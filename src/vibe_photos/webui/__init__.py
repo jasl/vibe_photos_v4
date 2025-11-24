@@ -23,8 +23,8 @@ from vibe_photos.db import (
     Label,
     LabelAssignment,
     Region,
+    open_cache_session,
     open_primary_session,
-    open_projection_session,
     sqlite_path_from_target,
 )
 from vibe_photos.labels.scene_schema import (
@@ -45,13 +45,13 @@ def _get_primary_db_target() -> str | Path:
     return settings.databases.primary_url
 
 
-def _get_projection_db_path() -> Path:
+def _get_cache_db_path() -> Path:
     settings = load_settings()
-    return sqlite_path_from_target(settings.databases.projection_url)
+    return sqlite_path_from_target(settings.databases.cache_url)
 
 
 def _get_cache_root() -> Path:
-    return _get_projection_db_path().parent
+    return _get_cache_db_path().parent
 
 
 def _is_checked(value: str | None) -> bool:
@@ -323,12 +323,10 @@ def image_detail(image_id: str) -> Any:
     logical_name = Path(primary_path_str).name
 
     region_rows: list[Region] = []
-    projection_path = _get_projection_db_path()
-    if projection_path.exists():
-        with open_projection_session(projection_path) as projection_session:
-            region_rows = list(
-                projection_session.execute(select(Region).where(Region.image_id == image_id)).scalars().all()
-            )
+    cache_db_path = _get_cache_db_path()
+    if cache_db_path.exists():
+        with open_cache_session(cache_db_path) as cache_session:
+            region_rows = list(cache_session.execute(select(Region).where(Region.image_id == image_id)).scalars().all())
     region_ids = [region.id for region in region_rows]
 
     with open_primary_session(primary_target) as session:
@@ -646,7 +644,7 @@ def image_thumbnail(image_id: str) -> Any:
         )
 
     primary_target = _get_primary_db_target()
-    projection_path = _get_projection_db_path()
+    cache_db_path = _get_cache_db_path()
     cache_root = _get_cache_root()
 
     with open_primary_session(primary_target) as session:
@@ -660,8 +658,8 @@ def image_thumbnail(image_id: str) -> Any:
         phash_hex = row.phash
 
     thumb_path: Path | None = None
-    with open_projection_session(projection_path) as projection_session:
-        artifact_row = projection_session.execute(
+    with open_cache_session(cache_db_path) as cache_session:
+        artifact_row = cache_session.execute(
             select(ArtifactRecord.storage_path).where(
                 ArtifactRecord.image_id == image_id,
                 ArtifactRecord.artifact_type == thumb_spec.artifact_type,

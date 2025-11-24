@@ -6,7 +6,7 @@
 
 databases:
   primary_url: "postgresql+psycopg://vibe:vibe@localhost:5432/vibe_primary"
-  projection_url: "sqlite:///cache/index.db"
+  cache_url: "sqlite:///cache/index.db"
 
 models:
   embedding:

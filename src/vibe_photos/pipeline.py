@@ -30,8 +30,8 @@ from vibe_photos.db import (
     Region,
     RegionEmbedding,
     dialect_insert,
+    open_cache_session,
     open_primary_session,
-    open_projection_session,
 )
 from vibe_photos.hasher import (
     CONTENT_HASH_ALGO,
@@ -282,28 +282,28 @@ class PreprocessingPipeline:
 
         return current_idx
 
-    def _purge_projection_caches(self, image_ids: Sequence[str], projection_session: Session | None) -> None:
-        """Remove cached artifacts/rows in the projection DB for the provided image IDs."""
+    def _purge_cache_entries(self, image_ids: Sequence[str], cache_session: Session | None) -> None:
+        """Remove cached artifacts/rows in the cache DB for the provided image IDs."""
 
         ids = list({str(image_id) for image_id in image_ids})
         if not ids:
             return
 
-        if projection_session is not None:
-            projection_session.execute(delete(ImageEmbedding).where(ImageEmbedding.image_id.in_(ids)))
-            projection_session.execute(delete(ImageCaption).where(ImageCaption.image_id.in_(ids)))
-            projection_session.execute(delete(ImageScene).where(ImageScene.image_id.in_(ids)))
-            projection_session.execute(delete(Region).where(Region.image_id.in_(ids)))
+        if cache_session is not None:
+            cache_session.execute(delete(ImageEmbedding).where(ImageEmbedding.image_id.in_(ids)))
+            cache_session.execute(delete(ImageCaption).where(ImageCaption.image_id.in_(ids)))
+            cache_session.execute(delete(ImageScene).where(ImageScene.image_id.in_(ids)))
+            cache_session.execute(delete(Region).where(Region.image_id.in_(ids)))
             for image_id in ids:
-                projection_session.execute(
+                cache_session.execute(
                     delete(RegionEmbedding).where(RegionEmbedding.region_id.like(f"{image_id}#%"))
                 )
-            projection_session.execute(
+            cache_session.execute(
                 delete(ImageNearDuplicate).where(
                     or_(ImageNearDuplicate.anchor_image_id.in_(ids), ImageNearDuplicate.duplicate_image_id.in_(ids))
                 )
             )
-            projection_session.commit()
+            cache_session.commit()
 
         cache_root = self._cache_root
         if cache_root:
@@ -321,7 +321,7 @@ class PreprocessingPipeline:
 
             self._near_duplicate_dirty.update(ids)
 
-    def run(self, roots: Sequence[Path], primary_db_path: Path | str, projection_db_path: Path) -> None:
+    def run(self, roots: Sequence[Path], primary_db_path: Path | str, cache_db_path: Path) -> None:
         """Run the preprocessing pipeline for the given album roots.
 
         The initial implementation focuses on wiring and logging. Individual
@@ -331,10 +331,10 @@ class PreprocessingPipeline:
         Args:
             roots: Album root directories to scan.
             primary_db_path: Connection target for the primary operational database.
-            projection_db_path: Path to the projection database for model outputs.
+            cache_db_path: Path to the cache database for model outputs.
         """
 
-        cache_root = projection_db_path.parent
+        cache_root = cache_db_path.parent
         self._cache_root = cache_root
         # Ensure cache manifest exists and matches current settings; resets cache
         # artifacts when the manifest changes.
@@ -344,7 +344,7 @@ class PreprocessingPipeline:
             extra={
                 "roots": [str(root) for root in roots],
                 "primary_db": str(primary_db_path),
-                "projection_db": str(projection_db_path),
+                "cache_db": str(cache_db_path),
             },
         )
 
@@ -356,39 +356,39 @@ class PreprocessingPipeline:
                 extra={"stage": journal.stage, "cursor_image_id": journal.cursor_image_id},
             )
 
-        with open_primary_session(primary_db_path) as primary_session, open_projection_session(projection_db_path) as projection_session:
+        with open_primary_session(primary_db_path) as primary_session, open_cache_session(cache_db_path) as cache_session:
             stage_plan: list[tuple[str, Callable[[], None], bool]] = [
                 (
                     "scan_and_hash",
-                    lambda: self._run_scan_and_hash(roots, primary_session, projection_session),
+                    lambda: self._run_scan_and_hash(roots, primary_session, cache_session),
                     True,
                 ),
                 (
                     "phash_and_duplicates",
-                    lambda: self._run_perceptual_hashing_and_duplicates(primary_session, projection_session),
+                    lambda: self._run_perceptual_hashing_and_duplicates(primary_session, cache_session),
                     True,
                 ),
                 ("thumbnails", lambda: self._run_thumbnails(primary_session), True),
                 (
                     "embeddings_and_captions",
-                    lambda: self._run_embeddings_and_captions(primary_session, projection_session),
+                    lambda: self._run_embeddings_and_captions(primary_session, cache_session),
                     False,
                 ),
-                ("scene_classification", lambda: self._run_scene_classification(primary_session, projection_session), False),
+                ("scene_classification", lambda: self._run_scene_classification(primary_session, cache_session), False),
             ]
 
             if self._settings.pipeline.run_detection and self._settings.models.detection.enabled:
                 stage_plan.append(
                     (
                         "region_detection",
-                        lambda: self._run_region_detection_and_reranking(primary_session, projection_session),
+                        lambda: self._run_region_detection_and_reranking(primary_session, cache_session),
                         False,
                     )
                 )
                 stage_plan.append(
                     (
                         "object_label_pass",
-                        lambda: self._run_object_label_pass_stage(primary_session, projection_session),
+                        lambda: self._run_object_label_pass_stage(primary_session, cache_session),
                         False,
                     )
                 )
@@ -396,7 +396,7 @@ class PreprocessingPipeline:
                 stage_plan.append(
                     (
                         "cluster_pass",
-                        lambda: self._run_cluster_pass(primary_session, projection_session),
+                        lambda: self._run_cluster_pass(primary_session, cache_session),
                         False,
                     )
                 )
@@ -442,7 +442,7 @@ class PreprocessingPipeline:
         self._logger.info("pipeline_complete", extra={})
 
     def _run_scan_and_hash(
-        self, roots: Sequence[Path], primary_session: Session, projection_session: Session
+        self, roots: Sequence[Path], primary_session: Session, cache_session: Session
     ) -> None:
         """Scan album roots and populate the images table with content hashes."""
 
@@ -572,11 +572,11 @@ class PreprocessingPipeline:
                 )
 
         primary_session.commit()
-        if projection_session:
-            projection_session.commit()
+        if cache_session:
+            cache_session.commit()
 
         if invalidated_ids:
-            self._purge_projection_caches(invalidated_ids, projection_session)
+            self._purge_cache_entries(invalidated_ids, cache_session)
 
         now = time.time()
         images = primary_session.execute(select(Image)).scalars()
@@ -620,8 +620,8 @@ class PreprocessingPipeline:
             primary_session.add(image)
 
         primary_session.commit()
-        if projection_session:
-            projection_session.commit()
+        if cache_session:
+            cache_session.commit()
         self._logger.info("scan_and_hash_complete", extra={"file_count": total_files})
 
     def _run_thumbnails(self, primary_session: Session) -> None:
@@ -719,7 +719,7 @@ class PreprocessingPipeline:
     def _run_region_detection_and_reranking(
         self,
         primary_session: Session,
-        projection_session: Session | None = None,
+        cache_session: Session | None = None,
         target_image_ids: Sequence[str] | None = None,
     ) -> None:
         """Detection pass (M2): emit regions + region embeddings, no semantic labels."""
@@ -759,9 +759,9 @@ class PreprocessingPipeline:
         region_emb_dir = cache_root / "embeddings" / "regions" / embedding_model_name
         region_emb_dir.mkdir(parents=True, exist_ok=True)
 
-        # Fallback: if no projection session is provided (e.g., single-image task),
+        # Fallback: if no cache session is provided (e.g., single-image task),
         # reuse the primary session to avoid crashes, but cache DB is preferred.
-        projection_session = projection_session or primary_session
+        cache_session = cache_session or primary_session
 
         try:
             detector: OwlVitDetector = build_owlvit_detector(settings=self._settings)
@@ -792,7 +792,7 @@ class PreprocessingPipeline:
 
         caption_cfg = self._settings.models.caption
         caption_model_name = caption_cfg.resolved_model_name()
-        caption_rows = projection_session.execute(
+        caption_rows = cache_session.execute(
             select(ImageCaption.image_id, ImageCaption.caption).where(ImageCaption.model_name == caption_model_name)
         )
         captions_by_id: dict[str, str] = {row.image_id: row.caption for row in caption_rows}
@@ -849,8 +849,8 @@ class PreprocessingPipeline:
             detections = non_max_suppression(detections, iou_threshold=nms_iou_threshold)
 
             # Remove any existing regions/embeddings for this image_id to keep results consistent with the current model.
-            projection_session.execute(delete(Region).where(Region.image_id == image_id))
-            projection_session.execute(delete(RegionEmbedding).where(RegionEmbedding.region_id.like(f"{image_id}#%")))
+            cache_session.execute(delete(Region).where(Region.image_id == image_id))
+            cache_session.execute(delete(RegionEmbedding).where(RegionEmbedding.region_id.like(f"{image_id}#%")))
 
             width, height = image.size
 
@@ -965,7 +965,7 @@ class PreprocessingPipeline:
 
             for new_index, det in enumerate(detections):
                 region_id = f"{image_id}#{new_index}"
-                projection_session.add(
+                cache_session.add(
                     Region(
                         id=region_id,
                         image_id=image_id,
@@ -987,7 +987,7 @@ class PreprocessingPipeline:
                     emb_path.parent.mkdir(parents=True, exist_ok=True)
                     np.save(emb_path, emb_vec)
 
-                    projection_session.add(
+                    cache_session.add(
                         RegionEmbedding(
                             region_id=region_id,
                             model_name=embedding_model_name,
@@ -1011,7 +1011,7 @@ class PreprocessingPipeline:
                     }
                 )
 
-            projection_session.commit()
+            cache_session.commit()
             updated_rows += len(region_payloads)
 
             payload = {
@@ -1046,7 +1046,7 @@ class PreprocessingPipeline:
             extra={"regions_created": updated_rows},
         )
 
-    def _run_object_label_pass_stage(self, primary_session: Session, projection_session: Session) -> None:
+    def _run_object_label_pass_stage(self, primary_session: Session, cache_session: Session) -> None:
         """Run object label pass based on cached region embeddings."""
 
         if self._cache_root is None:
@@ -1068,7 +1068,7 @@ class PreprocessingPipeline:
 
         run_object_label_pass(
             primary_session=primary_session,
-            projection_session=projection_session,
+            cache_session=cache_session,
             settings=self._settings,
             cache_root=cache_root,
             label_space_ver=self._settings.label_spaces.object_current,
@@ -1084,7 +1084,7 @@ class PreprocessingPipeline:
             extra={"duplicate_labels_propagated": propagated},
         )
 
-    def _run_cluster_pass(self, primary_session: Session, projection_session: Session) -> None:
+    def _run_cluster_pass(self, primary_session: Session, cache_session: Session) -> None:
         """Run image + region clustering passes."""
 
         if self._cache_root is None:
@@ -1095,13 +1095,13 @@ class PreprocessingPipeline:
 
         image_clusters, image_members = run_image_cluster_pass(
             primary_session=primary_session,
-            projection_session=projection_session,
+            cache_session=cache_session,
             settings=self._settings,
             cache_root=cache_root,
         )
         region_clusters, region_members = run_region_cluster_pass(
             primary_session=primary_session,
-            projection_session=projection_session,
+            cache_session=cache_session,
             settings=self._settings,
             cache_root=cache_root,
         )
@@ -1121,7 +1121,7 @@ class PreprocessingPipeline:
             },
         )
 
-    def _run_scene_classification(self, primary_session: Session, projection_session: Session) -> None:
+    def _run_scene_classification(self, primary_session: Session, cache_session: Session) -> None:
         """Run scene label pass that mirrors outputs into the label layer."""
 
         if self._cache_root is None:
@@ -1147,7 +1147,7 @@ class PreprocessingPipeline:
 
         processed = run_scene_label_pass(
             primary_session=primary_session,
-            projection_session=projection_session,
+            cache_session=cache_session,
             settings=self._settings,
             cache_root=cache_root,
             label_space_ver=self._settings.label_spaces.scene_current,
@@ -1169,7 +1169,7 @@ class PreprocessingPipeline:
                 extra={"processed": processed, "duplicate_labels_propagated": propagated},
             )
 
-    def _run_embeddings_and_captions(self, primary_session: Session, projection_session: Session) -> None:
+    def _run_embeddings_and_captions(self, primary_session: Session, cache_session: Session) -> None:
         """Compute SigLIP embeddings and BLIP captions for canonical images."""
 
         if self._cache_root is None:
@@ -1214,14 +1214,14 @@ class PreprocessingPipeline:
 
         existing_embedding_ids = {
             row.image_id
-            for row in projection_session.execute(
+            for row in cache_session.execute(
                 select(ImageEmbedding.image_id).where(ImageEmbedding.model_name == embedding_model_name)
             )
         }
 
         existing_caption_ids = {
             row.image_id
-            for row in projection_session.execute(
+            for row in cache_session.execute(
                 select(ImageCaption.image_id).where(ImageCaption.model_name == caption_model_name)
             )
         }
@@ -1316,11 +1316,11 @@ class PreprocessingPipeline:
                         )
                         target_session.execute(stmt)
 
-                    _upsert_embedding(projection_session)
+                    _upsert_embedding(cache_session)
                     _upsert_embedding(primary_session)
                     total_embeddings += 1
 
-            projection_session.commit()
+            cache_session.commit()
             primary_session.commit()
             if batch_ids:
                 save_run_journal(
@@ -1416,11 +1416,11 @@ class PreprocessingPipeline:
                         )
                         target_session.execute(stmt)
 
-                    _upsert_caption(projection_session)
+                    _upsert_caption(cache_session)
                     _upsert_caption(primary_session)
                     total_captions += 1
 
-            projection_session.commit()
+            cache_session.commit()
             primary_session.commit()
 
             if batch_ids:
@@ -1449,7 +1449,7 @@ class PreprocessingPipeline:
                         },
                     )
 
-        projection_session.commit()
+        cache_session.commit()
         self._logger.info(
             "embeddings_and_captions_complete",
             extra={"embeddings_created": total_embeddings, "captions_created": total_captions},
@@ -1636,7 +1636,7 @@ class PreprocessingPipeline:
 
         self._run_region_detection_and_reranking(primary_session, target_image_ids=[image_id])
 
-    def _run_perceptual_hashing_and_duplicates(self, primary_session: Session, projection_session: Session) -> None:
+    def _run_perceptual_hashing_and_duplicates(self, primary_session: Session, cache_session: Session) -> None:
         """Compute perceptual hashes and rebuild near-duplicate groups."""
 
         self._logger.info("phash_and_duplicates_start", extra={})
@@ -1792,7 +1792,7 @@ class PreprocessingPipeline:
                 row.anchor_image_id,
                 row.duplicate_image_id,
             )
-            for row in projection_session.execute(select(ImageNearDuplicate)).scalars()
+            for row in cache_session.execute(select(ImageNearDuplicate)).scalars()
         )
 
         if not existing_pairs:
@@ -1802,7 +1802,7 @@ class PreprocessingPipeline:
             self._logger.info("phash_and_duplicates_skip", extra={"reason": "no_dirty_ids"})
             return
 
-        projection_session.execute(
+        cache_session.execute(
             delete(ImageNearDuplicate).where(
                 or_(ImageNearDuplicate.anchor_image_id.in_(dirty_ids), ImageNearDuplicate.duplicate_image_id.in_(dirty_ids))
             )
@@ -1839,7 +1839,7 @@ class PreprocessingPipeline:
                     continue
                 pairs_to_add.add(pair)
 
-                projection_session.add(
+                cache_session.add(
                     ImageNearDuplicate(
                         anchor_image_id=anchor_id,
                         duplicate_image_id=duplicate_id,
@@ -1857,10 +1857,10 @@ class PreprocessingPipeline:
                 )
                 pair_count += 1
                 if pair_count % 1000 == 0:
-                    projection_session.commit()
+                    cache_session.commit()
                     primary_session.commit()
 
-        projection_session.commit()
+        cache_session.commit()
         primary_session.commit()
 
         self._near_duplicate_dirty.clear()

@@ -68,11 +68,11 @@ Goal: Build a robust, efficient pipeline that can process tens of thousands of p
 - Database (SQLite):
   - Follow the canonical M1 schema defined in `blueprints/m1/m1_development_plan.md`:
     - A primary operational database under `data/index.db` for canonical image metadata (`images` table with content hash and perceptual hash fields).
-    - A projection database under `cache/index.db` for:
+    - A cache database under `cache/index.db` for:
       - Lightweight scene classification outputs (`image_scene`).
-      - Embedding and caption projections (`image_embedding`, `image_caption`).
+      - Embedding and caption tables (`image_embedding`, `image_caption`).
       - Near-duplicate relationships (`image_near_duplicate`) derived from `images.phash`.
-  - All projection tables are rebuildable from caches under `cache/` and the primary database; treat SQLite as a projection layer over durable caches.
+  - All cache tables are rebuildable from caches under `cache/` and the primary database; treat SQLite as a cache layer over durable artifacts.
 - Image preprocessing:
   - Normalize images (orientation, color profile) and generate:
     - Web‑friendly thumbnails (e.g. 512×512).
@@ -161,7 +161,7 @@ To start M1 development, build on the existing groundwork in the following order
 4. **Design and implement the initial SQLite schema**
    - Start from the canonical M1 schema in `blueprints/m1/m1_development_plan.md`:
      - `images` in `data/index.db` (paths, `image_id` content hash, `phash`/`phash_algo`/`phash_updated_at`, timestamps, EXIF).
-     - `image_scene`, `image_embedding`, `image_caption`, and `image_near_duplicate` in `cache/index.db` as projections over caches and `images`.
+     - `image_scene`, `image_embedding`, `image_caption`, and `image_near_duplicate` in `cache/index.db` as cache tables derived from cached artifacts and `images`.
    - Keep schema changes localized and treat caches under `cache/` as the durable source of truth for recomputing databases.
 5. **Add a minimal CLI for running M1**
    - Implement a Typer‑based CLI under `src/` to:
@@ -278,7 +278,7 @@ You MUST respect these constraints (see `AI_CODING_STANDARDS.md` and `docs/AI_CO
    - Detection batching is optional in M1.
 6. Caching and DB separation
    - Treat caches under `cache/` (JSON/NPY, with model and pipeline version info) as the durable source of truth.
-   - SQLite (under `data/`) is a projection over caches and may be rebuilt.
+   - SQLite (under `data/`) is a cache-backed replica and may be rebuilt.
 7. Modern Python style
    - Python 3.12, type hints, `dataclasses`, `pathlib.Path`.
    - Follow import order and logging rules from `AI_CODING_STANDARDS.md`.

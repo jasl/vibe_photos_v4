@@ -583,7 +583,7 @@ M2 在感知层不过度追求全新模型，而是围绕现有 SigLIP / BLIP / 
 #### 5.1.5 特征存储（可选）
 
 上述 face_count、screenshot_score、document_score 等中间特征可以只在 scene/attribute pass 内存中使用；  
-为了便于后续系统化调参与评估，推荐在 projection DB（当前为 `cache/index.db`）中增加轻量的 image‑level feature 表，将这些标量以 JSON 形式投影：
+为了便于后续系统化调参与评估，推荐在 cache DB（当前为 `cache/index.db`）中增加轻量的 image‑level feature 表，将这些标量以 JSON 形式存储：
 
 ```sql
 CREATE TABLE image_features (
@@ -804,8 +804,8 @@ M2 只在数据结构层面预留：
        - `extra_json` 建议包含：
          - `{"from_region": region_id, "sim_rank": idx, "margin": margin}`。
 - 典型函数签名可类似：
-  - `run_object_label_pass(settings, cache_root, projection_session, label_space_ver="object_v1", prototype_name="object_v1", embedding_model_name=...)`；
-  - 其中 `projection_session` 负责操作主库中与 label 层相关的表（`labels / label_aliases / label_assignment`），`regions / region_embedding` 则按 4.4 约定从 cache DB 提供视图或投影表。
+  - `run_object_label_pass(settings, cache_root, cache_session, label_space_ver="object_v1", prototype_name="object_v1", embedding_model_name=...)`；
+  - 其中 `cache_session` 负责操作主库中与 label 层相关的表（`labels / label_aliases / label_assignment`），`regions / region_embedding` 则按 4.4 约定从 cache DB 提供视图或投影表。
 - 在 pipeline 串联上，推荐在 detection 阶段（写完 `regions + region_embedding`）之后、scene label pass 之前增加一个 Object Label Pass stage（例如 `run_object_label_pass`），确保下游 clustering 和 QA UI 可以直接使用 object 标签。
 
 ### 6.3 标签层约束与合法组合

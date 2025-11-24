@@ -44,7 +44,7 @@ Goal: Promote the architecture to its Phase Final form with PostgreSQL + pgvecto
 
 - [ ] Design PostgreSQL schema:
   - [ ] Translate the canonical schema (`blueprints/phase_final/specs/database_schema.sql`) to PostgreSQL, including pgvector columns for embeddings.
-  - [ ] Ensure tables map cleanly from the current SQLite projections (M1/M2) to PostgreSQL entities.
+- [ ] Ensure tables map cleanly from the current SQLite cache tables (M1/M2) to PostgreSQL entities.
   - [ ] Decide where to store:
     - [ ] Photo records and regions.
     - [ ] Embeddings and captions.

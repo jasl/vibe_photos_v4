@@ -20,8 +20,8 @@ from vibe_photos.db import (
     LabelAssignment,
     Region,
     RegionEmbedding,
+    open_cache_session,
     open_primary_session,
-    open_projection_session,
     sqlite_path_from_target,
 )
 from vibe_photos.labels.repository import LabelRepository
@@ -44,8 +44,8 @@ def _load_prototypes(cache_root: Path, prototype_name: str) -> tuple[np.ndarray,
     return data["label_ids"], data["prototypes"]
 
 
-def _load_region_rows(projection_session: Session, embedding_model_name: str) -> list[RegionEmbeddingRow]:
-    rows = projection_session.execute(
+def _load_region_rows(cache_session: Session, embedding_model_name: str) -> list[RegionEmbeddingRow]:
+    rows = cache_session.execute(
         select(RegionEmbedding.region_id, RegionEmbedding.embedding_path, Region.image_id)
         .join(Region, Region.id == RegionEmbedding.region_id)
         .where(RegionEmbedding.model_name == embedding_model_name)
@@ -80,7 +80,7 @@ def _load_scene_labels(primary_session: Session, settings: Settings) -> dict[str
 def run_object_label_pass(
     *,
     primary_session: Session,
-    projection_session: Session,
+    cache_session: Session,
     settings: Settings,
     cache_root: Path,
     label_space_ver: str | None = None,
@@ -147,7 +147,7 @@ def run_object_label_pass(
         return label, raw_label_id
 
     embedding_model_name = settings.models.embedding.resolved_model_name()
-    emb_rows = _load_region_rows(projection_session, embedding_model_name)
+    emb_rows = _load_region_rows(cache_session, embedding_model_name)
     if not emb_rows:
         LOGGER.info("object_label_pass_no_regions", extra={})
         return
@@ -292,13 +292,13 @@ def parse_args() -> argparse.Namespace:
         "--cache-db",
         type=str,
         default=None,
-        help="Projection database URL or path. Defaults to databases.projection_url in settings.yaml.",
+        help="Cache database URL or path. Defaults to databases.cache_url in settings.yaml.",
     )
     parser.add_argument(
         "--cache-root",
         type=str,
         default=None,
-        help="Cache root containing embeddings. Defaults to the projection DB directory.",
+        help="Cache root containing embeddings. Defaults to the cache DB directory.",
     )
     parser.add_argument("--label-space", type=str, default="object_v1", help="Label space version for assignments.")
     parser.add_argument("--prototype", type=str, default="object_v1", help="Prototype file name (without .npz).")
@@ -309,16 +309,16 @@ def main() -> None:
     args = parse_args()
     settings = load_settings()
     primary_target = args.data_db or settings.databases.primary_url
-    cache_target = args.cache_db or settings.databases.projection_url
+    cache_target = args.cache_db or settings.databases.cache_url
     if args.cache_root:
         cache_root = Path(args.cache_root)
     else:
         cache_root = sqlite_path_from_target(cache_target).parent
 
-    with open_primary_session(primary_target) as primary_session, open_projection_session(cache_target) as projection_session:
+    with open_primary_session(primary_target) as primary_session, open_cache_session(cache_target) as cache_session:
         run_object_label_pass(
             primary_session=primary_session,
-            projection_session=projection_session,
+            cache_session=cache_session,
             settings=settings,
             cache_root=cache_root,
             label_space_ver=args.label_space,

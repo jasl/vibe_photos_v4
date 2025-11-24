@@ -422,7 +422,7 @@ def sqlite_path_from_target(target: str | Path) -> Path:
 
     database = url.database or ""
     if database == ":memory:":
-        raise ValueError("in-memory SQLite databases are not supported for projection cache")
+        raise ValueError("in-memory SQLite databases are not supported for the cache DB")
 
     db_path = Path(database)
     if not db_path.is_absolute():
@@ -503,15 +503,15 @@ def open_primary_session(target: str | Path) -> Session:
     return Session(engine, future=True)
 
 
-def open_projection_session(target: str | Path) -> Session:
-    """Open a SQLAlchemy session for the projection database."""
+def open_cache_session(target: str | Path) -> Session:
+    """Open a SQLAlchemy session for the cache database."""
 
     engine = _get_engine(target)
     return Session(engine, future=True)
 
 
-def reset_projection_tables(session: Session) -> None:
-    """Remove projection tables for a clean rebuild when re-running the pipeline."""
+def reset_cache_tables(session: Session) -> None:
+    """Remove cache tables for a clean rebuild when re-running the pipeline."""
 
     session.execute(delete(ImageScene))
     session.execute(delete(ImageEmbedding))
@@ -554,8 +554,8 @@ __all__ = [
     "LabelAlias",
     "LabelAssignment",
     "open_primary_session",
-    "open_projection_session",
+    "open_cache_session",
     "dialect_insert",
     "sqlite_path_from_target",
-    "reset_projection_tables",
+    "reset_cache_tables",
 ]

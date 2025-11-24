@@ -1,4 +1,4 @@
-"""CLI to copy cache projection tables into the primary DB for API/UI use."""
+"""CLI to copy cache tables into the primary DB for API/UI use."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ from vibe_photos.db import (
     ImageNearDuplicate,
     ImageScene,
     dialect_insert,
+    open_cache_session,
     open_primary_session,
-    open_projection_session,
     sqlite_path_from_target,
 )
 
@@ -138,7 +138,7 @@ def main(
     cache_db: str | None = typer.Option(
         None,
         "--cache-db",
-        help="Projection database URL or path. Defaults to databases.projection_url in settings.yaml.",
+        help="Cache database URL or path. Defaults to databases.cache_url in settings.yaml.",
     ),
     db: str | None = typer.Option(
         None,
@@ -149,15 +149,15 @@ def main(
         ["all"], "--table", "-t", help="Tables to sync: embeddings, captions, scenes, duplicates, or all."
     ),
 ) -> None:
-    """Copy cache projection tables into the primary DB."""
+    """Copy cache tables into the primary DB."""
 
     settings = load_settings()
-    cache_target = cache_db or settings.databases.projection_url
+    cache_target = cache_db or settings.databases.cache_url
     cache_path = sqlite_path_from_target(cache_target)
     primary_target = db or settings.databases.primary_url
 
     selected = set(tables or ["all"])
-    with open_projection_session(cache_path) as src, open_primary_session(primary_target) as dst:
+    with open_cache_session(cache_path) as src, open_primary_session(primary_target) as dst:
         total = 0
         if "embeddings" in selected or "all" in selected:
             total += _sync_embeddings(src, dst)

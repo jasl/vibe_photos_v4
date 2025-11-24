@@ -12,8 +12,8 @@ from vibe_photos.db import (
     LabelAssignment,
     Region,
     RegionEmbedding,
+    open_cache_session,
     open_primary_session,
-    open_projection_session,
 )
 from vibe_photos.labels.object_label_pass import run_object_label_pass
 from vibe_photos.labels.seed_labels import seed_labels
@@ -43,7 +43,7 @@ def test_object_pass_respects_scene_filters(tmp_path: Path) -> None:
     settings.object.zero_shot.scene_whitelist = ["scene.food"]
     settings.object.zero_shot.scene_fallback_labels = {"scene.screenshot": ["object.electronics.laptop"]}
 
-    with open_primary_session(data_db) as primary, open_projection_session(cache_db) as projection:
+    with open_primary_session(data_db) as primary, open_cache_session(cache_db) as cache_session:
         seed_labels(primary)
         primary.commit()
 
@@ -83,7 +83,7 @@ def test_object_pass_respects_scene_filters(tmp_path: Path) -> None:
         # regions + embeddings
         for img_id in ("img_food", "img_ss"):
             region_id = f"{img_id}#0"
-            projection.add(
+            cache_session.add(
                 Region(
                     id=region_id,
                     image_id=img_id,
@@ -103,7 +103,7 @@ def test_object_pass_respects_scene_filters(tmp_path: Path) -> None:
             vec = np.zeros(4, dtype=np.float32)
             vec[0] = 1.0  # align with laptop prototype
             np.save(emb_path, vec)
-            projection.add(
+            cache_session.add(
                 RegionEmbedding(
                     region_id=region_id,
                     model_name=settings.models.embedding.resolved_model_name(),
@@ -113,7 +113,7 @@ def test_object_pass_respects_scene_filters(tmp_path: Path) -> None:
                     updated_at=now,
                 )
             )
-        projection.commit()
+        cache_session.commit()
 
         # dummy stale assignment to ensure cleanup
         primary.add(
@@ -135,7 +135,7 @@ def test_object_pass_respects_scene_filters(tmp_path: Path) -> None:
 
         run_object_label_pass(
             primary_session=primary,
-            projection_session=projection,
+            cache_session=cache_session,
             settings=settings,
             cache_root=cache_root,
             label_space_ver="object_v1",

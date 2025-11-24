@@ -20,7 +20,7 @@ from vibe_photos.db import (
     ImageScene,
     Region,
     RegionEmbedding,
-    open_projection_session,
+    open_cache_session,
 )
 
 LOGGER = get_logger(__name__)
@@ -89,7 +89,7 @@ def main(
         return
 
     db_path = cache_root / "index.db"
-    with open_projection_session(db_path) as session:
+    with open_cache_session(db_path) as session:
         _invalidate_db_tables(session, selected)
 
     _invalidate_cache_dirs(cache_root, selected)

@@ -37,9 +37,9 @@ def _margin_to_probability(margin: float) -> float:
     return float(1.0 / (1.0 + math.exp(-margin)))
 
 
-def _load_embedding_rows(projection_session: Session, model_name: str) -> dict[str, str]:
+def _load_embedding_rows(cache_session: Session, model_name: str) -> dict[str, str]:
     stmt = select(ImageEmbedding.image_id, ImageEmbedding.embedding_path).where(ImageEmbedding.model_name == model_name)
-    rows = projection_session.execute(stmt).all()
+    rows = cache_session.execute(stmt).all()
     return {row.image_id: row.embedding_path for row in rows}
 
 
@@ -52,7 +52,7 @@ def _upsert_image_scene(
     *,
     image_id: str,
     attributes: SceneAttributes,
-    projection_session: Session,
+    cache_session: Session,
     primary_session: Session,
 ) -> None:
     now = time.time()
@@ -85,7 +85,7 @@ def _upsert_image_scene(
         )
         target_session.execute(stmt)
 
-    _upsert(projection_session)
+    _upsert(cache_session)
     _upsert(primary_session)
 
 
@@ -161,7 +161,7 @@ def _write_attribute_assignments(
 def run_scene_label_pass(
     *,
     primary_session: Session,
-    projection_session: Session,
+    cache_session: Session,
     settings: Settings,
     cache_root: Path,
     label_space_ver: str | None = None,
@@ -173,7 +173,7 @@ def run_scene_label_pass(
     label_space = label_space_ver or settings.label_spaces.scene_current
     embedding_model = settings.models.embedding.resolved_model_name()
 
-    embedding_paths = _load_embedding_rows(projection_session, embedding_model)
+    embedding_paths = _load_embedding_rows(cache_session, embedding_model)
     if not embedding_paths:
         LOGGER.info("scene_label_pass_no_embeddings", extra={"model_name": embedding_model})
         return 0
@@ -249,11 +249,11 @@ def run_scene_label_pass(
             _upsert_image_scene(
                 image_id=image_id,
                 attributes=attrs,
-                projection_session=projection_session,
+                cache_session=cache_session,
                 primary_session=primary_session,
             )
 
-        projection_session.commit()
+        cache_session.commit()
         primary_session.commit()
 
         processed += len(valid_ids)

@@ -108,7 +108,7 @@ def parse_args() -> argparse.Namespace:
         "--cache-root",
         type=str,
         default=None,
-        help="Cache root where prototypes will be stored. Defaults to the projection DB directory.",
+        help="Cache root where prototypes will be stored. Defaults to the cache DB directory.",
     )
     parser.add_argument(
         "--output-name",
@@ -126,7 +126,7 @@ def main() -> None:
     if args.cache_root:
         cache_root = Path(args.cache_root)
     else:
-        cache_root = sqlite_path_from_target(settings.databases.projection_url).parent
+        cache_root = sqlite_path_from_target(settings.databases.cache_url).parent
 
     with open_primary_session(primary_target) as session:
         build_object_prototypes(session=session, settings=settings, cache_root=cache_root, output_name=args.output_name)

@@ -49,9 +49,9 @@ On Linux or Windows machines with a compatible NVIDIA GPU and CUDA 13.0:
 Database Configuration
 ----------------------
 
-- `config/settings.yml` now includes a `databases` block. By default the primary database points at the local Postgres + pgvector service defined in `docker-compose.yml`, while the projection/cache database remains `sqlite:///cache/index.db` for portability.
+- `config/settings.yml` now includes a `databases` block. By default the primary database points at the local Postgres + pgvector service defined in `docker-compose.yml`, while the cache database remains `sqlite:///cache/index.db` for portability.
 - Start the backing services with `docker compose up postgres redis` (or the full stack) before running the pipeline.
-- Override `databases.primary_url` / `databases.projection_url` per environment as needed; all CLIs and services now accept DB URLs in addition to file paths.
+- Override `databases.primary_url` / `databases.cache_url` per environment as needed; all CLIs and services now accept DB URLs in addition to file paths.
 
 Running the Pipeline (Single-Process)
 ------------------------------------
@@ -60,7 +60,7 @@ For local runs, the recommended and simplest path is a single-process Typer CLI:
 
 - `vibe_photos.dev.process` — scans album roots, populates the primary database
   (PostgreSQL by default, configured via `databases.primary_url`), and writes all versioned cache artifacts
-  for embeddings, captions, thumbnails, detections, regions, and scene labels into the projection cache.
+  for embeddings, captions, thumbnails, detections, regions, and scene labels into the cache database.
 
 Basic single-process run:
 
@@ -70,15 +70,15 @@ Key options:
 
 - `--root`: one or more album root directories to scan (may be passed multiple times).
 - `--db`: primary database URL or path (defaults to `databases.primary_url` in `config/settings.yaml`).
-- `--cache-db`: projection database URL or path (defaults to `databases.projection_url`, which remains SQLite for portability).
+- `--cache-db`: cache database URL or path (defaults to `databases.cache_url`, which remains SQLite for portability).
 - `--batch-size`: override the model batch size from `config/settings.yaml`.
 - `--device`: override the model device (for example `cpu`, `cuda`, or `mps`).
-- `--image-path`: process a single image into the projection cache using shared preprocessing steps.
+- `--image-path`: process a single image into the cache database using shared preprocessing steps.
 - `--image-id`: optional explicit `image_id` when `--image-path` is used; defaults to the content hash.
 
 `cache/index.db` is a cache of *pre_process* outputs (embeddings, captions, detections, scenes) and is safe to discard; `process` stages read
 from this cache and may copy into the primary DB when required.
-Serve/UI/API should read from the primary Postgres database (configured via `databases.primary_url`); use the sync helper (below) to copy projection tables from cache into primary when needed.
+Serve/UI/API should read from the primary Postgres database (configured via `databases.primary_url`); use the sync helper (below) to copy cache tables into primary when needed.
 
 What a single-process run does:
 
@@ -93,13 +93,13 @@ What a single-process run does:
   - Embedding vectors under `cache/embeddings/<image_id>.npy`.
   - Embedding metadata under `cache/embeddings/<image_id>.json`.
   - Caption payloads under `cache/captions/<image_id>.json`.
-  - Corresponding projection rows in `image_embedding` and `image_caption` (stored in `cache/index.db`; downstream steps may copy to `data/index.db` if needed).
+- Corresponding cache rows in `image_embedding` and `image_caption` (stored in `cache/index.db`; downstream steps may copy to `data/index.db` if needed).
 - Computes lightweight scene classification attributes and mirrors them into the
-  label layer while retaining the legacy `image_scene` projection (rows written
+  label layer while retaining the legacy `image_scene` cache table (rows written
   to `cache/index.db`).
 - Optionally runs OWL-ViT based region detection (when enabled in settings) and
   writes region metadata under `cache/regions/<image_id>.json` plus feature-only
-  `regions` / `region_embedding` projections in `cache/index.db`. Object / cluster
+  `regions` / `region_embedding` tables in `cache/index.db`. Object / cluster
   labels are produced later via label passes, not in the detection step.
 - Object label pass respects `object.zero_shot.scene_whitelist` and optional
   `scene_fallback_labels` to avoid noisy predictions on screenshots/documents.
@@ -213,7 +213,7 @@ Going forward:
   manifest, forcing regeneration on the next run.
 - When `cache_format_version` changes, older cache directories are treated as
   untrusted. Re-run the preprocessing pipeline to regenerate compatible cache data
-  and projection tables.
+  and cache tables.
 
 Notes and Limitations
 ---------------------

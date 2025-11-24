@@ -16,8 +16,8 @@ from utils.logging import get_logger
 from vibe_photos.artifact_store import ArtifactManager
 from vibe_photos.config import Settings, load_settings
 from vibe_photos.db import (
+    open_cache_session,
     open_primary_session,
-    open_projection_session,
     sqlite_path_from_target,
 )
 from vibe_photos.hasher import compute_content_hash
@@ -46,7 +46,7 @@ def _apply_cli_overrides(settings: Settings, batch_size: int | None, device: str
 
 def ensure_artifacts_for_image(
     image_path: Path,
-    projection_db: Path,
+    cache_db: Path,
     settings: Settings,
     *,
     image_id: str | None = None,
@@ -55,11 +55,11 @@ def ensure_artifacts_for_image(
     """Create preprocessing artifacts for a single image using shared steps."""
 
     resolved_id = image_id or compute_content_hash(image_path)
-    root = artifact_root or projection_db.parent / "artifacts"
+    root = artifact_root or cache_db.parent / "artifacts"
     detector = SiglipBlipDetector(settings=settings)
 
-    with open_projection_session(projection_db) as projection_session:
-        manager = ArtifactManager(session=projection_session, root=root)
+    with open_cache_session(cache_db) as cache_session:
+        manager = ArtifactManager(session=cache_session, root=root)
         image = Image.open(image_path).convert("RGB")
         ensure_preprocessing_artifacts(
             image_id=resolved_id,
@@ -91,7 +91,7 @@ def main(
     cache_db: str | None = typer.Option(
         None,
         "--cache-db",
-        help="Projection database URL or path. Defaults to databases.projection_url in settings.yaml.",
+        help="Cache database URL or path. Defaults to databases.cache_url in settings.yaml.",
     ),
     image_path: Path | None = typer.Option(
         None,
@@ -100,7 +100,7 @@ def main(
         dir_okay=False,
         exists=True,
         readable=True,
-        help="Process a single image into the projection cache using shared preprocessing steps.",
+        help="Process a single image into the cache database using shared preprocessing steps.",
     ),
     image_id: str | None = typer.Option(
         None,
@@ -139,19 +139,19 @@ def main(
     settings = _apply_cli_overrides(settings, batch_size=batch_size, device=device)
 
     primary_target = db or settings.databases.primary_url
-    cache_target = cache_db or settings.databases.projection_url
+    cache_target = cache_db or settings.databases.cache_url
     cache_db_path = sqlite_path_from_target(cache_target)
 
     if image_path:
         resolved_id = ensure_artifacts_for_image(
             image_path=image_path,
-            projection_db=cache_db_path,
+            cache_db=cache_db_path,
             settings=settings,
             image_id=image_id,
         )
         LOGGER.info(
             "single_image_process_complete",
-            extra={"image_id": resolved_id, "image_path": str(image_path), "projection_db": str(cache_db_path)},
+            extra={"image_id": resolved_id, "image_path": str(image_path), "cache_db": str(cache_db_path)},
         )
 
         if run_object_labels:
@@ -160,7 +160,7 @@ def main(
             space = label_space or settings.label_spaces.object_current
             proto_path = cache_root / "label_text_prototypes" / f"{proto_name}.npz"
 
-            with open_primary_session(primary_target) as primary_session, open_projection_session(cache_db_path) as projection_session:
+            with open_primary_session(primary_target) as primary_session, open_cache_session(cache_db_path) as cache_session:
                 if not proto_path.exists():
                     build_object_prototypes(
                         session=primary_session,
@@ -171,7 +171,7 @@ def main(
 
                 run_object_label_pass(
                     primary_session=primary_session,
-                    projection_session=projection_session,
+                    cache_session=cache_session,
                     settings=settings,
                     cache_root=cache_root,
                     label_space_ver=space,
@@ -180,7 +180,7 @@ def main(
         return
 
     pipeline = PreprocessingPipeline(settings=settings)
-    pipeline.run(roots=root, primary_db_path=primary_target, projection_db_path=cache_db_path)
+    pipeline.run(roots=root, primary_db_path=primary_target, cache_db_path=cache_db_path)
 
     if run_object_labels:
         cache_root = cache_db_path.parent
@@ -188,7 +188,7 @@ def main(
         space = label_space or settings.label_spaces.object_current
         proto_path = cache_root / "label_text_prototypes" / f"{proto_name}.npz"
 
-        with open_primary_session(primary_target) as primary_session, open_projection_session(cache_db_path) as projection_session:
+        with open_primary_session(primary_target) as primary_session, open_cache_session(cache_db_path) as cache_session:
             if not proto_path.exists():
                 build_object_prototypes(
                     session=primary_session,
@@ -199,7 +199,7 @@ def main(
 
             run_object_label_pass(
                 primary_session=primary_session,
-                projection_session=projection_session,
+                cache_session=cache_session,
                 settings=settings,
                 cache_root=cache_root,
                 label_space_ver=space,

@@ -114,7 +114,7 @@ The architecture is **local‑first**: once models are downloaded and the stack 
 4. **Persistence**
    - All results are written to:
      - Stable, versioned preprocessing caches under `cache/` (JSON/NPY or similar) that are independent of DB schema. These caches store **raw model outputs** (embeddings, detections, captions, OCR blocks), not downstream classifications.
-     - The active search database (SQLite in early milestones, PostgreSQL + pgvector in Phase Final) as a projection over those caches. Photo‑level classifications such as coarse categories (`primary_category`) are computed from cached embeddings/detections as part of pipeline logic and persisted only in the database.
+     - The active search database (SQLite in early milestones, PostgreSQL + pgvector in Phase Final) as a cache-backed layer fed by those artifacts. Photo‑level classifications such as coarse categories (`primary_category`) are computed from cached embeddings/detections as part of pipeline logic and persisted only in the database.
    - This separation allows:
      - Fast rebuilds of search DBs when schemas change across milestones.
      - Reuse of expensive model outputs as long as model and pipeline versions remain compatible, while allowing classification/ranking logic to evolve and be recomputed without rerunning heavy models.

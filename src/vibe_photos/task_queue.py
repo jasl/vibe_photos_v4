@@ -23,8 +23,8 @@ from vibe_photos.db import (
     ArtifactRecord,
     PostProcessResult,
     ProcessResult,
+    open_cache_session,
     open_primary_session,
-    open_projection_session,
     sqlite_path_from_target,
 )
 from vibe_photos.db import Image as ImageRow
@@ -45,9 +45,9 @@ def _default_primary_db() -> str:
     return settings.databases.primary_url
 
 
-def _default_projection_db() -> Path:
+def _default_cache_db() -> Path:
     settings = _load_settings()
-    return sqlite_path_from_target(settings.databases.projection_url)
+    return sqlite_path_from_target(settings.databases.cache_url)
 
 
 def _init_celery() -> Celery:
@@ -80,10 +80,10 @@ def pre_process(image_id: str) -> str:
 
     settings = _load_settings()
     primary_path = _default_primary_db()
-    projection_path = _default_projection_db()
+    cache_path = _default_cache_db()
     artifact_root = _artifact_root()
 
-    with open_primary_session(primary_path) as primary_session, open_projection_session(projection_path) as projection_session:
+    with open_primary_session(primary_path) as primary_session, open_cache_session(cache_path) as cache_session:
         row = primary_session.get(ImageRow, image_id)
         if row is None:
             LOGGER.warning("task_image_missing", extra={"image_id": image_id})
@@ -95,7 +95,7 @@ def pre_process(image_id: str) -> str:
             return image_id
 
         image = Image.open(image_path).convert("RGB")
-        manager = ArtifactManager(session=projection_session, root=artifact_root)
+        manager = ArtifactManager(session=cache_session, root=artifact_root)
         detector = SiglipBlipDetector(settings=settings)
 
         artifacts = ensure_preprocessing_artifacts(
@@ -194,16 +194,16 @@ def process(image_id: str) -> str:
     """Consume cached artifacts to compute labels, clusters, and indices."""
 
     settings = _load_settings()
-    projection_path = _default_projection_db()
+    cache_path = _default_cache_db()
     artifact_root = _artifact_root()
 
     # Ensure cache exists; if missing, run preprocess first.
-    cache_ok = projection_path.exists()
-    emb_file = projection_path.parent / "embeddings" / f"{image_id}.npy"
+    cache_ok = cache_path.exists()
+    emb_file = cache_path.parent / "embeddings" / f"{image_id}.npy"
     if not cache_ok or not emb_file.exists():
         pre_process(image_id)
 
-    with open_projection_session(projection_path) as session:
+    with open_cache_session(cache_path) as session:
         manager = ArtifactManager(session=session, root=artifact_root)
         embed_spec = ArtifactSpec(
             artifact_type="embedding",
@@ -255,11 +255,11 @@ def process(image_id: str) -> str:
     # safe (though potentially heavy) to call from each process() invocation.
     settings = _load_settings()
     primary_path = _default_primary_db()
-    projection_path = _default_projection_db()
+    cache_path = _default_cache_db()
 
     LOGGER.info(
         "label_pipeline_start",
-        extra={"primary_db": str(primary_path), "projection_db": str(projection_path)},
+        extra={"primary_db": str(primary_path), "cache_db": str(cache_path)},
     )
 
     pipeline = PreprocessingPipeline(settings=settings)
@@ -271,7 +271,7 @@ def process(image_id: str) -> str:
         if row is not None and row.status == "active":
             pipeline._near_duplicate_dirty.add(image_id)  # type: ignore[attr-defined]
 
-    pipeline.run(roots=[], primary_db_path=primary_path, projection_db_path=projection_path)
+    pipeline.run(roots=[], primary_db_path=primary_path, cache_db_path=cache_path)
 
     LOGGER.info("label_pipeline_complete", extra={})
 
@@ -287,9 +287,9 @@ def post_process(image_id: str) -> str:
         LOGGER.info("post_process_disabled", extra={"image_id": image_id})
         return image_id
 
-    projection_path = _default_projection_db()
+    cache_path = _default_cache_db()
     artifact_root = _artifact_root()
-    with open_projection_session(projection_path) as session:
+    with open_cache_session(cache_path) as session:
         manager = ArtifactManager(session=session, root=artifact_root)
         embed_spec = ArtifactSpec(
             artifact_type="embedding",
