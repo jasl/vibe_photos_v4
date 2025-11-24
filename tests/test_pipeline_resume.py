@@ -25,7 +25,6 @@ def _stub_stage(recorder: list[str], name: str):
 
 def test_pipeline_skips_completed_and_resumes_next_stage(monkeypatch, tmp_path):
     cache_root = tmp_path / "cache"
-    cache_db = cache_root / "index.db"
     primary_db = tmp_path / "data" / "index.db"
     primary_db.parent.mkdir(parents=True, exist_ok=True)
 
@@ -45,14 +44,13 @@ def test_pipeline_skips_completed_and_resumes_next_stage(monkeypatch, tmp_path):
     pipeline._run_cluster_pass = _stub_stage(executed, "cluster_pass")  # type: ignore[assignment]
     pipeline._run_cluster_pass = _stub_stage(executed, "cluster_pass")  # type: ignore[assignment]
 
-    pipeline.run(roots=[Path("/tmp/album")], primary_db_path=primary_db, cache_db_path=cache_db)
+    pipeline.run(roots=[Path("/tmp/album")], primary_db_path=primary_db, cache_root_path=cache_root)
 
     assert executed == ["embeddings_and_captions", "scene_classification"]
 
 
 def test_pipeline_resumes_stage_from_cursor(monkeypatch, tmp_path):
     cache_root = tmp_path / "cache"
-    cache_db = cache_root / "index.db"
     primary_db = tmp_path / "data" / "index.db"
     primary_db.parent.mkdir(parents=True, exist_ok=True)
 
@@ -70,6 +68,6 @@ def test_pipeline_resumes_stage_from_cursor(monkeypatch, tmp_path):
     pipeline._run_embeddings_and_captions = _stub_stage(executed, "embeddings_and_captions")  # type: ignore[assignment]
     pipeline._run_scene_classification = _stub_stage(executed, "scene_classification")  # type: ignore[assignment]
 
-    pipeline.run(roots=[Path("/tmp/album")], primary_db_path=primary_db, cache_db_path=cache_db)
+    pipeline.run(roots=[Path("/tmp/album")], primary_db_path=primary_db, cache_root_path=cache_root)
 
     assert executed == ["embeddings_and_captions", "scene_classification"]

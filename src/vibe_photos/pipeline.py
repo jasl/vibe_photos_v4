@@ -316,7 +316,7 @@ class PreprocessingPipeline:
                 if artifacts_dir.exists():
                     shutil.rmtree(artifacts_dir, ignore_errors=True)
 
-    def run(self, roots: Sequence[Path], primary_db_path: Path | str, cache_db_path: Path) -> None:
+    def run(self, roots: Sequence[Path], primary_db_path: Path | str, cache_root_path: Path) -> None:
         """Run the preprocessing pipeline for the given album roots.
 
         The initial implementation focuses on wiring and logging. Individual
@@ -326,10 +326,10 @@ class PreprocessingPipeline:
         Args:
             roots: Album root directories to scan.
             primary_db_path: Connection target for the primary operational database.
-            cache_db_path: Path used to locate the cache root for on-disk artifacts (historically `cache/index.db`).
+            cache_root_path: Path to the cache root directory (the legacy `cache/index.db` sentinel is still accepted).
         """
 
-        cache_root = cache_db_path.parent
+        cache_root = cache_root_path.parent if cache_root_path.suffix == ".db" else cache_root_path
         self._cache_root = cache_root
         # Ensure cache manifest exists and matches current settings; resets cache
         # artifacts when the manifest changes.
@@ -339,7 +339,7 @@ class PreprocessingPipeline:
             extra={
                 "roots": [str(root) for root in roots],
                 "primary_db": str(primary_db_path),
-                "cache_db": str(cache_db_path),
+                "cache_root": str(cache_root),
             },
         )
 

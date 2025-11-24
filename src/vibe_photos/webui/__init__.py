@@ -44,14 +44,11 @@ def _get_primary_db_target() -> str | Path:
     return settings.databases.primary_url
 
 
-def _get_cache_db_path() -> Path:
+def _get_cache_root() -> Path:
     settings = load_settings()
     cache_target = normalize_cache_target(settings.databases.cache_url)
-    return sqlite_path_from_target(cache_target)
-
-
-def _get_cache_root() -> Path:
-    return _get_cache_db_path().parent
+    cache_path = sqlite_path_from_target(cache_target)
+    return cache_path.parent
 
 
 def _is_checked(value: str | None) -> bool:

@@ -44,10 +44,11 @@ def _default_primary_db() -> str:
     return settings.databases.primary_url
 
 
-def _default_cache_db() -> Path:
+def _default_cache_root() -> Path:
     settings = _load_settings()
     cache_target = normalize_cache_target(settings.databases.cache_url)
-    return sqlite_path_from_target(cache_target)
+    cache_path = sqlite_path_from_target(cache_target)
+    return cache_path.parent
 
 
 def _init_celery() -> Celery:
@@ -73,7 +74,7 @@ celery_app = _init_celery()
 
 
 def _artifact_root() -> Path:
-    return Path("cache/artifacts")
+    return _default_cache_root() / "artifacts"
 
 
 @celery_app.task(name="vibe_photos.task_queue.pre_process", acks_late=True)
@@ -195,8 +196,7 @@ def process(image_id: str) -> str:
     """Consume cached artifacts to compute labels, clusters, and indices."""
 
     settings = _load_settings()
-    cache_path = _default_cache_db()
-    cache_root = cache_path.parent
+    cache_root = _default_cache_root()
     artifact_root = _artifact_root()
 
     # Ensure cache exists; if missing, run preprocess first.
@@ -257,12 +257,12 @@ def process(image_id: str) -> str:
     # duplicates when they are missing or configuration has changed, so it is
     # safe (though potentially heavy) to call from each process() invocation.
     settings = _load_settings()
-    cache_path = _default_cache_db()
+    cache_root = _default_cache_root()
     primary_path = _default_primary_db()
 
     LOGGER.info(
         "label_pipeline_start",
-        extra={"primary_db": str(primary_path), "cache_root": str(cache_path.parent)},
+        extra={"primary_db": str(primary_path), "cache_root": str(cache_root)},
     )
 
     pipeline = PreprocessingPipeline(settings=settings)
@@ -276,7 +276,7 @@ def process(image_id: str) -> str:
             primary_session.add(row)
             primary_session.commit()
 
-    pipeline.run(roots=[], primary_db_path=primary_path, cache_db_path=cache_path)
+    pipeline.run(roots=[], primary_db_path=primary_path, cache_root_path=cache_root)
 
     LOGGER.info("label_pipeline_complete", extra={})
 

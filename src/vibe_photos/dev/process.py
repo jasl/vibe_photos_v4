@@ -43,7 +43,7 @@ def _apply_cli_overrides(settings: Settings, batch_size: int | None, device: str
 
 def ensure_artifacts_for_image(
     image_path: Path,
-    cache_db: Path,
+    cache_root: Path,
     settings: Settings,
     *,
     image_id: str | None = None,
@@ -53,10 +53,11 @@ def ensure_artifacts_for_image(
     """Create preprocessing artifacts for a single image using shared steps."""
 
     resolved_id = image_id or compute_content_hash(image_path)
-    root = artifact_root or cache_db.parent / "artifacts"
+    root = artifact_root or cache_root / "artifacts"
+    target = db_target or settings.databases.primary_url
     detector = SiglipBlipDetector(settings=settings)
 
-    with open_primary_session(db_target or cache_db) as cache_session:
+    with open_primary_session(target) as cache_session:
         manager = ArtifactManager(session=cache_session, root=root)
         image = Image.open(image_path).convert("RGB")
         ensure_preprocessing_artifacts(
@@ -86,7 +87,7 @@ def main(
         "--db",
         help="Primary database URL or path. Defaults to databases.primary_url in settings.yaml.",
     ),
-    cache_db: str | None = typer.Option(
+    cache_root_arg: str | None = typer.Option(
         None,
         "--cache-root",
         "--cache-db",
@@ -138,25 +139,25 @@ def main(
     settings = _apply_cli_overrides(settings, batch_size=batch_size, device=device)
 
     primary_target = db or settings.databases.primary_url
-    cache_target_raw = cache_db or settings.databases.cache_url
+    cache_target_raw = cache_root_arg or settings.databases.cache_url
     cache_target = normalize_cache_target(cache_target_raw)
-    cache_db_path = sqlite_path_from_target(cache_target)
+    cache_sentinel = sqlite_path_from_target(cache_target)
+    cache_root = cache_sentinel.parent
 
     if image_path:
         resolved_id = ensure_artifacts_for_image(
             image_path=image_path,
-            cache_db=cache_db_path,
+            cache_root=cache_root,
             settings=settings,
             image_id=image_id,
             db_target=primary_target,
         )
         LOGGER.info(
             "single_image_process_complete",
-            extra={"image_id": resolved_id, "image_path": str(image_path), "cache_root": str(cache_db_path.parent)},
+            extra={"image_id": resolved_id, "image_path": str(image_path), "cache_root": str(cache_root)},
         )
 
         if run_object_labels:
-            cache_root = cache_db_path.parent
             proto_name = prototype_name or settings.label_spaces.object_current
             space = label_space or settings.label_spaces.object_current
             proto_path = cache_root / "label_text_prototypes" / f"{proto_name}.npz"
@@ -182,10 +183,9 @@ def main(
         return
 
     pipeline = PreprocessingPipeline(settings=settings)
-    pipeline.run(roots=root, primary_db_path=primary_target, cache_db_path=cache_db_path)
+    pipeline.run(roots=root, primary_db_path=primary_target, cache_root_path=cache_root)
 
     if run_object_labels:
-        cache_root = cache_db_path.parent
         proto_name = prototype_name or settings.label_spaces.object_current
         space = label_space or settings.label_spaces.object_current
         proto_path = cache_root / "label_text_prototypes" / f"{proto_name}.npz"
