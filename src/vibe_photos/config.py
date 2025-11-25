@@ -397,6 +397,10 @@ class PipelineConfig:
 
     run_detection: bool = False
     run_cluster: bool = False
+    # When False, skip building pHash-based near-duplicate graphs and groups.
+    # This can significantly reduce CPU cost on large libraries at the expense
+    # of disabling near-duplicate browsing and related label propagation.
+    enable_phash_duplicates: bool = True
     skip_duplicates_for_heavy_models: bool = True
     phash_hamming_threshold: int = 12
     thumbnail_size_small: int = 256
@@ -612,6 +616,8 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         pipeline_cfg.run_detection = pipeline_raw["run_detection"]
     if isinstance(pipeline_raw.get("run_cluster"), bool):
         pipeline_cfg.run_cluster = pipeline_raw["run_cluster"]
+    if isinstance(pipeline_raw.get("enable_phash_duplicates"), bool):
+        pipeline_cfg.enable_phash_duplicates = pipeline_raw["enable_phash_duplicates"]
     if isinstance(pipeline_raw.get("skip_duplicates_for_heavy_models"), bool):
         pipeline_cfg.skip_duplicates_for_heavy_models = pipeline_raw["skip_duplicates_for_heavy_models"]
     if isinstance(pipeline_raw.get("phash_hamming_threshold"), int):

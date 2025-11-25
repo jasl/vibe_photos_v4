@@ -139,8 +139,12 @@ pipeline:
   run_detection: false       # keep off by default for lower memory
   # Whether to run clustering passes.
   run_cluster: false
-  # Whether to skip heavy models for near-duplicates.
+  # Whether to skip heavy models for near-duplicates (only run on canonical images in a duplicate group).
   skip_duplicates_for_heavy_models: true
+  # Whether to build pHash-based near-duplicate graphs at all. When false, pHash
+  # fields are still populated, but the O(N^2) similarity pass and near-duplicate
+  # grouping are disabled.
+  enable_phash_duplicates: true
   # Hamming distance threshold for near-duplicate grouping (default 12).
   phash_hamming_threshold: 12
   # Target thumbnail sizes (max width/height in pixels) for web previews.

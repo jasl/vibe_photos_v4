@@ -1625,6 +1625,13 @@ class PreprocessingPipeline:
         primary_session.commit()
         self._logger.info("phash_update_complete", extra={"updated_count": phash_updated})
 
+        # Optionally skip the expensive near-duplicate graph construction. This keeps
+        # pHash and image metadata up to date while avoiding the O(N^2) similarity
+        # pass on large libraries.
+        if not self._settings.pipeline.enable_phash_duplicates:
+            self._logger.info("phash_duplicates_disabled", extra={})
+            return
+
         rows = primary_session.execute(
             select(Image.image_id, Image.phash, Image.mtime, Image.width, Image.height, Image.size_bytes).where(
                 and_(Image.status == "active", Image.phash.is_not(None), Image.phash_algo == PHASH_ALGO)
