@@ -94,12 +94,12 @@ scene 字段只能从下面的枚举中选择一个：
 
 coarse_type 字段只能从下面的枚举中选择一个：
 [
-  "electronics", "circuit_board“, "drive", "charger",
+  "electronics", "circuit_board“, "disk", "charger",
   "phone", "laptop", "tablet", "mini_pc", "computer_case"
-  "monitor", "keyboard", "mouse", "earphones", "headphones", "hub", "usb"
+  "monitor", "keyboard", "mouse", "earphones", "headphones", "hub",
   "camera", "game_console", "controller",
   "food", "drink", "dessert",
-  "paper_document", "screen", "packaging",
+  "paper_document", "screen", "packaging", "book",
   "card", "id_card",
   "other_object", "unknown"
 ]
@@ -409,8 +409,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
                 record = {
                     "image_id": image_id,
-                    "server_path": str(resolved_path.resolve()),
-                    "image_path": str(resolved_path.resolve()),
+                    # "server_path": str(resolved_path.resolve()),
+                    # "image_path": str(resolved_path.resolve()),
                     "rel_path": str(resolved_path.relative_to(root)),
                     "annotation": annotation,
                 }

@@ -92,17 +92,17 @@ OBJECT_LABEL_SPECS: tuple[ObjectLabelSpec, ...] = (
         aliases_zh=("硬件", "内设"),
     ),
     ObjectLabelSpec(
-        key="object.electronics.drive",
+        key="object.electronics.disk",
         display_name="硬盘",
         parent="object.electronics",
-        aliases_en=("a hard disk", "a solid state drive", "a drive"),
+        aliases_en=("a hard disk", "a solid state disk", "a disk"),
         aliases_zh=("硬盘", "SSD"),
     ),
     ObjectLabelSpec(
         key="object.electronics.charger",
         display_name="充电器",
         parent="object.electronics",
-        aliases_en=("a charger", "a power adapter", "an USB "),
+        aliases_en=("a charger", "a power adapter", "an USB charger"),
         aliases_zh=("充电器"),
     ),
     ObjectLabelSpec(

@@ -146,7 +146,7 @@ pipeline:
   # grouping are disabled.
   enable_phash_duplicates: true
   # Hamming distance threshold for near-duplicate grouping (default 12).
-  phash_hamming_threshold: 16
+  phash_hamming_threshold: 12
   # Target thumbnail sizes (max width/height in pixels) for web previews.
   thumbnail_size_small: 256
   thumbnail_size_large: 1024
