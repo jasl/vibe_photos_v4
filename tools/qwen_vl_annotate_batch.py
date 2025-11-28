@@ -89,13 +89,13 @@ SYSTEM_PROMPT = r"""
 - 你只看图像本身，不要幻想图外信息。
 - 输出必须是**合法的 JSON 对象**，不要包含任何多余文字。
 
-scene 字段只能从下面的枚举中选择一个：
-["landscape", "snapshot", "people", "selfie", "food", "product", "document", "screenshot", "other"]
+scene 字段只能从下面的枚举中选择一个（如果照片的主体是动物或宠物，请使用 "animals"）：
+["landscape", "snapshot", "people", "selfie", "food", "product", "document", "screenshot", "animals", "other"]
 
 coarse_type 字段只能从下面的枚举中选择一个：
 [
-  "electronics", "circuit_board“, "disk", "charger",
-  "phone", "laptop", "tablet", "mini_pc", "computer_case"
+  "electronics", "circuit_board", "disk", "charger",
+  "phone", "laptop", "tablet", "mini_pc", "computer_case",
   "monitor", "keyboard", "mouse", "earphones", "headphones", "hub",
   "camera", "game_console", "controller",
   "food", "drink", "dessert",
@@ -109,6 +109,7 @@ coarse_type 字段只能从下面的枚举中选择一个：
   "scene": "<one of scene enums>",
   "has_person": true or false,
   "has_text": true or false,
+  "has_animal": true or false,
   "is_document": true or false,
   "is_screenshot": true or false,
   "objects": [

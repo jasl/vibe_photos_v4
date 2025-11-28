@@ -35,6 +35,7 @@ SCENE_LABEL_SPECS: tuple[BaseLabelSpec, ...] = (
     BaseLabelSpec(key="scene.landscape", display_name="Landscape", level="scene", parent="scene"),
     BaseLabelSpec(key="scene.snapshot", display_name="Snapshot", level="scene", parent="scene"),
     BaseLabelSpec(key="scene.people", display_name="People", level="scene", parent="scene"),
+    BaseLabelSpec(key="scene.animals", display_name="Animals", level="scene", parent="scene"),
     BaseLabelSpec(key="scene.food", display_name="Food", level="scene", parent="scene"),
     BaseLabelSpec(key="scene.product", display_name="Product", level="scene", parent="scene"),
     BaseLabelSpec(key="scene.document", display_name="Document", level="scene", parent="scene"),
@@ -47,6 +48,7 @@ ATTRIBUTE_LABEL_SPECS: tuple[BaseLabelSpec, ...] = (
     BaseLabelSpec(key="attr", display_name="Attribute", level="attribute"),
     BaseLabelSpec(key="attr.has_person", display_name="Has Person", level="attribute", parent="attr"),
     BaseLabelSpec(key="attr.has_text", display_name="Has Text", level="attribute", parent="attr"),
+    BaseLabelSpec(key="attr.has_animal", display_name="Has Animal", level="attribute", parent="attr"),
     BaseLabelSpec(key="attr.is_document", display_name="Is Document", level="attribute", parent="attr"),
     BaseLabelSpec(key="attr.is_screenshot", display_name="Is Screenshot", level="attribute", parent="attr"),
 )

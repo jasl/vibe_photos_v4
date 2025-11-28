@@ -239,6 +239,16 @@ DEFAULT_COARSE_CATEGORIES: list[CoarseCategory] = [
         ],
     ),
     CoarseCategory(
+        id="animals",
+        display_name="Animals",
+        prompts=[
+            "a photo of a pet",
+            "a photo of a cat or a dog",
+            "a close-up portrait of an animal",
+            "an animal in a zoo",
+        ],
+    ),
+    CoarseCategory(
         id="landscape",
         display_name="Landscape",
         prompts=[

@@ -34,6 +34,9 @@ class SceneAttributes:
     has_person: bool
     has_person_margin: float
 
+    has_animal: bool
+    has_animal_margin: float
+
     is_screenshot: bool
     is_screenshot_margin: float
 
@@ -129,6 +132,7 @@ class SceneClassifierWithAttributes:
             scene_margin = scene_prob - second_prob
 
             has_person, has_person_margin = self._predict_boolean_with_margin("has_person", img_emb)
+            has_animal, has_animal_margin = self._predict_boolean_with_margin("has_animal", img_emb)
             has_text, has_text_margin = self._predict_boolean_with_margin("has_text", img_emb)
             is_screenshot, is_screenshot_margin = self._predict_boolean_with_margin("is_screenshot", img_emb)
             is_document, is_document_margin = self._predict_boolean_with_margin("is_document", img_emb)
@@ -158,6 +162,8 @@ class SceneClassifierWithAttributes:
                     has_text_margin=has_text_margin,
                     has_person=has_person,
                     has_person_margin=has_person_margin,
+                    has_animal=has_animal,
+                    has_animal_margin=has_animal_margin,
                     is_screenshot=is_screenshot,
                     is_screenshot_margin=is_screenshot_margin,
                     is_document=is_document,
@@ -198,6 +204,12 @@ def build_scene_classifier(settings: Settings) -> SceneClassifierWithAttributes:
             id="has_person",
             positive_prompt="a photo with one or more people",
             negative_prompt="a photo without any people",
+            threshold=0.05,
+        ),
+        AttributePromptConfig(
+            id="has_animal",
+            positive_prompt="a photo with one or more animals or pets, such as a cat or a dog",
+            negative_prompt="a photo without any animals or pets",
             threshold=0.05,
         ),
         AttributePromptConfig(

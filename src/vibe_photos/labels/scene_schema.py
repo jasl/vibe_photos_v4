@@ -7,6 +7,7 @@ SCENE_KEY_BY_TYPE: dict[str, str] = {
     "LANDSCAPE": "scene.landscape",
     "SNAPSHOT": "scene.snapshot",
     "PEOPLE": "scene.people",
+    "ANIMALS": "scene.animals",
     "FOOD": "scene.food",
     "PRODUCT": "scene.product",
     "DOCUMENT": "scene.document",
@@ -20,6 +21,7 @@ ATTRIBUTE_LABEL_KEYS: dict[str, str] = {
     "has_text": "attr.has_text",
     "is_document": "attr.is_document",
     "is_screenshot": "attr.is_screenshot",
+    "has_animal": "attr.has_animal",
 }
 
 SCENE_TYPE_BY_KEY: dict[str, str] = {value: key for key, value in SCENE_KEY_BY_TYPE.items()}

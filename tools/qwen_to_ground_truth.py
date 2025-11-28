@@ -67,6 +67,7 @@ def _default_scene_mapping() -> SceneMapping:
         "product": "scene.product",
         "document": "scene.document",
         "screenshot": "scene.screenshot",
+        "animals": "scene.animals",
         "other": "scene.other",
     }
 
@@ -75,6 +76,7 @@ def _default_attr_mapping() -> AttrMapping:
     return {
         "has_person": "attr.has_person",
         "has_text": "attr.has_text",
+        "has_animal": "attr.has_animal",
         "is_document": "attr.is_document",
         "is_screenshot": "attr.is_screenshot",
     }

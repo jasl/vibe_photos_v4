@@ -103,11 +103,13 @@ This script:
   - `"product" → "scene.product"`
   - `"food" → "scene.food"`
   - `"people" / "selfie" → "scene.people"`
+  - `"animals" → "scene.animals"`
   - `"document" → "scene.document"`
   - `"screenshot" → "scene.screenshot"`
   - Anything unexpected → `"scene.other"`.
 - Maps booleans to attribute keys:
   - `has_person → attr.has_person`
+  - `has_animal → attr.has_animal`
   - `is_document → attr.is_document`
   - `is_screenshot → attr.is_screenshot`
   - (For now `attr.has_text` is not inferred from Qwen.)

@@ -137,6 +137,7 @@ def _write_attribute_assignments(
 ) -> None:
     entries = [
         ("has_person", attributes.has_person, attributes.has_person_margin),
+        ("has_animal", attributes.has_animal, attributes.has_animal_margin),
         ("has_text", attributes.has_text, attributes.has_text_margin),
         ("is_screenshot", attributes.is_screenshot, attributes.is_screenshot_margin),
         ("is_document", attributes.is_document, attributes.is_document_margin),
