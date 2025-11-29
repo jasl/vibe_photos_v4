@@ -62,3 +62,32 @@ tmp/ground_truth_human.audited.json`.
 This separation keeps runtime inference lightweight while ensuring we can
 continuously improve accuracy through better weak labels and head retraining.
 
+### 5. Next steps and roadmap
+
+The following ideas are good candidates for incremental improvements:
+
+- **Attribute threshold tuning**  
+  - Use `tmp/ground_truth_human.audited.json` to sweep per-attribute thresholds
+    for `has_person` / `has_text` / `has_animal` and update
+    `attributes.head_thresholds` in `settings.yaml` accordingly.
+
+- **Object head distillation**  
+  - Mirror the scene/attribute pattern with a future
+    `tools/train_object_head_from_qwen.py`, initially focusing on a small set of
+    high-value `object.*` keys (monitor, laptop, keyboard, phone, camera, food,
+    drink, etc.).
+  - Integrate a `LearnedObjectHead` into the object label pass, while keeping
+    OWL-ViT + SigLIP zero-shot as an exploratory/backup path.
+
+- **Teacher abstraction**  
+  - Wrap the teacher steps into a small number of stable commands (or make
+    targets), so swapping teachers (Qwen3-VL 32B → 8B or others) is just:
+    - annotate with new teacher,
+    - convert to ground truth,
+    - retrain student heads.
+
+- **Error analysis helpers**  
+  - Build small notebooks/CLIs around `eval_*.jsonl` to bucket errors by
+    scene/attribute/object and to generate targeted batches for GPT-based
+    diagnosis or manual review.
+
