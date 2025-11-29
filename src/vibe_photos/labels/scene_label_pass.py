@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
@@ -135,6 +135,23 @@ def _write_attribute_assignments(
     image_id: str,
     label_space_ver: str,
 ) -> None:
+    # Clear previous classifier-sourced attribute assignments for this image in
+    # the current label space so reruns behave as full refreshes instead of
+    # only updating positives. This ensures that raising thresholds can
+    # correctly remove earlier positive assignments.
+    session = repo._session  # type: ignore[attr-defined]
+    label_ids = [label.id for label in attribute_labels.values() if label.id is not None]
+    if label_ids:
+        session.execute(
+            delete(LabelAssignment).where(
+                LabelAssignment.target_type == "image",
+                LabelAssignment.target_id == image_id,
+                LabelAssignment.label_space_ver == label_space_ver,
+                LabelAssignment.source == "classifier",
+                LabelAssignment.label_id.in_(label_ids),
+            )
+        )
+
     entries = [
         ("has_person", attributes.has_person, attributes.has_person_margin),
         ("has_animal", attributes.has_animal, attributes.has_animal_margin),
