@@ -133,6 +133,7 @@ def _compute_metrics(session: Session, settings: Settings, records: Sequence[dic
 def _predict_scene(session: Session, image_id: str, settings: Settings) -> str | None:
     rows = session.execute(
         select(Label.key, LabelAssignment.score)
+        .select_from(LabelAssignment)
         .join(Label, Label.id == LabelAssignment.label_id)
         .where(
             LabelAssignment.target_type == "image",
@@ -150,6 +151,7 @@ def _predict_scene(session: Session, image_id: str, settings: Settings) -> str |
 def _predict_attributes(session: Session, image_id: str, settings: Settings) -> set[str]:
     rows = session.execute(
         select(Label.key)
+        .select_from(LabelAssignment)
         .join(Label, Label.id == LabelAssignment.label_id)
         .where(
             LabelAssignment.target_type == "image",
@@ -164,6 +166,7 @@ def _predict_attributes(session: Session, image_id: str, settings: Settings) -> 
 def _predict_objects(session: Session, image_id: str, settings: Settings) -> list[str]:
     rows = session.execute(
         select(Label.key, LabelAssignment.score)
+        .select_from(LabelAssignment)
         .join(Label, Label.id == LabelAssignment.label_id)
         .where(
             LabelAssignment.target_type == "image",

@@ -36,6 +36,13 @@ OBJECT_LABEL_SPECS: tuple[ObjectLabelSpec, ...] = (
         aliases_zh=("物体",),
     ),
     ObjectLabelSpec(
+        key="object.animals",
+        display_name="动物和宠物",
+        parent="object",
+        aliases_en=("animals", "pet"),
+        aliases_zh=("动物", "宠物"),
+    ),
+    ObjectLabelSpec(
         key="object.electronics",
         display_name="电子产品",
         parent="object",

@@ -219,6 +219,66 @@ anchoring the M2 pipeline to a relatively small, high-quality human-labeled
 evaluation set.
 
 
+---
+
+### 6. Distill Qwen labels into lightweight SigLIP heads
+
+Once `ground_truth_auto.jsonl` and the audited subset look good, use them as
+teacher data for the on-device SigLIP student. The goal is to keep large models
+off the target hardware while still benefitting from their judgments.
+
+1. **Train scene head (teacher → student)**
+
+   ```bash
+   uv run python tools/train_scene_head_from_qwen.py \
+     --gt tmp/ground_truth_auto.jsonl \
+     --output models/scene_head_from_qwen.pt
+   ```
+
+   - Reads SigLIP embeddings from the database (`image_embedding` table).
+   - Learns a linear softmax head that maps embeddings to `scene.*`.
+   - `src/vibe_photos/classifier.py` auto-loads the `.pt` file if present.
+
+2. **Train attribute head**
+
+   ```bash
+   uv run python tools/train_attribute_head_from_qwen.py \
+     --gt tmp/ground_truth_auto.jsonl \
+     --output models/attribute_head_from_qwen.pt
+   ```
+
+   - Produces a BCE-with-logits multi-label head for `attr.has_person`,
+     `attr.has_text`, `attr.has_animal`, etc.
+   - The classifier prioritizes this head when available, but still retains
+     the original prompt-based margins for logging/analysis.
+
+3. **Rules for rare attributes**
+
+   - `is_document` and `is_screenshot` are derived directly from the scene
+     label (`scene.document`, `scene.screenshot`). This keeps them consistent
+     with the taxonomy and avoids sparse-head instability.
+   - The learned attribute head still emits logits/margins so you can inspect
+     them or add overrides later.
+
+4. **Evaluate against human truth**
+
+   ```bash
+   uv run python -m vibe_photos.eval.labels \
+     --gt tmp/ground_truth_human.audited.json
+   ```
+
+   - Confirms end-to-end quality of the student heads before deployment.
+   - Use the same command after every retrain to track drift.
+
+5. **Future extensibility**
+
+   - You can retrain the heads whenever a new teacher (e.g., Qwen3-VL 8B) or
+     better human labels become available—no runtime changes required.
+   - The same pattern can be extended to object labels by adding
+     `tools/train_object_head_from_qwen.py` and wiring a `LearnedObjectHead`
+     into the label pass when needed.
+
+
 
 
 

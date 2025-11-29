@@ -381,6 +381,21 @@ class CacheConfig:
 
 
 @dataclass
+class AttributesConfig:
+    """Configuration for attribute classifier heads."""
+
+    head_thresholds: dict[str, float] = field(
+        default_factory=lambda: {
+            "has_person": 0.5,
+            "has_text": 0.5,
+            "has_animal": 0.5,
+            "is_screenshot": 0.5,
+            "is_document": 0.5,
+        }
+    )
+
+
+@dataclass
 class ModelsConfig:
     """Bundle of all model-related configuration."""
 
@@ -466,6 +481,7 @@ class Settings:
     post_process: PostProcessConfig = field(default_factory=PostProcessConfig)
     label_spaces: LabelSpacesConfig = field(default_factory=LabelSpacesConfig)
     object: ObjectConfig = field(default_factory=ObjectConfig)
+    attributes: AttributesConfig = field(default_factory=AttributesConfig)
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
 
 
@@ -512,6 +528,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     siglip_labels_raw = _as_dict(models_raw.get("siglip_labels"))
     label_spaces_raw = _as_dict(raw.get("label_spaces"))
     object_raw = _as_dict(raw.get("object"))
+    attributes_raw = _as_dict(raw.get("attributes"))
 
     embedding_cfg = settings.models.embedding
     if isinstance(embedding_raw.get("backend"), str):
@@ -718,6 +735,16 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     if isinstance(aggregation_raw.get("score_min"), (int, float)):
         object_cfg.aggregation.score_min = float(aggregation_raw["score_min"])
 
+    attr_cfg = settings.attributes
+    head_thresh_raw = _as_dict(attributes_raw.get("head_thresholds"))
+    if head_thresh_raw:
+        parsed_thresholds: dict[str, float] = {}
+        for attr_id, value in head_thresh_raw.items():
+            if isinstance(value, (int, float)):
+                parsed_thresholds[str(attr_id)] = float(value)
+        if parsed_thresholds:
+            attr_cfg.head_thresholds.update(parsed_thresholds)
+
     cluster_raw = _as_dict(raw.get("cluster"))
     cluster_cfg = settings.cluster
     image_cluster_raw = _as_dict(cluster_raw.get("image"))
@@ -765,6 +792,7 @@ __all__ = [
     "MainProcessingConfig",
     "PostProcessConfig",
     "Settings",
+    "AttributesConfig",
     "load_settings",
     "get_embedding_model_name",
     "get_caption_model_name",
