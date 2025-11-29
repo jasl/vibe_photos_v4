@@ -20,7 +20,7 @@ from vibe_photos.classifier import (
     build_scene_classifier,
 )
 from vibe_photos.config import Settings
-from vibe_photos.db import Image, ImageEmbedding, ImageScene, Label
+from vibe_photos.db import Image, ImageEmbedding, ImageScene, Label, LabelAssignment
 from vibe_photos.db_helpers import dialect_insert
 from vibe_photos.labels.repository import LabelRepository
 from vibe_photos.labels.scene_schema import (
