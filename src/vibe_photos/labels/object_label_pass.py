@@ -9,13 +9,15 @@ from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
+import torch
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from utils.logging import get_logger
 from vibe_photos.cache_helpers import resolve_cache_root
-from vibe_photos.config import Settings, load_settings
+from vibe_photos.config import Settings, _project_root, load_settings
 from vibe_photos.db import (
+    ImageEmbedding,
     Label,
     LabelAssignment,
     Region,
@@ -82,6 +84,83 @@ def _load_scene_labels(primary_session: Session, settings: Settings) -> dict[str
     return {image_id: key for image_id, (key, _) in best.items()}
 
 
+def _load_image_embedding_rows(cache_session: Session, model_name: str) -> dict[str, str]:
+    """Return mapping image_id -> embedding_path for image-level SigLIP embeddings."""
+
+    rows = cache_session.execute(
+        select(ImageEmbedding.image_id, ImageEmbedding.embedding_path).where(
+            ImageEmbedding.model_name == model_name
+        )
+    ).all()
+    return {row.image_id: row.embedding_path for row in rows}
+
+
+def _default_object_head_path() -> Path:
+    """Return the default path where the Qwen-trained object head is stored."""
+
+    return _project_root() / "models" / "object_head_from_qwen.pt"
+
+
+def _load_learned_object_head() -> tuple[torch.nn.Linear, list[str]] | None:
+    """Load a trained object head from disk if available.
+
+    Returns ``None`` when the file is missing or invalid, in which case callers
+    should fall back to zero-shot only.
+    """
+
+    path = _default_object_head_path()
+    if not path.exists():
+        LOGGER.info("object_head_missing", extra={"path": str(path)})
+        return None
+
+    try:
+        payload: dict[str, Any] = torch.load(path, map_location="cpu")  # type: ignore[name-defined]
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.error("object_head_load_error", extra={"path": str(path), "error": str(exc)})
+        return None
+
+    label_keys = payload.get("label_keys")
+    state = payload.get("state")
+    if not isinstance(label_keys, list) or not label_keys or not isinstance(state, dict):
+        LOGGER.error(
+            "object_head_payload_invalid",
+            extra={"path": str(path), "keys": list(payload.keys())},
+        )
+        return None
+
+    input_dim = state.get("input_dim")
+    num_labels = state.get("num_labels")
+    state_dict = state.get("state_dict")
+    if not isinstance(input_dim, int) or not isinstance(num_labels, int) or not isinstance(state_dict, dict):
+        LOGGER.error(
+            "object_head_state_invalid",
+            extra={
+                "path": str(path),
+                "has_input_dim": isinstance(input_dim, int),
+                "has_num_labels": isinstance(num_labels, int),
+                "has_state_dict": isinstance(state_dict, dict),
+            },
+        )
+        return None
+
+    try:
+        linear = torch.nn.Linear(input_dim, num_labels)
+        linear.load_state_dict(state_dict)
+        linear.eval()
+    except Exception as exc:  # pragma: no cover - defensive
+        LOGGER.error("object_head_build_error", extra={"path": str(path), "error": str(exc)})
+        return None
+
+    LOGGER.info(
+        "object_head_loaded",
+        extra={
+            "path": str(path),
+            "num_labels": num_labels,
+        },
+    )
+    return linear, [str(key) for key in label_keys]
+
+
 def run_object_label_pass(
     *,
     primary_session: Session,
@@ -91,7 +170,15 @@ def run_object_label_pass(
     label_space_ver: str | None = None,
     prototype_name: str | None = None,
 ) -> None:
-    """Compute zero-shot object labels for regions and aggregate to images."""
+    """Compute object labels for regions and images.
+
+    This pass combines:
+
+    - Region-level zero-shot labeling using SigLIP text prototypes.
+    - Image-level aggregation of region labels.
+    - Optional image-level object head predictions distilled from Qwen
+      (when ``models/object_head_from_qwen.pt`` is present).
+    """
 
     label_space = label_space_ver or settings.label_spaces.object_current
     proto_name = prototype_name or settings.label_spaces.object_current
@@ -101,7 +188,7 @@ def run_object_label_pass(
         delete(LabelAssignment).where(
             LabelAssignment.label_space_ver == label_space,
             LabelAssignment.target_type.in_(("image", "region")),
-            LabelAssignment.source.in_(("zero_shot", "aggregated", "duplicate_propagated")),
+            LabelAssignment.source.in_(("zero_shot", "aggregated", "duplicate_propagated", "classifier")),
         )
     )
     primary_session.commit()
@@ -277,6 +364,113 @@ def run_object_label_pass(
                 score=score,
                 extra_json=json.dumps({"regions": num_regions}),
             )
+
+    # Aggregate to image level: promote labels that appear on >= min regions.
+    for image_id, label_scores in image_best.items():
+        for label_id, score in label_scores.items():
+            num_regions = image_label_counts[image_id].get(label_id, 0)
+            if num_regions < agg_min_regions:
+                continue
+
+            label = label_by_id.get(label_id)
+            if label is None:
+                continue
+            repo.upsert_label_assignment(
+                target_type="image",
+                target_id=image_id,
+                label=label,
+                source="aggregated",
+                label_space_ver=label_space,
+                score=score,
+                extra_json=json.dumps({"regions": num_regions}),
+            )
+
+    # Optionally run the learned image-level object head as an additional
+    # source of object labels. This uses SigLIP image embeddings and writes
+    # assignments with ``source='classifier'``.
+    learned_head = _load_learned_object_head()
+    if learned_head is not None:
+        linear, head_label_keys = learned_head
+        device = next(linear.parameters()).device
+
+        # Map head label keys to Label rows in the DB.
+        head_labels: dict[str, Label] = {}
+        for key in head_label_keys:
+            try:
+                label = repo.require_label(key)
+            except ValueError:
+                LOGGER.error("object_head_label_missing", extra={"label_key": key})
+                continue
+            head_labels[key] = label
+
+        if head_labels:
+            embedding_paths = _load_image_embedding_rows(cache_session, embedding_model_name)
+            allowed_scenes = set(scene_whitelist) | set(scene_fallback.keys())
+
+            for image_id, rel_path in embedding_paths.items():
+                scene_label = scene_by_image.get(image_id)
+                if allowed_scenes and scene_label not in allowed_scenes:
+                    continue
+
+                emb_path = _resolve_region_embedding_path(cache_root, rel_path)
+                try:
+                    vec = np.load(emb_path).astype(np.float32)
+                except Exception as exc:  # pragma: no cover - defensive
+                    LOGGER.error(
+                        "object_head_embedding_load_error",
+                        extra={"image_id": image_id, "path": str(emb_path), "error": str(exc)},
+                    )
+                    continue
+
+                if vec.ndim != 1:
+                    LOGGER.error(
+                        "object_head_invalid_embedding_shape",
+                        extra={"image_id": image_id, "path": str(emb_path), "shape": tuple(vec.shape)},
+                    )
+                    continue
+
+                emb_tensor = torch.from_numpy(vec).float().to(device)
+                if emb_tensor.ndim != 1:
+                    LOGGER.error(
+                        "object_head_invalid_embedding_tensor_shape",
+                        extra={"image_id": image_id, "shape": tuple(emb_tensor.shape)},
+                    )
+                    continue
+
+                with torch.no_grad():
+                    logits = linear(emb_tensor)
+                    probs = torch.sigmoid(logits)
+
+                probs_np = probs.detach().cpu().numpy()
+                indices = probs_np.argsort()[::-1]
+                max_k = max(top_k or 0, 5)
+                indices = indices[:max_k]
+
+                for rank, idx in enumerate(indices):
+                    prob = float(probs_np[idx])
+                    # Simple default: only promote reasonably confident labels.
+                    if prob < 0.5:
+                        continue
+                    label_key = head_label_keys[idx]
+                    label = head_labels.get(label_key)
+                    if label is None:
+                        continue
+
+                    extra = json.dumps(
+                        {
+                            "head_rank": rank,
+                            "head_prob": prob,
+                        }
+                    )
+                    repo.upsert_label_assignment(
+                        target_type="image",
+                        target_id=image_id,
+                        label=label,
+                        source="classifier",
+                        label_space_ver=label_space,
+                        score=prob,
+                        extra_json=extra,
+                    )
 
     primary_session.commit()
     LOGGER.info(
