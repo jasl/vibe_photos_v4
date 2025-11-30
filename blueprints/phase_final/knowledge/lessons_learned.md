@@ -39,3 +39,17 @@ This file captures key insights from previous iterations and the updated Phase F
 - Document as you go:
   - Update `decisions/AI_DECISION_RECORD.md` when making or revising important choices.
   - Keep `AI_TASK_TRACKER.md` in sync with planned milestones and completed work so future coding AIs start with accurate context.
+
+## 4. M2 Evaluation Snapshot (2025-11-30)
+
+- Dataset: 1,000-image human-audited ground truth (`tmp/ground_truth_human.audited.json`).
+- Scene accuracy (label layer): **75.1%**.
+- Attributes (label layer, SigLIP heads):
+  - `has_person` P≈0.94 R≈0.71 (prev thresholds too strict).
+  - `has_text`  P≈0.73 R≈0.77.
+  - `is_document` P≈0.91 R≈0.20 → lowered threshold to 0.20.
+  - `is_screenshot` P≈1.00 R≈0.04 → lowered threshold to 0.18.
+  - `has_animal` nearly zero coverage → threshold relaxed to 0.18 pending more data.
+- Object labels (label layer, zero-shot): top-1/top-3/top-5 = **44.0%** on 637 labeled images; 335/357 error samples had **no predictions** → coverage is the main issue.
+  - Actions taken: widened `object.zero_shot.scene_whitelist` (add people/animals/document/screenshot/snapshot), lowered `score_min` to 0.25 and `margin_min` to 0.05 to increase recall.
+  - Next: inspect `tmp/eval_object_errors.jsonl` after rerun to decide blacklist/remap tweaks and label-group additions.

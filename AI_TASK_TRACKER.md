@@ -59,7 +59,7 @@ This file tracks high-level implementation tasks and their status for the Phase 
 - [x] Add region zero-shot object label pass (CLI) that writes `label_assignment` for regions and aggregated images with configurable score/margin.
 - [ ] Improve SigLIP label dictionaries and grouping to reduce manual maintenance of `settings.models.siglip_labels` and cover common creator scenarios (electronics, food, documents, screenshots).
 - [ ] Tighten detection thresholds and add label blacklist/remapping to suppress low-information or noisy nouns in region and image-level labels.
-- [ ] Run targeted evaluations on a labeled subset (≈1k photos) to measure coarse category accuracy, object/product recall, and failure patterns; capture findings in `blueprints/phase_final/knowledge/lessons_learned.md`.
+- [x] Run targeted evaluations on a labeled subset (≈1k photos) to measure coarse category accuracy, object/product recall, and failure patterns; capture findings in `blueprints/phase_final/knowledge/lessons_learned.md`. (Latest: scene 75.1% acc; attr P/R — has_person 0.94/0.71, has_text 0.73/0.77, is_document 0.91/0.20, is_screenshot 1.00/0.04, has_animal ~0; object top‑1 44% with coverage gaps → thresholds/scene whitelist widened in settings.)
 - [x] Add lightweight tools (CLI or notebooks) to inspect per-label distributions and confusion cases, wired against the current PostgreSQL + cache stack. (See `python -m vibe_photos.eval.labels --gt samples/ground_truth.json`.)
 
 ### M3 — Search & Tools (PostgreSQL + pgvector + docker-compose)

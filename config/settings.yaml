@@ -166,11 +166,12 @@ scene:
 
 attributes:
   head_thresholds:
-    has_person: 0.49
-    has_text: 0.46
-    has_animal: 0.50
-    is_document: 0.50
-    is_screenshot: 0.50
+    # Tuned on tmp/ground_truth_human.audited.json (n=1000)
+    has_person: 0.46     # P≈0.91 R≈0.78
+    has_text: 0.45       # P≈0.86 R≈0.73
+    has_animal: 0.18     # Recall-focused; trade precision for coverage
+    is_document: 0.20    # Previously too strict (P≈0.91 R≈0.20)
+    is_screenshot: 0.18  # Previously too strict (P≈1.00 R≈0.04)
   has_person:
     face_score_min: 0.35
   has_text:
@@ -183,11 +184,16 @@ attributes:
 object:
   zero_shot:
     top_k: 5
-    score_min: 0.32
-    margin_min: 0.08
+    score_min: 0.25
+    margin_min: 0.05
     scene_whitelist:
       - "scene.product"
       - "scene.food"
+      - "scene.people"
+      - "scene.animals"
+      - "scene.document"
+      - "scene.screenshot"
+      - "scene.snapshot"
     # Optional per-scene fallback allowlists (e.g., screenshot/doc minimal labels)
     scene_fallback_labels: {}
   aggregation:

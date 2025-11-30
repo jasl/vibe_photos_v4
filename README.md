@@ -251,6 +251,7 @@ Use these tools after you have auto and human ground truth in the M2 schema (see
   - `uv run python -m vibe_photos.eval.attribute_thresholds --gt tmp/ground_truth_human.audited.json --output-dir tmp`
 - Inspect object-label miss cases from the label layer (top-k hit/miss with JSONL output):
   - `uv run python -m vibe_photos.eval.object_errors --gt tmp/ground_truth_human.audited.json --output-dir tmp --max-k 5`
+- Current defaults in `config/settings.yaml` are tuned on a 1k-image human-audited set (scene accuracy 75.1%, object top-1 44%); rerun the above commands on your own library before large runs.
 
 Near-duplicate label propagation
 --------------------------------
