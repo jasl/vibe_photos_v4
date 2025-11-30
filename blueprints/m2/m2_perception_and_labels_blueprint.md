@@ -739,6 +739,35 @@ Object Label Pass（`run_object_label_pass`）流程示意：
 - `object.aggregation.min_regions=1`、`object.aggregation.score_min=0.32`（满足即可在 image 级写 `source='aggregated'`）
 - 以上配置需同步写入 `config/settings.example.yaml`，并在 `config/settings.yaml` 提供默认值。
 
+**当前实现补充：Qwen→SigLIP Object Head（image‑level）**
+
+在 M2 迭代中，我们已经按「teacher‑student 蒸馏」的模式，为 object labels 增加了一颗轻量 SigLIP object head，并接入了 label pass：
+
+- 训练脚本：`tools/train_object_head_from_qwen.py`  
+  - 输入：`tmp/ground_truth_auto.jsonl` + `image_embedding` 表中的 SigLIP 全图 embedding；
+  - 产出：`models/object_head_from_qwen.pt`，内部包含：
+    - `label_keys`: 一组 `object.*` label keys；
+    - `state`: `{input_dim,num_labels,state_dict}` 的线性多标签头参数。
+- 评估脚本（不依赖 label layer）：
+  - `uv run python -m vibe_photos.eval.object_head --gt tmp/ground_truth_human.audited.json`
+  - `uv run python -m vibe_photos.eval.object_head --gt tmp/ground_truth_auto.jsonl`
+  - 输出 image‑level object head 的 top‑1 / top‑3 / top‑5 命中率，便于快速 sanity‑check 蒸馏质量。
+- 集成方式：
+  - `vibe_photos.labels.object_label_pass.run_object_label_pass` 仍按本节所述跑 **region‑level zero‑shot + image‑level aggregated**；
+  - 若检测到 `models/object_head_from_qwen.pt` 存在，则额外：
+    - 读取 SigLIP image embedding（`image_embedding` 表）；
+    - 用 object head 预测每个 image 的 object label 概率；
+    - 对 `prob >= 0.5` 的 top‑k 结果写入：
+      - `target_type='image'`；
+      - `label_space_ver=object_v1`；
+      - `source='classifier'`；
+      - `score=prob`；
+    - 匹配不到 DB 中 `labels.key` 的对象会被安全跳过。
+  - 为保证重跑幂等，object label pass 在开始时会清理 `object_v1` 下所有：
+    - `target_type in ('image','region')` 且
+    - `source in ('zero_shot','aggregated','duplicate_propagated','classifier')`
+    的记录，再重写当前版本的 labels。
+
 #### 6.2.4 人工 / VLM 辅助（留给 M4）
 
 M2 只在数据结构层面预留：
@@ -1033,19 +1062,47 @@ M2 不要求完整交互 UI，但结构上预留：
 
 ### 8.2 CLI Evaluation Script
 
-设计一个 CLI，例如：
+我们已经实现了一组 CLI 来支撑 M2 的评估与调参与蒸馏：
 
-- `uv run python -m vibe_photos.eval.labels --gt data/labels/ground_truth.json`
+- **主评估 CLI（label layer）**  
+  - `uv run python -m vibe_photos.eval.labels --gt data/labels/ground_truth.json`  
+  - 功能：
+    - 从 ground truth 文件加载标注；
+    - 从数据库中读取 `label_assignment`；
+    - 计算：
+      - Scene labels：准确率 / confusion matrix；
+      - Attributes：precision / recall / F1；
+      - Object labels：top‑1 / top‑3 命中率；
+      - 聚类：对于标注过的物体，观察其所属 cluster 的 purity（可选）。
 
-功能：
+- **属性 head 阈值扫面（attribute threshold tuning）**  
+  - `uv run python -m vibe_photos.eval.attribute_thresholds --gt tmp/ground_truth_human.audited.json`  
+  - 直接读取：
+    - Qwen 蒸馏出的 attribute head（`models/attribute_head_from_qwen.pt`）；
+    - 人工 GT 中的 `attr.has_person` / `attr.has_text` / `attr.has_animal`；
+  - 对每个 attribute 扫一系列 logits→prob 阈值，输出：
+    - 不同阈值下的 precision / recall / F1；
+    - 推荐的「高 precision」点，用于更新 `config/settings.yaml` 中的 `attributes.head_thresholds`。
 
-- 从 ground truth 文件加载标注；
-- 从数据库中读取 `label_assignment`；
-- 计算：
-  - Scene labels：准确率 / confusion matrix；
-  - Attributes：precision / recall / F1；
-  - Object labels：top‑1 / top‑3 命中率；
-  - 聚类：对于标注过的物体，观察其所属 cluster 的 purity（可选）。
+- **Object head 质量评估（student vs teacher / human）**  
+  - `uv run python -m vibe_photos.eval.object_head --gt tmp/ground_truth_auto.jsonl`  
+  - `uv run python -m vibe_photos.eval.object_head --gt tmp/ground_truth_human.audited.json`  
+  - 直接用 object head（`models/object_head_from_qwen.pt`）对 SigLIP image embedding 做预测，计算：
+    - image‑level object top‑1 / top‑3 / top‑5 命中率；
+  - 不经过 label layer，仅用于校验 Qwen→SigLIP 蒸馏质量。
+
+- **Object 错误分析（label layer vs GT）**  
+  - `uv run python -m vibe_photos.eval.object_errors --gt tmp/ground_truth_human.audited.json --output-dir tmp`  
+  - 读取 label layer 中的 object labels（包括 zero‑shot 聚合 + learned head + 手工标签），与 GT 对比：
+    - 统计最终 top‑1 / top‑3 / top‑5 命中率；
+    - 将 top‑3 未命中的样本写入 `eval_object_errors.jsonl`，包含：
+      - `image_id`；
+      - `gt_objects`；
+      - `pred_topk`（pipeline 输出的前若干 object labels）；
+      - `hit_top1` / `hit_top3` / `hit_top5`。
+  - 该 JSONL 可作为 notebook / GPT 分析的输入，用于发现系统性错误模式。
+
+默认评估只针对 canonical image；如需评估 near‑duplicate 标签传播质量，可以额外定义「duplicate consistency」指标，对每个 near‑duplicate 分组比较 canonical 与成员图片在 scene / object / attribute 上的一致性。
 
 默认评估只针对 canonical image；  
 如需评估 near‑duplicate 标签传播质量，可以额外定义「duplicate consistency」指标，对每个 near‑duplicate 分组比较 canonical 与成员图片在 scene / object / attribute 上的一致性。
