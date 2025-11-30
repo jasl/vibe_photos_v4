@@ -540,7 +540,9 @@ def build_scene_classifier(settings: Settings) -> SceneClassifierWithAttributes:
         neg_emb = normalized[1]
 
         attribute_embeddings[config.id] = (pos_emb, neg_emb)
-        attribute_thresholds[config.id] = config.threshold
+        # Prefer user-configured thresholds when available; fall back to prompt defaults.
+        configured_thresholds = settings.attributes.head_thresholds
+        attribute_thresholds[config.id] = configured_thresholds.get(config.id, config.threshold)
 
     attribute_head = _load_learned_attribute_head(settings)
     if attribute_head is not None:
