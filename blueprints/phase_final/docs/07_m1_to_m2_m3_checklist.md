@@ -2,6 +2,8 @@
 
 This draft checklist summarizes the main engineering steps to move from the implemented M1 preprocessing pipeline to M2 (Perception Quality & Labeling) and M3 (Search & Tools on PostgreSQL + pgvector + docker-compose), from the Phase Final point of view.
 
+> Operational note: PostgreSQL + pgvector is the only primary database target in current code. Any mentions of file-backed databases (for example `data/index.db`) are historical and should not be treated as deployable options; the filesystem `cache/` remains the rebuildable artifact source.
+
 ## 1. Pre-M2 Readiness (Grounded on M1)
 
 - [ ] Confirm M1 data quality:

@@ -237,3 +237,24 @@ Notes and Limitations
 - When a file’s content hash changes, its cache artifacts and near-duplicate pairs on disk are invalidated and rebuilt on the next run; primary DB rows remain intact for auditability.
 - All paths in this document are relative to the project root; commands should
   be executed from the repository root with the virtual environment activated.
+
+Evaluation & Error Analysis (M2)
+--------------------------------
+
+Use these tools after you have auto and human ground truth in the M2 schema (see `docs/QWEN_VL_EVAL_WORKFLOW.md`). All commands run against the current PostgreSQL primary DB and cache root from `config/settings.yaml` unless overridden.
+
+- Quick teacher vs. human check and error dumps (writes `tmp/eval_scene_errors.jsonl`, `tmp/eval_attr_*_errors.jsonl`, `tmp/eval_main_object_errors.jsonl`):
+  - `uv run python tools/evaluate_auto_vs_human.py --human tmp/ground_truth_human.audited.json --auto tmp/ground_truth_auto.jsonl --output-dir tmp`
+- Label-layer metrics directly on pipeline outputs:
+  - `uv run python -m vibe_photos.eval.labels --gt tmp/ground_truth_human.audited.json`
+- Sweep attribute head thresholds to pick better defaults for `config/settings.yaml`:
+  - `uv run python -m vibe_photos.eval.attribute_thresholds --gt tmp/ground_truth_human.audited.json --output-dir tmp`
+- Inspect object-label miss cases from the label layer (top-k hit/miss with JSONL output):
+  - `uv run python -m vibe_photos.eval.object_errors --gt tmp/ground_truth_human.audited.json --output-dir tmp --max-k 5`
+
+Near-duplicate label propagation
+--------------------------------
+
+- The pipeline automatically mirrors label assignments from canonical images to their near-duplicate members after each scene/object/cluster pass (`source='duplicate_propagated'`).
+- Propagation re-runs whenever you execute the single-process CLI or a label pass; rerun the pipeline if near-duplicate groups or canonical picks change.
+- To disable or customize, adjust the near-duplicate grouping settings (`pipeline.enable_phash_duplicates`, `pipeline.phash_hamming_threshold`) and the label pass options in `config/settings.yaml` before running the pipeline.

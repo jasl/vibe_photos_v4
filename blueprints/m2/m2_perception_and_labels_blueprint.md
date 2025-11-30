@@ -12,7 +12,7 @@ M1 已经完成了一条稳定的本地预处理流水线：
 
 - **感知输出（features）**：SigLIP 全图 embedding、BLIP caption、OWL‑ViT region 检测、pHash。
 - **轻量分类**：基于 SigLIP 的 coarse scene + 布尔属性（has_text / has_person / is_document / is_screenshot）。
-- **Cache + primary DB**：感知结果写入主数据库（M1 时代为 `data/index.db`，Phase Final 迁移到 Postgres），缓存文件位于 `cache/` 目录。
+- **Cache + primary DB**：感知结果写入主数据库（M1 时代为 `data/index.db`，现已固定为 PostgreSQL + pgvector；`data/index.db` 仅作历史背景），缓存文件位于 `cache/` 目录。
 - **Flask QA UI**：支持按 coarse scene 和布尔属性筛图。
 
 在此基础上，**M2 的核心目标**是：
@@ -470,7 +470,7 @@ CREATE TABLE cluster_membership (
 遵循「cache 存放预处理/模型特征的可复用缓存，data 存放 process 阶段的语义输出」：
 
 - `cache/` 目录：存放预处理与模型前向直接产出的特征/中间结果对应的向量、JSON、缩略图等文件（如 `regions`、`region_embedding` 以及 image embedding）。借助主库中的元数据即可定位这些文件，必要时可通过清空 cache 目录全量重建。
-- `data/index.db`：主库，承载 `labels`、`label_aliases`、`label_assignment`（含自动/人工）、聚类结果（`image_similarity_cluster`、`cluster_membership`）、其它 process 计算产物。需要时通过重跑 process（读取 cache 特征）即可再生成。
+- PostgreSQL 主库（历史文档中曾称 `data/index.db`，现仅作示例路径）：承载 `labels`、`label_aliases`、`label_assignment`（含自动/人工）、聚类结果（`image_similarity_cluster`、`cluster_membership`）、其它 process 计算产物。需要时通过重跑 process（读取 cache 特征）即可再生成。
 - 任务层不做跨库 JOIN；process 任务读取 cache、计算后直接写 data。cache 可随时重建，重建后跑一次 process 可恢复 data（人工标签除外）。
 - 数据库初始化通过 `scripts/` 目录下的独立脚本一次性创建所需表（原型阶段不做向后兼容），并在 `init_project.sh` 中调用，后续可演进到版本化迁移工具。
 
@@ -912,7 +912,7 @@ M1 已经通过 pHash（感知哈希）对图片做了“近重复”分组，M2
 1. **pHash 分组**
 
    - 所有内容相似度较高的图片（例如连拍、轻微裁剪/调色版本）被分到同一组；
-   - 表结构（例如在 `data/index.db` 中）记录 exact / near duplicate 关系，示意：
+   - 表结构（示例曾用 `data/index.db` 展示；实际部署为 PostgreSQL）记录 exact / near duplicate 关系，示意：
      ```sql
      CREATE TABLE image_near_duplicate_group (
        id                  INTEGER PRIMARY KEY AUTOINCREMENT,

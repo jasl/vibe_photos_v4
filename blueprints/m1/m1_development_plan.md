@@ -3,6 +3,10 @@
 > This blueprint is kept for historical context. The active pipeline now
 > follows the M2 label-layer design; use this document only for background.
 
+> Operational note: current code uses PostgreSQL + pgvector as the only primary
+> database. Any mentions of `data/index.db` or file-backed stores below are
+> historical examples; treat the filesystem `cache/` as rebuildable artifacts.
+
 Status: ready for implementation (implements reviewed guidance for the first milestone)
 
 ## 1. Background and Goals

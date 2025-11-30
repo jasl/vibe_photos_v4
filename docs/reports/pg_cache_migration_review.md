@@ -7,8 +7,8 @@ Remaining follow-ups have been addressed by enforcing PostgreSQL-only URL normal
 
 ## Documentation alignment gaps
 
-- Coding notes still describe caching to a legacy file-backed store, which conflicts with the current PostgreSQL-primary + filesystem cache design. Updating this section to reflect the Postgres + cache separation would keep guidance consistent. 【F:docs/AI_CODING_NOTES.md†L41-L62】
-- Phase blueprints and checklists continue to position file-backed databases as the operational target (for example Phase Final and M2 documents), while the README and compose defaults now assume PostgreSQL. These should be refreshed to avoid signaling that file-based engines are an active target. 【F:blueprints/m1/m1_development_plan.md†L65-L308】【F:blueprints/phase_final/docs/04_implementation_guide.md†L46-L312】
+- Coding notes now reflect the PostgreSQL-primary + filesystem cache model; keep them synced when cache formats change. 【F:docs/AI_CODING_NOTES.md†L41-L62】
+- Phase blueprints and checklists previously implied file-backed databases as an operational target. Add or keep call-outs that PostgreSQL + pgvector is the primary store and file-backed mentions are historical; a note has been added to the Phase Final implementation guide, but a full sweep of older milestones is still recommended. 【F:blueprints/m1/m1_development_plan.md†L65-L308】【F:blueprints/phase_final/docs/04_implementation_guide.md†L46-L312】
 
 ## Suggested next steps
 

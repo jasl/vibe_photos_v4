@@ -26,6 +26,8 @@ This guide turns the requirements and solution design into a staged implementati
 
 Each milestone should be shippable and testable in isolation, and early milestones should run directly on the host via `uv` rather than containers.
 
+> Operational note: PostgreSQL + pgvector is the only primary database target in current code. Any references to legacy file-backed databases are historical; treat the filesystem cache under `cache/` as rebuildable artifacts, not an operational database.
+
 ## 2. Repository Layout
 
 Recommended layout under `src/`:

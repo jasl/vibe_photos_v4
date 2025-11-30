@@ -199,6 +199,20 @@ You can optionally evaluate directly on the auto labels for quick iteration:
 uv run python -m vibe_photos.eval.labels --gt tmp/ground_truth_auto.jsonl
 ```
 
+Additional diagnostics (M2)
+---------------------------
+
+After you have both auto and human ground truth, use the label-layer tools to pinpoint failure modes and tune thresholds:
+
+- Compare teacher (auto) vs. human and emit error JSONL files (scene, attributes, main object):
+  - `uv run python tools/evaluate_auto_vs_human.py --human tmp/ground_truth_human.audited.json --auto tmp/ground_truth_auto.jsonl --output-dir tmp`
+- Sweep SigLIP attribute head thresholds to update `config/settings.yaml`:
+  - `uv run python -m vibe_photos.eval.attribute_thresholds --gt tmp/ground_truth_human.audited.json --output-dir tmp --target-precision 0.9`
+- Dump object-label miss cases from the label layer for manual review:
+  - `uv run python -m vibe_photos.eval.object_errors --gt tmp/ground_truth_human.audited.json --output-dir tmp --max-k 5`
+
+These commands write JSONL artifacts under `tmp/` that can be opened in your editor or sampled for GPT-based analysis.
+
 The absolute numbers will be influenced by Qwen's own error rate, but deltas
 between different M2 configurations (e.g., object label dictionaries, thresholds,
 or classifier versions) are still useful.
@@ -277,7 +291,6 @@ off the target hardware while still benefitting from their judgments.
    - The same pattern can be extended to object labels by adding
      `tools/train_object_head_from_qwen.py` and wiring a `LearnedObjectHead`
      into the label pass when needed.
-
 
 
 
