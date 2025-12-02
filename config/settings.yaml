@@ -184,8 +184,8 @@ attributes:
 object:
   zero_shot:
     top_k: 5
-    score_min: 0.25
-    margin_min: 0.05
+    score_min: 0.15   # lowered to improve coverage (prev 0.25 yielded ~96% empty errors)
+    margin_min: 0.0   # allow close scores; rely on blacklist/remap downstream
     scene_whitelist:
       - "scene.product"
       - "scene.food"
